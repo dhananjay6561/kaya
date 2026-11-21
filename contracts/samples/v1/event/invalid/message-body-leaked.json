@@ -1,0 +1,18 @@
+{
+  "id": "6f1c1d2a-3b4c-4d5e-8f60-718293a4b5c6",
+  "version": 1,
+  "occurred_at": "2026-11-22T09:30:00Z",
+  "type": "message.stored",
+  "data": {
+    "message_id": 42,
+    "chat_jid": "911111111111@s.whatsapp.net",
+    "sender_jid": "911111111111@s.whatsapp.net",
+    "wa_id": "3EB0C767D26B5A7F2A1F",
+    "from_me": false,
+    "kind": "text",
+    "source": "live",
+    "change": "new",
+    "sent_at": "2026-11-22T09:29:58Z",
+    "text": "hello"
+  }
+}

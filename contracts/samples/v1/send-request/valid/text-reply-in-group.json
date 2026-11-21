@@ -1,0 +1,14 @@
+{
+  "id": "0b9d7a2e-1c3f-4e5a-9b6c-7d8e9f0a1b2c",
+  "version": 1,
+  "created_at": "2026-11-22T09:31:00Z",
+  "to": "120363000000000000@g.us",
+  "content": {
+    "type": "text",
+    "text": "Rahul said Saturday 7pm works."
+  },
+  "reply_to": {
+    "wa_id": "3EB0C767D26B5A7F2A1F",
+    "sender_jid": "100000000000001@lid"
+  }
+}

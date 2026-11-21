@@ -1,0 +1,10 @@
+{
+  "version": 1,
+  "occurred_at": "2026-11-22T09:30:00Z",
+  "type": "history.synced",
+  "data": {
+    "chats": 1,
+    "messages": 1,
+    "complete": true
+  }
+}

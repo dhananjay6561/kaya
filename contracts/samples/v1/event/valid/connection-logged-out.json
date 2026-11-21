@@ -1,0 +1,10 @@
+{
+  "id": "6f1c1d2a-3b4c-4d5e-8f60-718293a4b5c6",
+  "version": 1,
+  "occurred_at": "2026-11-22T09:30:00Z",
+  "type": "connection.state",
+  "data": {
+    "state": "logged_out",
+    "reason": "removed from linked devices"
+  }
+}
