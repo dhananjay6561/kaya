@@ -1,0 +1,174 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://kaya.invalid/contracts/v1/event.schema.json",
+  "title": "GatewayEvent",
+  "description": "Something that happened in the gateway, sent to core. Core handles each id at most once.",
+  "type": "object",
+  "discriminator": { "propertyName": "type" },
+  "properties": {
+    "type": {
+      "enum": ["connection.state", "message.stored", "history.synced", "send.result"]
+    }
+  },
+  "required": ["type"],
+  "oneOf": [
+    { "$ref": "#/$defs/connectionStateEvent" },
+    { "$ref": "#/$defs/messageStoredEvent" },
+    { "$ref": "#/$defs/historySyncedEvent" },
+    { "$ref": "#/$defs/sendResultEvent" }
+  ],
+  "$defs": {
+    "id": {
+      "description": "Unique per event; the key for at-most-once handling",
+      "$ref": "defs.schema.json#/$defs/uuid"
+    },
+    "version": { "const": 1 },
+    "occurredAt": { "$ref": "defs.schema.json#/$defs/timestamp" },
+
+    "connectionStateEvent": {
+      "title": "ConnectionStateEvent",
+      "type": "object",
+      "properties": {
+        "id": { "$ref": "#/$defs/id" },
+        "version": { "$ref": "#/$defs/version" },
+        "type": { "const": "connection.state" },
+        "occurred_at": { "$ref": "#/$defs/occurredAt" },
+        "data": { "$ref": "#/$defs/connectionState" }
+      },
+      "required": ["id", "version", "type", "occurred_at", "data"],
+      "additionalProperties": false
+    },
+    "connectionState": {
+      "title": "ConnectionState",
+      "type": "object",
+      "properties": {
+        "state": {
+          "type": "string",
+          "enum": ["connecting", "pairing", "connected", "disconnected", "logged_out"]
+        },
+        "own_jid": {
+          "description": "DJ's own JID; present once paired",
+          "$ref": "defs.schema.json#/$defs/jid"
+        },
+        "reason": {
+          "description": "Why the state changed, for disconnected and logged_out",
+          "type": "string",
+          "maxLength": 500
+        }
+      },
+      "required": ["state"],
+      "additionalProperties": false
+    },
+
+    "messageStoredEvent": {
+      "title": "MessageStoredEvent",
+      "type": "object",
+      "properties": {
+        "id": { "$ref": "#/$defs/id" },
+        "version": { "$ref": "#/$defs/version" },
+        "type": { "const": "message.stored" },
+        "occurred_at": { "$ref": "#/$defs/occurredAt" },
+        "data": { "$ref": "#/$defs/messageStored" }
+      },
+      "required": ["id", "version", "type", "occurred_at", "data"],
+      "additionalProperties": false
+    },
+    "messageStored": {
+      "title": "MessageStored",
+      "description": "A message row was written. The body stays in the database; core reads it by message_id.",
+      "type": "object",
+      "properties": {
+        "message_id": {
+          "description": "messages.id in the database",
+          "type": "integer",
+          "minimum": 1
+        },
+        "chat_jid": { "$ref": "defs.schema.json#/$defs/jid" },
+        "sender_jid": { "$ref": "defs.schema.json#/$defs/jid" },
+        "wa_id": { "$ref": "defs.schema.json#/$defs/waId" },
+        "from_me": { "type": "boolean" },
+        "kind": { "$ref": "defs.schema.json#/$defs/messageKind" },
+        "source": { "type": "string", "enum": ["live", "history"] },
+        "change": { "type": "string", "enum": ["new", "edited", "deleted"] },
+        "sent_at": { "$ref": "defs.schema.json#/$defs/timestamp" }
+      },
+      "required": [
+        "message_id",
+        "chat_jid",
+        "sender_jid",
+        "wa_id",
+        "from_me",
+        "kind",
+        "source",
+        "change",
+        "sent_at"
+      ],
+      "additionalProperties": false
+    },
+
+    "historySyncedEvent": {
+      "title": "HistorySyncedEvent",
+      "type": "object",
+      "properties": {
+        "id": { "$ref": "#/$defs/id" },
+        "version": { "$ref": "#/$defs/version" },
+        "type": { "const": "history.synced" },
+        "occurred_at": { "$ref": "#/$defs/occurredAt" },
+        "data": { "$ref": "#/$defs/historySynced" }
+      },
+      "required": ["id", "version", "type", "occurred_at", "data"],
+      "additionalProperties": false
+    },
+    "historySynced": {
+      "title": "HistorySynced",
+      "description": "One batch of the history sync was stored",
+      "type": "object",
+      "properties": {
+        "chats": { "type": "integer", "minimum": 0 },
+        "messages": { "type": "integer", "minimum": 0 },
+        "progress": {
+          "description": "Percent of the sync WhatsApp reports as done",
+          "type": "integer",
+          "minimum": 0,
+          "maximum": 100
+        },
+        "complete": { "type": "boolean" }
+      },
+      "required": ["chats", "messages", "complete"],
+      "additionalProperties": false
+    },
+
+    "sendResultEvent": {
+      "title": "SendResultEvent",
+      "type": "object",
+      "properties": {
+        "id": { "$ref": "#/$defs/id" },
+        "version": { "$ref": "#/$defs/version" },
+        "type": { "const": "send.result" },
+        "occurred_at": { "$ref": "#/$defs/occurredAt" },
+        "data": { "$ref": "#/$defs/sendResult" }
+      },
+      "required": ["id", "version", "type", "occurred_at", "data"],
+      "additionalProperties": false
+    },
+    "sendResult": {
+      "title": "SendResult",
+      "description": "What happened to a send request",
+      "type": "object",
+      "properties": {
+        "request_id": { "$ref": "defs.schema.json#/$defs/uuid" },
+        "status": { "type": "string", "enum": ["sent", "failed"] },
+        "wa_id": {
+          "description": "Id of the sent message; present when status is sent",
+          "$ref": "defs.schema.json#/$defs/waId"
+        },
+        "error": { "$ref": "defs.schema.json#/$defs/error" }
+      },
+      "required": ["request_id", "status"],
+      "additionalProperties": false,
+      "if": { "properties": { "status": { "const": "sent" } } },
+      "then": { "required": ["wa_id"], "properties": { "error": false } },
+      "else": { "required": ["error"], "properties": { "wa_id": false } }
+    }
+  }
+}
