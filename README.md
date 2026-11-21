@@ -10,17 +10,16 @@ A self-hosted personal agent that lives on WhatsApp and runs on my own laptop.
 
 ## Development
 
-Needs Node 24.
+Needs Node 24 and make. Run everything from the repo root.
 
 ```sh
-npm install
-npm run dev        # run from source
-npm run build      # compile to dist/
-npm start          # run the build
-npm run typecheck
-npm run lint       # biome lint + format check
-npm run format     # fix what biome can
+make install   # install dependencies
+make dev       # run core from source
+make check     # lint, typecheck, test and build everything (what CI runs)
+make help      # list every target
 ```
+
+How the code is organised: [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md).
 
 ## License
 
