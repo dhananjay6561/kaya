@@ -1,5 +1,6 @@
 import { dirname } from "node:path";
 import { type Config, ConfigError, loadConfig, loadEnvFile } from "./config/index.js";
+import { createContracts } from "./contracts/index.js";
 import { createDb } from "./lib/db.js";
 import { startHttpServer } from "./lib/http-server.js";
 import { createLogger, type Logger } from "./lib/logger.js";
@@ -32,6 +33,7 @@ async function run(config: Config, logger: Logger): Promise<void> {
     logger.warn({ err }, "db not reachable at startup; health reports it until it is");
   }
 
+  createContracts();
   const providers = createProviders(config);
   await providers.channel.start();
 
