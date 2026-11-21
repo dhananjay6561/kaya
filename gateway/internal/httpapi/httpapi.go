@@ -3,33 +3,106 @@ package httpapi
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
+	"log/slog"
 	"net"
 	"net/http"
+	"sync"
 	"time"
 )
 
-// NewHandler returns the gateway's routes.
-func NewHandler() http.Handler {
-	mux := http.NewServeMux()
-	mux.HandleFunc("GET /health", health)
-	return mux
+// Checker reports whether one dependency works.
+type Checker interface {
+	Check(ctx context.Context) error
 }
 
-func health(w http.ResponseWriter, _ *http.Request) {
+// Options configures the gateway's routes.
+type Options struct {
+	Logger       *slog.Logger
+	Service      string
+	Version      string
+	Checks       map[string]Checker
+	CheckTimeout time.Duration
+}
+
+type checkResult struct {
+	Status     string `json:"status"`
+	DurationMS int64  `json:"duration_ms"`
+}
+
+type healthBody struct {
+	Status  string                 `json:"status"`
+	Service string                 `json:"service"`
+	Version string                 `json:"version"`
+	Checks  map[string]checkResult `json:"checks"`
+}
+
+// NewHandler returns the gateway's routes, wrapped with request ids, logging and panic recovery.
+func NewHandler(o Options) http.Handler {
+	if o.Logger == nil {
+		o.Logger = slog.New(slog.DiscardHandler)
+	}
+	if o.CheckTimeout == 0 {
+		o.CheckTimeout = 2 * time.Second
+	}
+	mux := http.NewServeMux()
+	mux.Handle("GET /health", health(o))
+	return withRequestID(withLogging(withRecover(mux, o.Logger), o.Logger), o.Logger)
+}
+
+func health(o Options) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		ctx, cancel := context.WithTimeout(r.Context(), o.CheckTimeout)
+		defer cancel()
+
+		body := healthBody{Status: "ok", Service: o.Service, Version: o.Version, Checks: map[string]checkResult{}}
+		var mu sync.Mutex
+		var wg sync.WaitGroup
+		for name, checker := range o.Checks {
+			wg.Go(func() {
+				start := time.Now()
+				err := checker.Check(ctx)
+				result := checkResult{Status: "ok", DurationMS: time.Since(start).Milliseconds()}
+				if err != nil {
+					result.Status = "down"
+					loggerFrom(r.Context(), o.Logger).Warn("health check failed", "check", name, "error", err.Error())
+				}
+				mu.Lock()
+				defer mu.Unlock()
+				body.Checks[name] = result
+				if err != nil {
+					body.Status = "unhealthy"
+				}
+			})
+		}
+		wg.Wait()
+
+		status := http.StatusOK
+		if body.Status != "ok" {
+			status = http.StatusServiceUnavailable
+		}
+		writeJSON(w, status, body)
+	}
+}
+
+func writeJSON(w http.ResponseWriter, status int, body any) {
 	w.Header().Set("Content-Type", "application/json")
-	_, _ = w.Write([]byte(`{"status":"ok"}` + "\n"))
+	w.Header().Set("Cache-Control", "no-store")
+	w.WriteHeader(status)
+	_ = json.NewEncoder(w).Encode(body)
 }
 
 // NewServer returns a server for h with timeouts set.
-func NewServer(h http.Handler) *http.Server {
+func NewServer(h http.Handler, logger *slog.Logger) *http.Server {
 	return &http.Server{
 		Handler:           h,
 		ReadHeaderTimeout: 5 * time.Second,
 		ReadTimeout:       10 * time.Second,
 		WriteTimeout:      10 * time.Second,
 		IdleTimeout:       60 * time.Second,
+		ErrorLog:          slog.NewLogLogger(logger.Handler(), slog.LevelWarn),
 	}
 }
 
