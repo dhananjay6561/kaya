@@ -1,6 +1,5 @@
 {
   "name": "kaya",
-  "version": "0.1.0",
   "private": true,
   "description": "A self-hosted personal agent that lives on WhatsApp",
   "license": "MIT",
@@ -8,11 +7,14 @@
   "engines": {
     "node": ">=24"
   },
+  "workspaces": [
+    "core"
+  ],
   "scripts": {
-    "dev": "tsx src/index.ts",
-    "build": "tsc -p tsconfig.json",
-    "start": "node dist/index.js",
-    "typecheck": "tsc -p tsconfig.json --noEmit",
+    "dev": "npm run dev -w @kaya/core",
+    "build": "npm run build --workspaces --if-present",
+    "typecheck": "npm run typecheck --workspaces --if-present",
+    "test": "npm run test --workspaces --if-present",
     "lint": "biome check .",
     "format": "biome check --write ."
   },
@@ -23,6 +25,7 @@
     "typescript": "7.0.2"
   },
   "allowScripts": {
-    "esbuild": false
+    "esbuild": false,
+    "fsevents": false
   }
 }
