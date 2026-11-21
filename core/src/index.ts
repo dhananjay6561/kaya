@@ -4,6 +4,7 @@ import { createDb } from "./lib/db.js";
 import { startHttpServer } from "./lib/http-server.js";
 import { createLogger, type Logger } from "./lib/logger.js";
 import { createHealthRoute } from "./modules/health/index.js";
+import { createProviders } from "./providers/index.js";
 
 const version = process.env.KAYA_VERSION || process.env.npm_package_version || "dev";
 
@@ -31,6 +32,9 @@ async function run(config: Config, logger: Logger): Promise<void> {
     logger.warn({ err }, "db not reachable at startup; health reports it until it is");
   }
 
+  const providers = createProviders(config);
+  await providers.channel.start();
+
   const server = await startHttpServer({
     host: config.listenHost,
     port: config.port,
@@ -40,7 +44,9 @@ async function run(config: Config, logger: Logger): Promise<void> {
   logger.info(
     {
       addr: `${config.listenHost}:${server.port}`,
-      llm: config.llm.provider,
+      llm: providers.llm.name,
+      channel: providers.channel.name,
+      telephony: providers.telephony.name,
       data_dir: config.dataDir,
     },
     "core started",
@@ -49,6 +55,7 @@ async function run(config: Config, logger: Logger): Promise<void> {
   const signal = await stopSignal();
   logger.info({ signal }, "core stopping");
   await server.close();
+  await providers.channel.stop();
   await db.close();
   logger.info("core stopped");
 }
