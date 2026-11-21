@@ -1,8 +1,10 @@
 FROM golang:1.26.11-alpine3.24@sha256:ecb67f987aa1a57794c91d19ade7ae0209f2f0f5496aaef9e6ae85ddf92d02ab AS build
 WORKDIR /src
-COPY go.mod go.sum ./
+COPY contracts/ contracts/
+COPY gateway/go.mod gateway/go.sum gateway/
+WORKDIR /src/gateway
 RUN go mod download
-COPY . .
+COPY gateway/ .
 ARG VERSION=dev
 RUN CGO_ENABLED=0 go build -trimpath -ldflags "-s -w -X main.version=${VERSION}" -o /out/gateway ./cmd/gateway
 

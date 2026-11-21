@@ -1,0 +1,6 @@
+*
+!gateway
+!contracts
+gateway/bin
+**/*.env
+**/.env

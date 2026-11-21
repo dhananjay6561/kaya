@@ -5,5 +5,7 @@
 .env
 .git
 data
-gateway
+db
 docs
+gateway
+contracts/samples

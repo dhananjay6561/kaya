@@ -2,6 +2,7 @@ FROM node:24.22.3-alpine3.24@sha256:116b800c3754b440ee0aa3ed2f20f5bf3d99a554bfd9
 WORKDIR /app
 COPY package.json package-lock.json ./
 COPY core/package.json core/
+COPY contracts/package.json contracts/
 RUN npm ci --ignore-scripts
 COPY tsconfig.base.json ./
 COPY core/tsconfig.json core/
@@ -12,6 +13,7 @@ FROM node:24.22.3-alpine3.24@sha256:116b800c3754b440ee0aa3ed2f20f5bf3d99a554bfd9
 WORKDIR /app
 COPY package.json package-lock.json ./
 COPY core/package.json core/
+COPY contracts/package.json contracts/
 RUN npm ci --omit=dev --ignore-scripts
 
 FROM gcr.io/distroless/nodejs24-debian13:nonroot@sha256:6abfcb367ebc291572c774c1592a986be2ab26a2486f73093401327495a5962a
@@ -19,6 +21,8 @@ WORKDIR /app
 ARG VERSION=dev
 ENV NODE_ENV=production KAYA_VERSION=${VERSION}
 COPY --from=deps /app/node_modules node_modules
+COPY contracts/package.json contracts/
+COPY contracts/schemas contracts/schemas
 COPY --from=build /app/core/package.json core/
 COPY --from=build /app/core/dist core/dist
 WORKDIR /app/core
