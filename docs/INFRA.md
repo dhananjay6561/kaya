@@ -48,8 +48,8 @@ HP Victus laptop, used only for this (once hosted).
 ┌───────┼───────────────────┼───────────┼──────── Victus · Linux Mint ──────────┐
 │       ▼                   │           │                  ┌──────────────┐     │
 │  ┌──────────────────────────────┐     │                  │ cloudflared  │◀────┘
-│  │ agent  (Node/TS) — the hub   │     │                  │ (tunnel: only│
-│  │ • WhatsApp (Baileys)         │─────┘                  │  /voice/*)   │
+│  │ core (TS) — the agent hub     │     │                  │ (tunnel: only│
+│  │ • WhatsApp via gateway (Go)  │─────┘                  │  /voice/*)   │
 │  │ • router: local or Claude?   │                        └──────┬───────┘
 │  │ • PII masking rules          │                               ▼
 │  │ • confirm-before-act         │◀──── call result ───── ┌──────────────┐
@@ -71,7 +71,8 @@ HP Victus laptop, used only for this (once hosted).
 
 | # | Service | Job | Runs on | RAM |
 |---|---|---|---|---|
-| 1 | agent | Hub: WhatsApp, routing, tools, confirmations, scheduler | CPU | ~1 GB |
+| 1a | gateway | Go + whatsmeow: WhatsApp connection, pairing, receiving and sending | CPU | ~0.1 GB |
+| 1b | core | TypeScript agent: commands, LLM calls, tools, confirmations, scheduler | CPU | ~1 GB |
 | 2 | ollama | Local ~4B model (Qwen3 4B / Gemma 3 4B class) + embedding model | GPU, ~3.5 GB VRAM | ~1 GB |
 | 3 | db | Postgres + pgvector: chats, tasks, call logs, embeddings | CPU | ~0.5–1 GB |
 | 4 | whisper | Voice-note transcription (faster-whisper small) | CPU | ~1 GB |
@@ -83,30 +84,30 @@ HP Victus laptop, used only for this (once hosted).
 | | **Total** | | | **~8–11 of 24 GB RAM, ~3.5 of 4 GB VRAM, under 20 GB disk** |
 
 Whisper stays on the CPU so the GPU is free for the LLM. Services are added phase by phase. Phase 1
-needs only agent, db and ollama.
+needs only gateway, core and db.
 
 ## WhatsApp connection
 
 Two separate connections:
 
-**1. Reading DJ's chats (linked device).** The agent uses Baileys to become a linked device on DJ's
+**1. Reading DJ's chats (linked device).** The gateway (Go, whatsmeow) becomes a linked device on DJ's
 own number, like WhatsApp Web. Pairing is by QR (served on a small page over Tailscale, or in the
 terminal) or by an 8-character pairing code ("Link with phone number instead"), which is easier on
-a headless box. The session is saved in `/srv/kaya/whatsapp-auth` and survives restarts.
+a headless box. The session is stored in Postgres through whatsmeow's session store and survives restarts.
 
 - On first link it syncs recent history; WhatsApp decides how far back. After that, everything
   arrives live, including messages DJ sends from his phone.
 - It uses one of the 4 linked-device slots.
 - If the phone is offline for ~14 days, WhatsApp logs out all linked devices.
 - Removing it under Linked devices on the phone cuts access at once (kill switch).
-- On logout, the agent alerts DJ through the fallback channel and he re-pairs.
+- On logout, the gateway reports it and core alerts DJ through the fallback channel and he re-pairs.
 
 **2. The chat DJ talks to Kaya in.**
 
 | Option | How | Trade-off |
 |---|---|---|
 | A. Self-chat | Kaya replies in DJ's "Message yourself" chat using connection 1 | Free, no setup; doesn't feel like a separate contact |
-| B. Spare SIM + Baileys | Second session on a cheap prepaid number saved as "Kaya" | Feels like a real contact and can message first; ban risk sits on the spare number |
+| B. Spare SIM | Second gateway device on a cheap prepaid number saved as "Kaya" | Feels like a real contact and can message first; ban risk sits on the spare number |
 | C. WhatsApp Business Cloud API | Official business number via Meta webhooks through the tunnel | No ban risk; business setup, paid templates for messages it sends first, 24-hour reply window |
 
 Plan: start with A, move to B once things work, C only if Kaya ever becomes a product for others.
@@ -130,8 +131,7 @@ set a proper device name, back off slowly on reconnects.
 
 ```
 /srv/kaya/
-├── postgres/         chats, tasks, call transcripts, embeddings
-├── whatsapp-auth/    linked-device session (re-pair if lost)
+├── postgres/         chats, tasks, call transcripts, embeddings, WhatsApp session
 ├── browser-profile/  logged-in sessions (most sensitive folder)
 ├── models/           ollama + whisper models (~5 GB)
 ├── files/            generated decks/PDFs before Drive upload
@@ -139,8 +139,8 @@ set a proper device name, back off slowly on reconnects.
 └── .env              keys (chmod 600)
 ```
 
-**Backups:** restic nightly, encrypted, to Drive or Backblaze B2. Covers a `postgres` dump,
-`whatsapp-auth` and `browser-profile`. Keep 7 daily and 4 weekly. Models are not backed up.
+**Backups:** restic nightly, encrypted, to Drive or Backblaze B2. Covers a `postgres` dump (which
+includes the WhatsApp session) and `browser-profile`. Keep 7 daily and 4 weekly. Models are not backed up.
 
 ## One-time host setup (Mint)
 
@@ -173,14 +173,14 @@ set a proper device name, back off slowly on reconnects.
 ## How a request flows
 
 **"What did Rahul say about Saturday?"**
-WhatsApp → agent → router: simple → ollama searches the db by meaning and answers → reply. Nothing
+WhatsApp → gateway → core → router: simple → ollama searches the db by meaning and answers → reply. Nothing
 leaves the laptop.
 
 **"Make a workshop deck from the group chat and put it on Drive"**
-WhatsApp → agent → router: hard → ollama picks the relevant messages → masking rules strip private
+WhatsApp → gateway → core → router: hard → ollama picks the relevant messages → masking rules strip private
 details → Claude plans the deck → docs service builds PPT and PDF → Drive upload → link back on
 WhatsApp.
 
 **"Call Rahul and ask if Saturday 6pm works"**
-Agent finds the number → asks DJ to confirm → voice service dials from Kaya's number → STT → Claude →
+Core finds the number → asks DJ to confirm → voice service dials from Kaya's number → STT → Claude →
 ElevenLabs → transcript and summary back on WhatsApp ("Rahul said Saturday works, but 7pm, not 6").
