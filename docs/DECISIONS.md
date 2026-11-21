@@ -8,8 +8,8 @@ Newest at the bottom. When a decision changes, mark the old one superseded inste
 |---|---|---|
 | 1 | Build our own agent instead of running OpenClaw | Full control over what it can touch, since it reads chats and can spend money. OpenClaw has had security problems with exposed instances and untrusted community skills. |
 | 2 | Host on DJ's Victus (Linux Mint), Docker Compose | DJ owns it outright, and it's dedicated to this |
-| 3 | Agent hub in Node/TypeScript | Baileys (the WhatsApp library) is Node |
-| 4 | WhatsApp via Baileys as a linked device on DJ's number (QR or pairing code) | The official Business API can't read personal chats. This is also how the real IRA did it: DJ scanned a QR. |
+| 3 | ~~Agent hub in Node/TypeScript, including WhatsApp~~ Superseded by #23 | Baileys (the WhatsApp library) is Node |
+| 4 | WhatsApp as a linked device on DJ's number (QR or pairing code) | The official Business API can't read personal chats. This is also how the real IRA did it: DJ scanned a QR. |
 | 5 | Hybrid models: local ~4B on Ollama is the gatekeeper, Claude API for multi-step work | 4 GB VRAM can't run a model good enough for long tool chains; local keeps raw chats on the laptop and cuts cost |
 | 6 | Privacy = fixed masking rules + local model picking relevant messages | A 4B model alone misses things; fixed rules are predictable |
 | 7 | Postgres + pgvector (supersedes "SQLite to start") | Several services share data, and pgvector gives meaning-based chat search |
@@ -34,8 +34,16 @@ Newest at the bottom. When a decision changes, mark the old one superseded inste
 | 20 | The project is named **Kaya** (replaces the working name "Ira"). Repo: `dhananjay6561/kaya`, public. | DJ, 2026-11-21 |
 | 21 | MIT license | DJ's choice: permissive and the usual pick for personal open source |
 | 22 | GitHub hardening: ruleset on `main` (PR required with 0 approvals, linear history, no force push or deletion, no bypass), `v*` tag protection, secret scanning + push protection, Dependabot alerts/updates, CodeQL (extended), private vulnerability reporting, read-only Actions token, actions pinned to commit hashes, rebase-only merges, approval for outside contributors' workflow runs. CI is not a required check. | Secure public repo without slowing a solo, merge-right-away PR flow. Required checks or reviews would block DJ's own merges. |
+| 23 | Split by language: `gateway` (Go + whatsmeow) owns the WhatsApp connection, `core` (TypeScript) is the agent, docs and voice are Python services. They talk only through contracts. Supersedes #3; #4 now uses whatsmeow instead of Baileys. | Checked 2026-11-21: since August whatsmeow had 100+ commits, Baileys 4, and Baileys is still on `7.0.0-rc14` from July. whatsmeow runs the production mautrix-whatsapp bridge. The WhatsApp link is the part that must not break, so it gets the best-maintained library; everything else stays where its libraries are strongest. |
+| 24 | Monorepo: `core/`, `gateway/`, `services/<name>/`, `contracts/`, `db/migrations/`, `deploy/`, `docs/`. npm workspaces for TypeScript, a Go module in `gateway/`, a root Makefile as the one entry point. Full layout in `ARCHITECTURE.md`. | One repo and one PR per change across services; it grows by adding folders |
+| 25 | One schema in `db/migrations/` as plain SQL, run by dbmate before services start. whatsmeow keeps its own session tables. | Two languages share the database; a language-neutral tool avoids two migration systems |
+| 26 | WhatsApp session stored in Postgres through whatsmeow's session store, not in a `whatsapp-auth` folder | One thing to back up and to move to the Victus |
+| 27 | Every message between services has a JSON Schema in `contracts/`, validated on both sides | Two languages can't share types directly; the schema is the single source |
 
 ## Open questions
+
+- **Gateway → core transport (phase 1.0):** HTTP webhooks, Postgres LISTEN/NOTIFY, or a small queue
+  such as NATS. Must survive either side restarting without losing events.
 
 - **Embeddings:** Groq has no embedding model. Options: a small local embedding model (Ollama
   `nomic-embed-text`, or one run inside the Node process) or a hosted embeddings API. Needed by
