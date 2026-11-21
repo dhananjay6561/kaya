@@ -1,8 +1,11 @@
 import { dirname } from "node:path";
-import { ConfigError, loadConfig, loadEnvFile } from "./config/index.js";
-import { startHealthServer } from "./modules/health/index.js";
+import { type Config, ConfigError, loadConfig, loadEnvFile } from "./config/index.js";
+import { createDb } from "./lib/db.js";
+import { startHttpServer } from "./lib/http-server.js";
+import { createLogger, type Logger } from "./lib/logger.js";
+import { createHealthRoute } from "./modules/health/index.js";
 
-const version = process.env.npm_package_version ?? "dev";
+const version = process.env.KAYA_VERSION || process.env.npm_package_version || "dev";
 
 function stopSignal(): Promise<NodeJS.Signals> {
   return new Promise((resolve) => {
@@ -10,21 +13,65 @@ function stopSignal(): Promise<NodeJS.Signals> {
   });
 }
 
-async function main(): Promise<void> {
-  const envFile = loadEnvFile();
-  const config = loadConfig(process.env, envFile ? dirname(envFile) : process.cwd());
-  const server = await startHealthServer(config.listenHost, config.port);
-  console.log(
-    `kaya ${version} listening on ${config.listenHost}:${server.port} (llm: ${config.llm.provider}, data: ${config.dataDir})`,
+function exitOnCrash(logger: Logger): void {
+  const crash = (err: unknown, kind: string) => {
+    logger.fatal({ err }, kind);
+    logger.flush();
+    process.exit(1);
+  };
+  process.on("uncaughtException", (err) => crash(err, "uncaught exception"));
+  process.on("unhandledRejection", (err) => crash(err, "unhandled rejection"));
+}
+
+async function run(config: Config, logger: Logger): Promise<void> {
+  const db = createDb(config.databaseUrl, logger);
+  try {
+    await db.check(AbortSignal.timeout(5_000));
+  } catch (err) {
+    logger.warn({ err }, "db not reachable at startup; health reports it until it is");
+  }
+
+  const server = await startHttpServer({
+    host: config.listenHost,
+    port: config.port,
+    logger,
+    routes: { "/health": createHealthRoute({ service: "core", version, checks: { db } }) },
+  });
+  logger.info(
+    {
+      addr: `${config.listenHost}:${server.port}`,
+      llm: config.llm.provider,
+      data_dir: config.dataDir,
+    },
+    "core started",
   );
 
   const signal = await stopSignal();
-  console.log(`kaya stopping (${signal})`);
+  logger.info({ signal }, "core stopping");
   await server.close();
-  console.log("kaya stopped");
+  await db.close();
+  logger.info("core stopped");
 }
 
-main().catch((error: unknown) => {
-  console.error(error instanceof ConfigError ? error.message : error);
-  process.exitCode = 1;
-});
+function loadOrExit(): Config | undefined {
+  try {
+    const envFile = loadEnvFile();
+    return loadConfig(process.env, envFile ? dirname(envFile) : process.cwd());
+  } catch (error) {
+    if (!(error instanceof ConfigError)) throw error;
+    console.error(error.message);
+    process.exitCode = 1;
+    return undefined;
+  }
+}
+
+const config = loadOrExit();
+if (config) {
+  const logger = createLogger({ level: config.logLevel, service: "core", version });
+  exitOnCrash(logger);
+  run(config, logger).catch((err: unknown) => {
+    logger.fatal({ err }, "core failed");
+    logger.flush();
+    process.exitCode = 1;
+  });
+}
