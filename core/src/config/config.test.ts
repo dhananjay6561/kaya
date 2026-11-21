@@ -1,11 +1,17 @@
 import assert from "node:assert/strict";
 import { describe, it } from "node:test";
-import { ConfigError, loadConfig } from "./config.js";
+import { type Config, ConfigError, type GroqConfig, loadConfig } from "./config.js";
 
 const valid = {
   DATABASE_URL: "postgres://kaya:kaya@localhost:5432/kaya",
   GROQ_API_KEY: "test-key-not-real",
 };
+
+function groqOf(config: Config): GroqConfig {
+  assert.equal(config.llm.provider, "groq");
+  if (config.llm.provider !== "groq") assert.fail("expected groq");
+  return config.llm.groq;
+}
 
 function problemsFor(env: NodeJS.ProcessEnv): string[] {
   try {
@@ -24,9 +30,10 @@ describe("loadConfig", () => {
     assert.equal(config.port, 3000);
     assert.equal(config.listenHost, "127.0.0.1");
     assert.equal(config.dataDir, "/base/data");
-    assert.equal(config.llm.provider, "groq");
-    assert.equal(config.llm.groq.heavyModel, "openai/gpt-oss-120b");
-    assert.equal(config.llm.groq.routineModel, "openai/gpt-oss-20b");
+    assert.equal(groqOf(config).heavyModel, "openai/gpt-oss-120b");
+    assert.equal(groqOf(config).routineModel, "openai/gpt-oss-20b");
+    assert.equal(config.channel.provider, "stub");
+    assert.equal(config.telephony.provider, "stub");
   });
 
   it("reads every value when set", () => {
@@ -46,13 +53,47 @@ describe("loadConfig", () => {
     assert.equal(config.port, 8080);
     assert.equal(config.listenHost, "0.0.0.0");
     assert.equal(config.dataDir, "/srv/kaya");
-    assert.equal(config.llm.groq.heavyModel, "heavy");
-    assert.equal(config.llm.groq.routineModel, "routine");
+    assert.equal(groqOf(config).heavyModel, "heavy");
+    assert.equal(groqOf(config).routineModel, "routine");
   });
 
   it("accepts postgresql:// URLs", () => {
     const config = loadConfig({ ...valid, DATABASE_URL: "postgresql://u:p@db/kaya" }, "/base");
     assert.equal(config.databaseUrl, "postgresql://u:p@db/kaya");
+  });
+
+  it("switches providers through config alone", () => {
+    const config = loadConfig(
+      { DATABASE_URL: valid.DATABASE_URL, LLM_PROVIDER: "stub", CHAT_CHANNEL: "stub" },
+      "/base",
+    );
+    assert.deepEqual(config.llm, { provider: "stub" });
+    assert.equal(config.channel.provider, "stub");
+  });
+
+  it("needs GROQ_API_KEY only when the LLM provider is groq", () => {
+    assert.deepEqual(problemsFor({ DATABASE_URL: valid.DATABASE_URL, LLM_PROVIDER: "groq" }), [
+      "GROQ_API_KEY: required",
+    ]);
+    assert.doesNotThrow(() =>
+      loadConfig({ DATABASE_URL: valid.DATABASE_URL, LLM_PROVIDER: "stub" }, "/base"),
+    );
+  });
+
+  it("rejects unknown providers", () => {
+    const problems = problemsFor({
+      ...valid,
+      LLM_PROVIDER: "openai",
+      CHAT_CHANNEL: "telegram",
+      TELEPHONY_PROVIDER: "skype",
+    });
+    assert.equal(problems.length, 3);
+    for (const key of ["LLM_PROVIDER", "CHAT_CHANNEL", "TELEPHONY_PROVIDER"]) {
+      assert.ok(
+        problems.some((p) => p.startsWith(`${key}: `)),
+        key,
+      );
+    }
   });
 
   it("lists every missing required value at once", () => {
@@ -95,6 +136,8 @@ describe("loadConfig", () => {
     const config = loadConfig(valid, "/base");
     assert.ok(Object.isFrozen(config));
     assert.ok(Object.isFrozen(config.llm));
-    assert.ok(Object.isFrozen(config.llm.groq));
+    assert.ok(Object.isFrozen(groqOf(config)));
+    assert.ok(Object.isFrozen(config.channel));
+    assert.ok(Object.isFrozen(config.telephony));
   });
 });

@@ -28,22 +28,29 @@ const schema = z.object({
       error: (issue) => (issue.input === undefined ? "required" : "must be a postgres:// URL"),
     }),
   ),
-  LLM_PROVIDER: z.preprocess(optional, z.enum(["groq"]).default("groq")),
-  GROQ_API_KEY: z.preprocess(optional, z.string({ error: "required" })),
+  LLM_PROVIDER: z.preprocess(optional, z.enum(["groq", "stub"]).default("groq")),
+  GROQ_API_KEY: z.preprocess(optional, z.string().optional()),
   GROQ_MODEL_HEAVY: z.preprocess(optional, z.string().default("openai/gpt-oss-120b")),
   GROQ_MODEL_ROUTINE: z.preprocess(optional, z.string().default("openai/gpt-oss-20b")),
+  CHAT_CHANNEL: z.preprocess(optional, z.enum(["stub"]).default("stub")),
+  TELEPHONY_PROVIDER: z.preprocess(optional, z.enum(["stub"]).default("stub")),
 });
 
+type Env = z.infer<typeof schema>;
+
+export type GroqConfig = Readonly<{ apiKey: string; heavyModel: string; routineModel: string }>;
+
+export type LlmConfig = Readonly<{ provider: "groq"; groq: GroqConfig } | { provider: "stub" }>;
+
 export type Config = Readonly<{
-  logLevel: z.infer<typeof schema>["LOG_LEVEL"];
+  logLevel: Env["LOG_LEVEL"];
   dataDir: string;
   listenHost: string;
   port: number;
   databaseUrl: string;
-  llm: Readonly<{
-    provider: z.infer<typeof schema>["LLM_PROVIDER"];
-    groq: Readonly<{ apiKey: string; heavyModel: string; routineModel: string }>;
-  }>;
+  llm: LlmConfig;
+  channel: Readonly<{ provider: Env["CHAT_CHANNEL"] }>;
+  telephony: Readonly<{ provider: Env["TELEPHONY_PROVIDER"] }>;
 }>;
 
 export class ConfigError extends Error {
@@ -60,11 +67,14 @@ export function loadConfig(
   baseDir: string = process.cwd(),
 ): Config {
   const result = schema.safeParse(env);
-  if (!result.success) {
-    throw new ConfigError(
-      result.error.issues.map((issue) => `${issue.path.join(".")}: ${issue.message}`),
-    );
+  const problems = result.success
+    ? []
+    : result.error.issues.map((issue) => `${issue.path.join(".")}: ${issue.message}`);
+  const llmProvider = optional(env.LLM_PROVIDER) ?? "groq";
+  if (llmProvider === "groq" && optional(env.GROQ_API_KEY) === undefined) {
+    problems.push("GROQ_API_KEY: required");
   }
+  if (!result.success || problems.length > 0) throw new ConfigError(problems);
   const e = result.data;
   return Object.freeze({
     logLevel: e.LOG_LEVEL,
@@ -72,13 +82,20 @@ export function loadConfig(
     listenHost: e.LISTEN_HOST,
     port: e.CORE_PORT,
     databaseUrl: e.DATABASE_URL,
-    llm: Object.freeze({
-      provider: e.LLM_PROVIDER,
-      groq: Object.freeze({
-        apiKey: e.GROQ_API_KEY,
-        heavyModel: e.GROQ_MODEL_HEAVY,
-        routineModel: e.GROQ_MODEL_ROUTINE,
-      }),
+    llm: llmConfig(e),
+    channel: Object.freeze({ provider: e.CHAT_CHANNEL }),
+    telephony: Object.freeze({ provider: e.TELEPHONY_PROVIDER }),
+  });
+}
+
+function llmConfig(e: Env): LlmConfig {
+  if (e.LLM_PROVIDER === "stub") return Object.freeze({ provider: "stub" });
+  return Object.freeze({
+    provider: "groq",
+    groq: Object.freeze({
+      apiKey: e.GROQ_API_KEY ?? "",
+      heavyModel: e.GROQ_MODEL_HEAVY,
+      routineModel: e.GROQ_MODEL_ROUTINE,
     }),
   });
 }
