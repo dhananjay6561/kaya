@@ -70,6 +70,16 @@ Folders appear when a phase needs them; empty placeholders are not committed.
 - **Modules:** each feature lives in its own folder with a small public entry (`index.ts` or a Go
   package). Modules depend on interfaces, not on each other's internals. Providers are chosen by
   config.
+- **Providers:** `core/src/providers/<kind>/` holds the interface (`types.ts`), one file per
+  implementation, and a factory in `index.ts` that switches on the config value. The config enum
+  lists only implementations that exist, and the switch is exhaustive, so adding a provider means
+  adding a file, an enum value and a case; TypeScript fails the build if one is missed. Every kind
+  has a `stub` implementation for development and tests. Kinds so far:
+  - `llm`: `complete()` with a `routine` or `heavy` tier, returning text, model and token usage
+  - `channel`: the one conversation between DJ and Kaya (`start`, `stop`, `send`, `onMessage`).
+    Reading the rest of WhatsApp goes through the database, not the channel.
+  - `telephony`: `placeCall()` to an E.164 number with a brief, and `getCall()` for status and
+    transcript
 - **Logging:** structured JSON to stdout, one logger per service (pino in core, `log/slog` in Go).
   Every line has `time`, `level`, `msg`, `service` and `version`. A request id travels in the
   `X-Request-Id` header and appears on every log line for that request. Errors are logged with an
