@@ -3,7 +3,9 @@ package main
 
 import (
 	"context"
+	"errors"
 	"fmt"
+	"log/slog"
 	"net"
 	"os"
 	"os/signal"
@@ -14,6 +16,8 @@ import (
 
 	"github.com/dhananjay6561/kaya/gateway/internal/config"
 	"github.com/dhananjay6561/kaya/gateway/internal/httpapi"
+	"github.com/dhananjay6561/kaya/gateway/internal/logging"
+	"github.com/dhananjay6561/kaya/gateway/internal/store"
 )
 
 var version = "dev"
@@ -21,48 +25,76 @@ var version = "dev"
 const shutdownGrace = 10 * time.Second
 
 func main() {
-	cmd := run
 	if len(os.Args) > 1 && os.Args[1] == "healthcheck" {
-		cmd = healthcheck
+		if err := healthcheck(); err != nil {
+			fmt.Fprintln(os.Stderr, err)
+			os.Exit(1)
+		}
+		return
 	}
-	if err := cmd(); err != nil {
+
+	cfg, err := loadConfig()
+	if err != nil {
 		fmt.Fprintln(os.Stderr, err)
+		os.Exit(1)
+	}
+	logger := logging.New(os.Stdout, cfg.LogLevel, "service", "gateway", "version", version)
+	if err := run(cfg, logger); err != nil {
+		logger.Log(context.Background(), logging.LevelFatal, "gateway failed", "error", err.Error())
 		os.Exit(1)
 	}
 }
 
-func run() error {
+func loadConfig() (config.Config, error) {
 	envFile, err := config.LoadEnvFile()
 	if err != nil {
-		return err
+		return config.Config{}, err
 	}
 	baseDir, err := os.Getwd()
 	if err != nil {
-		return err
+		return config.Config{}, err
 	}
 	if envFile != "" {
 		baseDir = filepath.Dir(envFile)
 	}
+	return config.Load(os.Getenv, baseDir)
+}
 
-	cfg, err := config.Load(os.Getenv, baseDir)
+func run(cfg config.Config, logger *slog.Logger) error {
+	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
+	defer stop()
+
+	db, err := store.Open(cfg.DatabaseURL)
 	if err != nil {
 		return err
 	}
+	defer db.Close()
 
-	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
-	defer stop()
+	checkCtx, cancel := context.WithTimeout(ctx, 5*time.Second)
+	if err := db.Check(checkCtx); err != nil {
+		logger.Warn("db not reachable at startup; health reports it until it is", "error", err.Error())
+	}
+	cancel()
 
 	addr := net.JoinHostPort(cfg.ListenHost, strconv.Itoa(cfg.Port))
 	ln, err := new(net.ListenConfig).Listen(ctx, "tcp", addr)
 	if err != nil {
 		return fmt.Errorf("listen on %s: %w", addr, err)
 	}
-	fmt.Printf("kaya gateway %s listening on %s (data: %s)\n", version, addr, cfg.DataDir)
 
-	if err := httpapi.Serve(ctx, httpapi.NewServer(httpapi.NewHandler()), ln, shutdownGrace); err != nil {
+	handler := httpapi.NewHandler(httpapi.Options{
+		Logger:  logger,
+		Service: "gateway",
+		Version: version,
+		Checks:  map[string]httpapi.Checker{"db": db},
+	})
+	logger.Info("gateway started", "addr", addr, "data_dir", cfg.DataDir)
+
+	err = httpapi.Serve(ctx, httpapi.NewServer(handler, logger), ln, shutdownGrace)
+	if err != nil && !errors.Is(err, context.Canceled) {
 		return err
 	}
-	fmt.Println("kaya gateway stopped")
+	logger.Info("gateway stopped")
 	return nil
 }
 
@@ -71,7 +103,7 @@ func healthcheck() error {
 	if port == "" {
 		port = "3001"
 	}
-	ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
+	ctx, cancel := context.WithTimeout(context.Background(), 4*time.Second)
 	defer cancel()
 	return httpapi.Check(ctx, "http://"+net.JoinHostPort("127.0.0.1", port)+"/health")
 }
