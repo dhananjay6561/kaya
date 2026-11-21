@@ -32,6 +32,8 @@ Newest at the bottom. When a decision changes, mark the old one superseded inste
 | 18 | Groq models: `openai/gpt-oss-120b` for multi-step and tool work, `openai/gpt-oss-20b` for routine work, both set in `.env` | Both have 131k context and tool calling on Groq (models checked 2026-11-21) |
 | 19 | Public GitHub repo, one PR per phase, merged right away without waiting for CI, rebase-merge so the micro commits stay | DJ's workflow choice. The repo is public, so `.env` and anything with secrets or chat data must never be committed. |
 | 20 | The project is named **Kaya** (replaces the working name "Ira"). Repo: `dhananjay6561/kaya`, public. | DJ, 2026-11-21 |
+| 21 | MIT license | DJ's choice: permissive and the usual pick for personal open source |
+| 22 | GitHub hardening: ruleset on `main` (PR required with 0 approvals, linear history, no force push or deletion, no bypass), `v*` tag protection, secret scanning + push protection, Dependabot alerts/updates, CodeQL (extended), private vulnerability reporting, read-only Actions token, actions pinned to commit hashes, rebase-only merges, approval for outside contributors' workflow runs. CI is not a required check. | Secure public repo without slowing a solo, merge-right-away PR flow. Required checks or reviews would block DJ's own merges. |
 
 ## Open questions
 
