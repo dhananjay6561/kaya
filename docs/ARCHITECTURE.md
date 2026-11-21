@@ -70,10 +70,17 @@ Folders appear when a phase needs them; empty placeholders are not committed.
 - **Modules:** each feature lives in its own folder with a small public entry (`index.ts` or a Go
   package). Modules depend on interfaces, not on each other's internals. Providers are chosen by
   config.
-- **Logging:** structured JSON, one logger per service, with an event or request id carried across
-  services.
+- **Logging:** structured JSON to stdout, one logger per service (pino in core, `log/slog` in Go).
+  Every line has `time`, `level`, `msg`, `service` and `version`. A request id travels in the
+  `X-Request-Id` header and appears on every log line for that request. Errors are logged with an
+  allowlist of fields, never whole objects, so attached clients or credentials can't leak.
 - **Reliability:** every service has `/health`, shuts down cleanly on SIGTERM, and handles every
   event idempotently, so a retry or restart never duplicates work.
+- **Health:** `GET /health` answers
+  `{"status":"ok|unhealthy","service","version","checks":{"db":{"status":"ok|down","duration_ms"}}}`,
+  with 200 when every check passes and 503 otherwise. Each check has a 2-second limit, and failure
+  details go to the logs, not the response. A service starts even if a dependency is down and
+  reports it through `/health` until it recovers.
 - **Errors:** typed errors at boundaries, never swallowed. Retries with backoff only for network
   calls.
 - **Tests:** every phase ships tests for its logic. Anything touching the database is tested
