@@ -51,6 +51,10 @@ Newest at the bottom. When a decision changes, mark the old one superseded inste
 | 32 | Migrations run in a one-shot `migrate` Compose service (dbmate, as a non-root user, read-only); core and gateway start only after it succeeds. No `schema.sql` dump is committed. | Services never start against an old schema, and neither language runs migrations itself (#25). The migration files are the schema's single source. |
 | 33 | First schema: `chats`, `contacts`, `messages`, keyed by WhatsApp JIDs stored as text. A message is unique by chat, sender and WhatsApp id, so live delivery and history sync can both upsert the same message without duplicates. Media columns come in phase 1.4. | Matches how WhatsApp identifies messages; tables grow when a phase needs them |
 | 34 | Schema tests are plain SQL in `db/tests/`, run against the real Postgres in CI (`make test-db`) along with a no-op rerun and a rollback | Constraints are part of the contract between gateway and core, so they get tested like code |
+| 35 | Logging with pino in core and `log/slog` in the gateway, both writing JSON to stdout with the same core fields and lowercase level names. Request ids travel in `X-Request-Id`. | Standard, fast libraries; one log shape makes it possible to follow a request across services |
+| 36 | `/health` checks the db on every call (2 s limit) and answers 503 when it's down. Services don't exit when the db is unreachable; they start and report it. The response never includes error details. | Docker and later monitoring see a real readiness signal, a db restart doesn't crash-loop the services, and the endpoint can't leak internals |
+| 37 | Core logs errors through an allowlist serialiser (type, message, stack, code and a few more, plus the cause chain) | `pg` attaches its whole client to errors; logging that is noisy and a leak risk |
+| 38 | Database tests run when `TEST_DATABASE_URL` is set; CI starts a pgvector Postgres for the core and gateway jobs | Real-Postgres tests (ARCHITECTURE) without making every local test run need Docker |
 
 ## Open questions
 
