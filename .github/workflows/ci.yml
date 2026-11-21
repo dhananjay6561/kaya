@@ -13,7 +13,7 @@ concurrency:
   cancel-in-progress: true
 
 jobs:
-  check:
+  core:
     runs-on: ubuntu-latest
     timeout-minutes: 10
     steps:
@@ -25,9 +25,7 @@ jobs:
           node-version-file: .nvmrc
           cache: npm
       - run: npm ci
-      - run: npm run lint
-      - run: npm run typecheck
-      - run: npm run build
+      - run: make check
 
   dependency-review:
     if: github.event_name == 'pull_request'
