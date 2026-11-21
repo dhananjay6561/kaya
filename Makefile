@@ -1,31 +1,63 @@
 .DEFAULT_GOAL := help
-.PHONY: help install dev lint format typecheck test build check clean
+.PHONY: help install dev dev-core dev-gateway lint lint-core lint-gateway format format-core \
+	format-gateway typecheck test test-core test-gateway build build-core build-gateway check clean
+
+GOLANGCI_LINT_VERSION := v2.15.0
+GOLANGCI_LINT := go run github.com/golangci/golangci-lint/v2/cmd/golangci-lint@$(GOLANGCI_LINT_VERSION)
+VERSION ?= $(shell git describe --tags --always --dirty 2>/dev/null || echo dev)
 
 help: ## list targets
-	@grep -E '^[a-z-]+:.*## ' $(MAKEFILE_LIST) | awk 'BEGIN {FS = ":.*## "}; {printf "  %-10s %s\n", $$1, $$2}'
+	@grep -E '^[a-z-]+:.*## ' $(MAKEFILE_LIST) | awk 'BEGIN {FS = ":.*## "}; {printf "  %-15s %s\n", $$1, $$2}'
 
 install: ## install dependencies for every service
 	npm ci
+	cd gateway && go mod download
 
-dev: ## run core from source
+dev: dev-core ## run core from source
+
+dev-core: ## run core from source
 	npm run dev
 
-lint: ## lint and format-check everything
+dev-gateway: ## run the gateway from source
+	cd gateway && go run ./cmd/gateway
+
+lint: lint-core lint-gateway ## lint and format-check everything
+
+lint-core: ## lint and format-check core
 	npm run lint
 
-format: ## fix lint and formatting where possible
+lint-gateway: ## lint and format-check the gateway
+	cd gateway && $(GOLANGCI_LINT) run ./...
+
+format: format-core format-gateway ## fix lint and formatting where possible
+
+format-core: ## fix core formatting
 	npm run format
 
-typecheck: ## type-check every service
+format-gateway: ## fix gateway formatting
+	cd gateway && $(GOLANGCI_LINT) fmt ./...
+
+typecheck: ## type-check core (the gateway is checked by its build and lint)
 	npm run typecheck
 
-test: ## run every test suite
+test: test-core test-gateway ## run every test suite
+
+test-core: ## run core tests
 	npm test
 
-build: ## build every service
+test-gateway: ## run gateway tests with the race detector
+	cd gateway && go test -race -count=1 ./...
+
+build: build-core build-gateway ## build every service
+
+build-core: ## build core into core/dist
 	npm run build
+
+build-gateway: ## build the gateway into gateway/bin
+	cd gateway && CGO_ENABLED=0 go build -trimpath -ldflags "-s -w -X main.version=$(VERSION)" \
+		-o bin/gateway ./cmd/gateway
 
 check: lint typecheck test build ## everything CI runs
 
 clean: ## remove build output
-	rm -rf core/dist
+	rm -rf core/dist gateway/bin
