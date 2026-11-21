@@ -8,8 +8,8 @@ x-service: &service
   cap_drop:
     - ALL
   depends_on:
-    db:
-      condition: service_healthy
+    migrate:
+      condition: service_completed_successfully
 
 x-database-url: &database-url postgres://${POSTGRES_USER:-kaya}:${POSTGRES_PASSWORD:?set POSTGRES_PASSWORD in .env}@db:5432/${POSTGRES_DB:-kaya}
 
@@ -30,6 +30,25 @@ services:
       timeout: 5s
       retries: 10
       start_period: 20s
+
+  migrate:
+    image: ghcr.io/amacneil/dbmate:2.38.2@sha256:fb4fe7cabfe98cf864d63ce083867f3c303a8c1a022fcd69081439425706e909
+    command: ["--wait", "--wait-timeout", "60s", "up"]
+    user: "65532:65532"
+    read_only: true
+    security_opt:
+      - no-new-privileges:true
+    cap_drop:
+      - ALL
+    environment:
+      DATABASE_URL: postgres://${POSTGRES_USER:-kaya}:${POSTGRES_PASSWORD:?set POSTGRES_PASSWORD in .env}@db:5432/${POSTGRES_DB:-kaya}?sslmode=disable
+      DBMATE_MIGRATIONS_DIR: /db/migrations
+      DBMATE_NO_DUMP_SCHEMA: "true"
+    volumes:
+      - ./db/migrations:/db/migrations:ro
+    depends_on:
+      db:
+        condition: service_healthy
 
   gateway:
     <<: *service
