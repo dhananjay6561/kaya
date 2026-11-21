@@ -26,6 +26,13 @@ make help          # list every target
 
 Copy `.env.example` to `.env` and fill in the required values first.
 
+Tests that need Postgres run when `TEST_DATABASE_URL` is set and are skipped otherwise (CI always
+sets it). With `make db` running:
+
+```sh
+TEST_DATABASE_URL=postgres://kaya:kaya@localhost:5432/kaya make test
+```
+
 How the code is organised: [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md).
 
 ## License
