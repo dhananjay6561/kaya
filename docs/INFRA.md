@@ -19,7 +19,7 @@ Rules that keep it portable:
 - Every host, port, path, key and provider choice comes from `.env`; `.env.example` lists them all.
 - The LLM, Claude, telephony and the WhatsApp chat option (self-chat / spare SIM / Cloud API) each
   sit behind one interface and are chosen in config.
-- Database migrations run on startup.
+- Database migrations run as a one-shot `migrate` step (dbmate) before the services start.
 - `deploy/` holds the Victus kit: Mint host setup script, compose override, backup config and a
   hosting-day checklist.
 
