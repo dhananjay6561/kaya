@@ -16,9 +16,10 @@ Needs Node 24, Go 1.26, make and Docker with Compose. Run everything from the re
 make install       # install dependencies
 make dev           # run core from source
 make dev-gateway   # run the WhatsApp gateway from source
-make db            # start only Postgres, for running services from source
+make db            # start only Postgres and apply migrations, for running services from source
 make up            # build and run the whole stack in Docker, wait until healthy
 make down          # stop the stack (data stays in DATA_DIR)
+make migration name=add_tasks   # new empty migration in db/migrations
 make check         # lint, typecheck, test and build everything (what CI runs)
 make help          # list every target
 ```
