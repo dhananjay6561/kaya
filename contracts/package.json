@@ -1,0 +1,17 @@
+{
+  "name": "@kaya/contracts",
+  "version": "0.1.0",
+  "private": true,
+  "description": "JSON Schemas and sample payloads for messages between Kaya's services",
+  "license": "MIT",
+  "type": "module",
+  "files": [
+    "schemas",
+    "samples"
+  ],
+  "exports": {
+    "./package.json": "./package.json",
+    "./schemas/*": "./schemas/*",
+    "./samples/*": "./samples/*"
+  }
+}
