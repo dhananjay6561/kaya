@@ -10,13 +10,14 @@ A self-hosted personal agent that lives on WhatsApp and runs on my own laptop.
 
 ## Development
 
-Needs Node 24 and make. Run everything from the repo root.
+Needs Node 24, Go 1.26 and make. Run everything from the repo root.
 
 ```sh
-make install   # install dependencies
-make dev       # run core from source
-make check     # lint, typecheck, test and build everything (what CI runs)
-make help      # list every target
+make install       # install dependencies
+make dev           # run core from source
+make dev-gateway   # run the WhatsApp gateway from source
+make check         # lint, typecheck, test and build everything (what CI runs)
+make help          # list every target
 ```
 
 How the code is organised: [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md).
