@@ -48,6 +48,9 @@ Newest at the bottom. When a decision changes, mark the old one superseded inste
 | 29 | Each service has a minimal `/health` from phase 0.5 so Compose health checks work; phase 0.7 adds db status. A `healthcheck` command inside each image calls it, since distroless images have no curl. | `docker compose up` can only report healthy if the services run and answer |
 | 30 | Services bind to `127.0.0.1` by default (`LISTEN_HOST`); Compose binds `0.0.0.0` inside containers and publishes ports on `127.0.0.1` only | Nothing is reachable from the network unless Tailscale or the tunnel is set up for it |
 | 31 | The gateway container gets only the settings it uses, not the whole `.env` | The service holding the WhatsApp session never sees API keys |
+| 32 | Migrations run in a one-shot `migrate` Compose service (dbmate, as a non-root user, read-only); core and gateway start only after it succeeds. No `schema.sql` dump is committed. | Services never start against an old schema, and neither language runs migrations itself (#25). The migration files are the schema's single source. |
+| 33 | First schema: `chats`, `contacts`, `messages`, keyed by WhatsApp JIDs stored as text. A message is unique by chat, sender and WhatsApp id, so live delivery and history sync can both upsert the same message without duplicates. Media columns come in phase 1.4. | Matches how WhatsApp identifies messages; tables grow when a phase needs them |
+| 34 | Schema tests are plain SQL in `db/tests/`, run against the real Postgres in CI (`make test-db`) along with a no-op rerun and a rollback | Constraints are part of the contract between gateway and core, so they get tested like code |
 
 ## Open questions
 
