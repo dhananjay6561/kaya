@@ -1,0 +1,46 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://kaya.invalid/contracts/v1/send-request.schema.json",
+  "title": "SendRequest",
+  "description": "A message core asks the gateway to send. Core only creates one after DJ confirmed it (or for its own chat with DJ). The gateway sends each id at most once.",
+  "type": "object",
+  "properties": {
+    "id": {
+      "description": "Unique per request; the key for at-most-once sending",
+      "$ref": "defs.schema.json#/$defs/uuid"
+    },
+    "version": { "const": 1 },
+    "created_at": { "$ref": "defs.schema.json#/$defs/timestamp" },
+    "to": {
+      "description": "Chat to send to",
+      "$ref": "defs.schema.json#/$defs/jid"
+    },
+    "content": { "$ref": "#/$defs/textContent" },
+    "reply_to": { "$ref": "#/$defs/replyTo" }
+  },
+  "required": ["id", "version", "created_at", "to", "content"],
+  "additionalProperties": false,
+  "$defs": {
+    "textContent": {
+      "title": "TextContent",
+      "type": "object",
+      "properties": {
+        "type": { "const": "text" },
+        "text": { "type": "string", "minLength": 1, "maxLength": 65536, "pattern": "\\S" }
+      },
+      "required": ["type", "text"],
+      "additionalProperties": false
+    },
+    "replyTo": {
+      "title": "ReplyTo",
+      "description": "The message this one quotes",
+      "type": "object",
+      "properties": {
+        "wa_id": { "$ref": "defs.schema.json#/$defs/waId" },
+        "sender_jid": { "$ref": "defs.schema.json#/$defs/jid" }
+      },
+      "required": ["wa_id", "sender_jid"],
+      "additionalProperties": false
+    }
+  }
+}
