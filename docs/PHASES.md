@@ -10,7 +10,7 @@ Status key: ⬜ not started · 🟨 in progress · ✅ done
 
 | # | Phase | Done when | Status |
 |---|---|---|---|
-| 0.1 | Repo skeleton: Node/TS project, folder layout, lint and format, `npm run dev` | `npm run dev` starts and exits cleanly | ⬜ |
+| 0.1 | Repo skeleton: Node/TS project, folder layout, lint and format, `npm run dev` | `npm run dev` starts and exits cleanly | ✅ |
 | 0.2 | Config: `.env.example` with every setting, typed loader that fails fast on missing values | Missing a required value gives a clear error at startup | ⬜ |
 | 0.3 | Compose base: `compose.yml` + `compose.mac.yml`, Postgres with pgvector, `DATA_DIR` volumes, health checks | `docker compose up` brings the db up healthy | ⬜ |
 | 0.4 | Migrations runner + first schema (chats, contacts, messages) that runs on startup | Fresh db gets the schema automatically; rerun is a no-op | ⬜ |
