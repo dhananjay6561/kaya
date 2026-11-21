@@ -24,13 +24,13 @@ The build order, split into small phases, is in `PHASES.md`. This table is the h
 
 | Area | Feature | Needs |
 |---|---|---|
-| 1 | Link WhatsApp by QR or pairing code, store all chats, answer questions about them | Baileys, Postgres + pgvector, Ollama (local model + embeddings), Claude API |
+| 1 | Link WhatsApp by QR or pairing code, store all chats, answer questions about them | Go gateway (whatsmeow), Postgres + pgvector, Groq |
 | 2 | Web search, page reading, daily digests | SearXNG, Claude web search/fetch |
 | 3 | PPT and PDF from a topic or chat → Drive → link back | python-pptx, LibreOffice, Google Drive API |
 | 4 | Gmail, Calendar, Drive actions | Google Cloud project with an OAuth client |
 | 5 | Act on logged-in sites ("auto sign-in") | Playwright with a saved browser profile, noVNC for manual login/OTP |
 | 6 | Ordering | Phase 5 browser + confirm-before-pay |
-| 7 | Scheduled jobs | Scheduler inside the agent |
+| 7 | Scheduled jobs | Scheduler inside core |
 | 8 | Phone calls | Telephony number (Exotel/Plivo/Twilio), Pipecat, streaming STT, Claude, ElevenLabs, Cloudflare Tunnel |
 
 Voice-note transcription (faster-whisper) is its own stage in `PHASES.md`.
@@ -78,7 +78,7 @@ once a local model is added back.
 
 ## Risks accepted up front
 
-- **WhatsApp ban:** Baileys is unofficial, so there is a small ban risk. Reading is low risk; bulk
+- **WhatsApp ban:** linked-device libraries (whatsmeow) are unofficial, so there is a small ban risk. Reading is low risk; bulk
   sending is what gets numbers banned.
 - **Other people's messages:** they get stored, and the masked, relevant slices can reach Claude.
 - **Logged-in sessions:** anyone who gets into the Victus gets into DJ's accounts. That's why the disk
