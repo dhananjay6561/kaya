@@ -1,1 +1,1 @@
-export { checkHealth, type HealthServer, startHealthServer } from "./server.js";
+export { type Checker, checkHealth, createHealthRoute, type HealthOptions } from "./health.js";
