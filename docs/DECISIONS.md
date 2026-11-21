@@ -59,11 +59,13 @@ Newest at the bottom. When a decision changes, mark the old one superseded inste
 | 40 | `LLM_PROVIDER` is `groq` or `stub` (default groq, unchanged). `GROQ_API_KEY` is required only for groq. Until phase 3.1 the groq provider exists but its calls reject with `ProviderNotReadyError`, so the default config keeps working. | Keeps decision #17 as the default while letting development and tests run with no key |
 | 41 | `CHAT_CHANNEL` and `TELEPHONY_PROVIDER` start with `stub` only; the gateway channel arrives in 1.6 and a phone provider in stage 13 | No placeholder for a provider whose transport isn't decided yet (1.0, 13.1) |
 | 42 | The chat channel is only the DJ ↔ Kaya conversation. Reading other chats goes through the database the gateway fills. | Keeps safety rule 3 (Kaya talks in one place) in the shape of the interface |
+| 43 | Gateway ↔ core transport: one outbox table per direction in the shared Postgres, with the payload as `jsonb` written in the same transaction as the data it describes, `NOTIFY` as a wake-up, and the reader claiming rows with `FOR UPDATE SKIP LOCKED` and draining what is pending on start. Answers the phase 1.0 open question. | Survives either side restarting without losing events, needs no new service (NATS would add a container and its own persistence), and webhooks would still need a durable retry queue on the sending side. Both services already depend on Postgres. |
+| 44 | Contracts are JSON Schema 2020-12 under `contracts/schemas/v1/`, with every payload carrying `"version": 1` and a UUID `id`. Compatible changes stay in v1; breaking ones get a new version folder. | One language-neutral source (#27); versions make breaking changes explicit; ids make handling idempotent |
+| 45 | Events are thin: `message.stored` points at the database row and carries metadata, never the message body | Chat text lives in one place (the database), so the queue and logs never hold private content |
+| 46 | Go types are hand-written and every valid sample must round-trip through them unchanged; TypeScript types are generated from the schemas (`make contracts`), and a test fails if they are stale. ajv (with ajv-formats) and santhosh-tekuri/jsonschema validate at runtime. | Generated Go from JSON Schema is awkward to use; the round-trip test catches drift instead. TypeScript generation is mature, and the staleness test keeps it honest. |
+| 47 | `contracts/` is both a Go module (embedding the schemas and samples) and an npm workspace package (`@kaya/contracts`). Both images build from the repo root, with a `Dockerfile.dockerignore` per service. | Both services read the same files at build and run time, with no copying step that could drift |
 
 ## Open questions
-
-- **Gateway → core transport (phase 1.0):** HTTP webhooks, Postgres LISTEN/NOTIFY, or a small queue
-  such as NATS. Must survive either side restarting without losing events.
 
 - **Embeddings:** Groq has no embedding model. Options: a small local embedding model (Ollama
   `nomic-embed-text`, or one run inside the Node process) or a hosted embeddings API. Needed by
