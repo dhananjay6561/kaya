@@ -23,7 +23,7 @@ Status key: ⬜ not started · 🟨 in progress · ✅ done
 
 | # | Phase | Done when | Status |
 |---|---|---|---|
-| 1.0 | Gateway ↔ core contract: event and send-request schemas in `contracts/`, types in Go and TypeScript, transport chosen | Both sides validate the same sample payloads | ⬜ |
+| 1.0 | Gateway ↔ core contract: event and send-request schemas in `contracts/`, types in Go and TypeScript, transport chosen | Both sides validate the same sample payloads | ✅ |
 | 1.1 | whatsmeow connection: pair by QR (terminal or a small page) or pairing code; session in Postgres | Shows up under Linked devices and stays linked after a restart | ⬜ |
 | 1.2 | Live ingest: store every new message (DMs, groups, own sent messages), contacts and group names | Messages sent from the phone appear in the db within seconds | ⬜ |
 | 1.3 | History sync: store the history WhatsApp sends on first link, without duplicates | Older chats are in the db | ⬜ |
