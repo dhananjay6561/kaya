@@ -20,3 +20,7 @@ npm run typecheck
 npm run lint       # biome lint + format check
 npm run format     # fix what biome can
 ```
+
+## License
+
+[MIT](LICENSE)
