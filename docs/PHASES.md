@@ -11,21 +11,25 @@ Status key: ⬜ not started · 🟨 in progress · ✅ done
 | # | Phase | Done when | Status |
 |---|---|---|---|
 | 0.1 | Repo skeleton: Node/TS project, folder layout, lint and format, `npm run dev` | `npm run dev` starts and exits cleanly | ✅ |
-| 0.2 | Config: `.env.example` with every setting, typed loader that fails fast on missing values | Missing a required value gives a clear error at startup | ⬜ |
-| 0.3 | Compose base: `compose.yml` + `compose.mac.yml`, Postgres with pgvector, `DATA_DIR` volumes, health checks | `docker compose up` brings the db up healthy | ⬜ |
-| 0.4 | Migrations runner + first schema (chats, contacts, messages) that runs on startup | Fresh db gets the schema automatically; rerun is a no-op | ⬜ |
-| 0.5 | Logging, error handling, small HTTP server with `/health` | `/health` reports db status | ⬜ |
-| 0.6 | Provider interfaces (LLM, chat channel, telephony) with stub implementations chosen from config | Swapping a provider is a config change | ⬜ |
+| 0.2 | Monorepo layout: TypeScript moves to `core/` (npm workspace), shared tsconfig base, root Makefile, CI per service | `make lint test build` passes from the root | ⬜ |
+| 0.3 | Core config: `.env.example` with every setting, typed loader that fails fast on missing values, tests | Missing a required value gives a clear error at startup | ⬜ |
+| 0.4 | Gateway skeleton: Go module with `cmd/` and `internal/`, config from the same `.env`, golangci-lint, tests, CI job, Dependabot and CodeQL for Go | `make lint test build` covers Go too | ⬜ |
+| 0.5 | Compose base: `compose.yml` + `compose.mac.yml`, Postgres with pgvector, Dockerfiles for core and gateway (multi-stage, non-root), health checks | `docker compose up` brings the stack up healthy | ⬜ |
+| 0.6 | Migrations: dbmate with `db/migrations/`, first schema (chats, contacts, messages), run as a one-shot step before the services | Fresh db gets the schema automatically; rerun is a no-op | ⬜ |
+| 0.7 | Logging, errors and health in both services: structured JSON logs, `/health`, clean shutdown on SIGTERM | `/health` reports db status in both | ⬜ |
+| 0.8 | Provider interfaces in core (LLM, chat channel, telephony) with stubs chosen from config | Swapping a provider is a config change | ⬜ |
 
-## Stage 1 — Reading WhatsApp
+## Stage 1 — WhatsApp gateway (Go)
 
 | # | Phase | Done when | Status |
 |---|---|---|---|
-| 1.1 | Baileys connection: pair by QR in the terminal or by pairing code; session saved in `DATA_DIR/whatsapp-auth` | Shows up under Linked devices and stays linked after a restart | ⬜ |
-| 1.2 | Live ingest: store every new text message (DMs, groups, own sent messages), contacts and group names | Messages sent from the phone appear in the db within seconds | ⬜ |
-| 1.3 | History sync: store the initial history WhatsApp sends, without duplicates | Older chats are searchable in the db | ⬜ |
-| 1.4 | Media: store metadata for images, voice notes and documents; download only when needed | A voice note has a row and can be fetched on demand | ⬜ |
-| 1.5 | Connection health: reconnect with slow backoff, detect logout, log an alert | Killing the network and restoring it reconnects on its own | ⬜ |
+| 1.0 | Gateway ↔ core contract: event and send-request schemas in `contracts/`, types in Go and TypeScript, transport chosen | Both sides validate the same sample payloads | ⬜ |
+| 1.1 | whatsmeow connection: pair by QR (terminal or a small page) or pairing code; session in Postgres | Shows up under Linked devices and stays linked after a restart | ⬜ |
+| 1.2 | Live ingest: store every new message (DMs, groups, own sent messages), contacts and group names | Messages sent from the phone appear in the db within seconds | ⬜ |
+| 1.3 | History sync: store the history WhatsApp sends on first link, without duplicates | Older chats are in the db | ⬜ |
+| 1.4 | Media: store metadata for images, voice notes and documents; download on request | A voice note has a row and can be fetched on demand | ⬜ |
+| 1.5 | Connection health: reconnect with backoff, detect logout, publish connection-state events | Killing the network and restoring it reconnects on its own | ⬜ |
+| 1.6 | Delivery to core and the send API: core gets an event for every message and can send through the gateway | A message on the phone reaches core; core sends a reply that arrives | ⬜ |
 
 ## Stage 2 — Talking to Kaya (self-chat)
 
@@ -138,7 +142,7 @@ Status key: ⬜ not started · 🟨 in progress · ✅ done
 
 | # | Phase | Done when | Status |
 |---|---|---|---|
-| 14.1 | Second Baileys session on the spare number; command channel switched by config | DJ chats with "Kaya" as a contact | ⬜ |
+| 14.1 | Second gateway device on the spare number; command channel switched by config | DJ chats with "Kaya" as a contact | ⬜ |
 | 14.2 | Kaya messages first (briefs, reminders, alerts) | Morning brief arrives from Kaya | ⬜ |
 
 ## Stage 15 — Hardening
