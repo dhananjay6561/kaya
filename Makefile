@@ -1,7 +1,7 @@
 .DEFAULT_GOAL := help
 .PHONY: help install dev dev-core dev-gateway lint lint-core lint-gateway format format-core \
 	format-gateway typecheck test test-core test-gateway build build-core build-gateway check clean \
-	up down db logs ps
+	up down db logs ps migrate rollback migration test-db
 
 GOLANGCI_LINT_VERSION := v2.15.0
 GOLANGCI_LINT := go run github.com/golangci/golangci-lint/v2/cmd/golangci-lint@$(GOLANGCI_LINT_VERSION)
@@ -70,11 +70,26 @@ up: ## build and start the whole stack in Docker, wait until every service is he
 down: ## stop the stack (data stays in DATA_DIR)
 	$(COMPOSE) down
 
-db: ## start only Postgres, for running services from source
+db: ## start only Postgres and apply migrations, for running services from source
 	$(COMPOSE) up --detach --wait db
+	$(COMPOSE) run --rm migrate
 
 logs: ## follow logs from every service
 	$(COMPOSE) logs --follow
 
 ps: ## show the status of every service
 	$(COMPOSE) ps
+
+migrate: ## apply pending migrations
+	$(COMPOSE) run --rm migrate
+
+rollback: ## roll back the latest migration
+	$(COMPOSE) run --rm migrate --wait rollback
+
+migration: ## create an empty migration: make migration name=add_tasks
+	@test -n "$(name)" || { echo "usage: make migration name=add_tasks"; exit 1; }
+	@f=db/migrations/$$(date -u +%Y%m%d%H%M%S)_$(name).sql; \
+		printf -- '-- migrate:up\n\n-- migrate:down\n' > $$f && echo "created $$f"
+
+test-db: ## run the schema tests against the running db
+	$(COMPOSE) exec -T db sh -c 'psql -q -U "$$POSTGRES_USER" -d "$$POSTGRES_DB"' < db/tests/schema.sql
