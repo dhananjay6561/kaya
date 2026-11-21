@@ -1,0 +1,62 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://kaya.invalid/contracts/v1/defs.schema.json",
+  "title": "Shared definitions",
+  "$defs": {
+    "uuid": {
+      "type": "string",
+      "format": "uuid"
+    },
+    "timestamp": {
+      "title": "Timestamp",
+      "description": "RFC 3339 time in UTC",
+      "type": "string",
+      "format": "date-time",
+      "pattern": "Z$"
+    },
+    "jid": {
+      "description": "WhatsApp JID without a device part, e.g. 919812345678@s.whatsapp.net, 120363000000000000@g.us or 100000000000001@lid",
+      "type": "string",
+      "pattern": "^[0-9A-Za-z._-]+@(s\\.whatsapp\\.net|g\\.us|lid|broadcast|newsletter)$",
+      "maxLength": 128
+    },
+    "waId": {
+      "description": "WhatsApp message id",
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 128
+    },
+    "messageKind": {
+      "type": "string",
+      "enum": [
+        "text",
+        "image",
+        "video",
+        "audio",
+        "voice",
+        "document",
+        "sticker",
+        "location",
+        "contact",
+        "poll",
+        "other"
+      ]
+    },
+    "error": {
+      "title": "ErrorDetail",
+      "type": "object",
+      "properties": {
+        "code": {
+          "type": "string",
+          "pattern": "^[a-z][a-z0-9_]*$"
+        },
+        "message": {
+          "type": "string",
+          "maxLength": 1000
+        }
+      },
+      "required": ["code", "message"],
+      "additionalProperties": false
+    }
+  }
+}
