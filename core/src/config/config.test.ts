@@ -33,7 +33,7 @@ describe("loadConfig", () => {
       {
         ...valid,
         LOG_LEVEL: "debug",
-        PORT: "8080",
+        CORE_PORT: "8080",
         DATA_DIR: "/srv/kaya",
         GROQ_MODEL_HEAVY: "heavy",
         GROQ_MODEL_ROUTINE: "routine",
@@ -66,24 +66,24 @@ describe("loadConfig", () => {
   it("rejects invalid values with a clear reason", () => {
     const problems = problemsFor({
       ...valid,
-      PORT: "70000",
+      CORE_PORT: "70000",
       DATABASE_URL: "http://localhost/kaya",
       LOG_LEVEL: "loud",
     });
     assert.equal(problems.length, 3);
-    assert.ok(problems.includes("PORT: must be between 1 and 65535"));
+    assert.ok(problems.includes("CORE_PORT: must be between 1 and 65535"));
     assert.ok(problems.includes("DATABASE_URL: must be a postgres:// URL"));
     assert.ok(problems.some((p) => p.startsWith("LOG_LEVEL: ")));
   });
 
   it("rejects a port that isn't a number", () => {
-    assert.deepEqual(problemsFor({ ...valid, PORT: "abc" }), ["PORT: must be a number"]);
+    assert.deepEqual(problemsFor({ ...valid, CORE_PORT: "abc" }), ["CORE_PORT: must be a number"]);
   });
 
   it("never puts secret values in the error", () => {
     const secret = "gsk_super_secret_value";
     assert.throws(
-      () => loadConfig({ ...valid, GROQ_API_KEY: secret, PORT: "x" }),
+      () => loadConfig({ ...valid, GROQ_API_KEY: secret, CORE_PORT: "x" }),
       (error: Error) => error instanceof ConfigError && !error.message.includes(secret),
     );
   });

@@ -11,7 +11,7 @@ const schema = z.object({
     z.enum(["trace", "debug", "info", "warn", "error", "fatal"]).default("info"),
   ),
   DATA_DIR: z.preprocess(optional, z.string().default("./data")),
-  PORT: z.preprocess(
+  CORE_PORT: z.preprocess(
     optional,
     z.coerce
       .number({ error: "must be a number" })
@@ -67,7 +67,7 @@ export function loadConfig(
   return Object.freeze({
     logLevel: e.LOG_LEVEL,
     dataDir: resolve(baseDir, e.DATA_DIR),
-    port: e.PORT,
+    port: e.CORE_PORT,
     databaseUrl: e.DATABASE_URL,
     llm: Object.freeze({
       provider: e.LLM_PROVIDER,
