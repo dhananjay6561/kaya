@@ -55,6 +55,10 @@ Newest at the bottom. When a decision changes, mark the old one superseded inste
 | 36 | `/health` checks the db on every call (2 s limit) and answers 503 when it's down. Services don't exit when the db is unreachable; they start and report it. The response never includes error details. | Docker and later monitoring see a real readiness signal, a db restart doesn't crash-loop the services, and the endpoint can't leak internals |
 | 37 | Core logs errors through an allowlist serialiser (type, message, stack, code and a few more, plus the cause chain) | `pg` attaches its whole client to errors; logging that is noisy and a leak risk |
 | 38 | Database tests run when `TEST_DATABASE_URL` is set; CI starts a pgvector Postgres for the core and gateway jobs | Real-Postgres tests (ARCHITECTURE) without making every local test run need Docker |
+| 39 | Providers in core follow one pattern: interface, one file per implementation, an exhaustive factory switch on a config enum that lists only built implementations, and a `stub` for each kind | Swapping is a config change, and the type checker catches a provider that is configurable but not wired |
+| 40 | `LLM_PROVIDER` is `groq` or `stub` (default groq, unchanged). `GROQ_API_KEY` is required only for groq. Until phase 3.1 the groq provider exists but its calls reject with `ProviderNotReadyError`, so the default config keeps working. | Keeps decision #17 as the default while letting development and tests run with no key |
+| 41 | `CHAT_CHANNEL` and `TELEPHONY_PROVIDER` start with `stub` only; the gateway channel arrives in 1.6 and a phone provider in stage 13 | No placeholder for a provider whose transport isn't decided yet (1.0, 13.1) |
+| 42 | The chat channel is only the DJ ↔ Kaya conversation. Reading other chats goes through the database the gateway fills. | Keeps safety rule 3 (Kaya talks in one place) in the shape of the interface |
 
 ## Open questions
 
