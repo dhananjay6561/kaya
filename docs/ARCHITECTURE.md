@@ -45,14 +45,32 @@ Folders appear when a phase needs them; empty placeholders are not committed.
 
 ## How services talk
 
-- **gateway → core:** an event for each incoming or sent message, contact or group change, and
-  connection state change.
-- **core → gateway:** a send request (text, media, reply).
+- **gateway → core:** events (`contracts/schemas/v1/event.schema.json`):
+  - `connection.state`: connecting, pairing, connected, disconnected, logged out
+  - `message.stored`: a message row was written (new, edited or deleted). The event points at the
+    row; the body stays in the database.
+  - `history.synced`: one history-sync batch was stored
+  - `send.result`: what happened to a send request
+- **core → gateway:** send requests (`send-request.schema.json`): text to a JID, optionally quoting a
+  message. Media comes later as a new content type.
 - **core → docs / voice:** HTTP requests.
-- Every payload has a JSON Schema in `contracts/`. Both sides validate at the boundary and have
-  matching types. A change to a contract is its own PR and updates both sides.
-- The transport between gateway and core is chosen in phase 1.0 (see the open question in
-  `DECISIONS.md`).
+- **Transport: Postgres.** Each direction is a table in the shared database used as a durable
+  queue (an outbox). The writer inserts the payload as `jsonb`, in the same transaction as the
+  data it describes, and sends `NOTIFY` as a wake-up. The reader `LISTEN`s, claims rows with
+  `FOR UPDATE SKIP LOCKED`, marks them handled, and on start (or a missed notify) drains whatever
+  is pending. Nothing is lost when either side is down, and no extra service is needed. Payloads
+  carry a UUID `id`, so handling is idempotent. The tables arrive with the first phase that writes
+  to them (1.2 for events, 1.6 for send requests).
+- **Contracts:** every payload has a JSON Schema (draft 2020-12) in `contracts/schemas/v1/` and
+  carries `"version": 1`. Both sides validate at the boundary: the writer before inserting, the
+  reader before handling.
+  - Go: hand-written types in `gateway/internal/contracts`.
+  - TypeScript: types generated into `core/src/contracts/types.gen.ts` (`make contracts`).
+  - Shared samples in `contracts/samples/v1/<schema>/{valid,invalid}/` are checked by both test
+    suites. Every valid sample must also round-trip through the Go types unchanged, and core's
+    tests fail if the generated types are out of date.
+  - A contract change is its own PR and updates the schema, the samples and both sides. A
+    breaking change gets a new version folder.
 
 ## Data ownership
 
