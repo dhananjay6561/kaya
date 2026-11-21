@@ -1,7 +1,7 @@
 .DEFAULT_GOAL := help
 .PHONY: help install dev dev-core dev-gateway lint lint-core lint-gateway format format-core \
 	format-gateway typecheck test test-core test-gateway build build-core build-gateway check clean \
-	up down db logs ps migrate rollback migration test-db
+	up down db logs ps migrate rollback migration test-db contracts
 
 GOLANGCI_LINT_VERSION := v2.15.0
 GOLANGCI_LINT := go run github.com/golangci/golangci-lint/v2/cmd/golangci-lint@$(GOLANGCI_LINT_VERSION)
@@ -58,6 +58,10 @@ build-core: ## build core into core/dist
 build-gateway: ## build the gateway into gateway/bin
 	cd gateway && CGO_ENABLED=0 go build -trimpath -ldflags "-s -w -X main.version=$(VERSION)" \
 		-o bin/gateway ./cmd/gateway
+
+contracts: ## regenerate core's TypeScript types after changing contracts/schemas
+	npm run contracts:types -w @kaya/core
+	npm run format
 
 check: lint typecheck test build ## everything CI runs
 
