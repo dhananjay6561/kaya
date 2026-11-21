@@ -56,6 +56,11 @@ jobs:
           cp .env.example .env
           sed -i 's/^COMPOSE_FILE=.*/COMPOSE_FILE=compose.yml/; s/^GROQ_API_KEY=.*/GROQ_API_KEY=ci-placeholder/' .env
       - run: docker compose up --build --detach --wait --wait-timeout 180
+      - name: rerunning migrations is a no-op
+        run: docker compose run --rm migrate | tee migrate.log && ! grep -q Applying migrate.log
+      - name: migrations roll back and reapply
+        run: make rollback migrate
+      - run: make test-db
       - if: failure()
         run: docker compose logs
       - if: always()
