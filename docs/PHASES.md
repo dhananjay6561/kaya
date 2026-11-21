@@ -13,7 +13,7 @@ Status key: ⬜ not started · 🟨 in progress · ✅ done
 | 0.1 | Repo skeleton: Node/TS project, folder layout, lint and format, `npm run dev` | `npm run dev` starts and exits cleanly | ✅ |
 | 0.2 | Monorepo layout: TypeScript moves to `core/` (npm workspace), shared tsconfig base, root Makefile, CI per service | `make lint test build` passes from the root | ✅ |
 | 0.3 | Core config: `.env.example` with every setting, typed loader that fails fast on missing values, tests | Missing a required value gives a clear error at startup | ✅ |
-| 0.4 | Gateway skeleton: Go module with `cmd/` and `internal/`, config from the same `.env`, golangci-lint, tests, CI job, Dependabot and CodeQL for Go | `make lint test build` covers Go too | ⬜ |
+| 0.4 | Gateway skeleton: Go module with `cmd/` and `internal/`, config from the same `.env`, golangci-lint, tests, CI job, Dependabot and CodeQL for Go | `make lint test build` covers Go too | ✅ |
 | 0.5 | Compose base: `compose.yml` + `compose.mac.yml`, Postgres with pgvector, Dockerfiles for core and gateway (multi-stage, non-root), health checks | `docker compose up` brings the stack up healthy | ⬜ |
 | 0.6 | Migrations: dbmate with `db/migrations/`, first schema (chats, contacts, messages), run as a one-shot step before the services | Fresh db gets the schema automatically; rerun is a no-op | ⬜ |
 | 0.7 | Logging, errors and health in both services: structured JSON logs, `/health`, clean shutdown on SIGTERM | `/health` reports db status in both | ⬜ |
