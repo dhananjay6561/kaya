@@ -63,11 +63,11 @@ describe("gateway event consumer", {
 
   async function run(
     handle: EventHandler,
-    options: { pollMs?: number; purgeEveryMs?: number; keepQueue?: boolean } = {},
+    options: { pollMs?: number; purgeEveryMs?: number; keepQueue?: boolean; db?: Db } = {},
   ) {
     if (!options.keepQueue) await reset();
     consumer = createEventConsumer({
-      db,
+      db: options.db ?? db,
       databaseUrl: testDb.url("kaya_core"),
       contracts,
       logger,
@@ -194,6 +194,110 @@ describe("gateway event consumer", {
     );
     await eventually("the purge", async () => (await states()).length === 2);
     assert.deepEqual(await states(), ["handled", "dead handler_failed"]);
+  });
+
+  it("takes events by their number, not by where they sit in the table", async () => {
+    await reset();
+    const first = connectionEvent("connecting");
+    await add(first);
+    await add(connectionEvent("connected"));
+    await add(connectionEvent("disconnected"));
+    await testDb.admin.query("UPDATE gateway_events SET created_at = now() WHERE id = $1", [
+      first.id,
+    ]);
+    const { rows } = await testDb.admin.query<{ state: string }>(
+      "SELECT payload -> 'data' ->> 'state' AS state FROM gateway_events",
+    );
+    assert.notEqual(rows[0]?.state, "connecting", "the test needs the first event stored last");
+
+    const noIndexes = new URL(testDb.url());
+    noIndexes.searchParams.set(
+      "options",
+      "-c role=kaya_core -c enable_indexscan=off -c enable_bitmapscan=off -c enable_indexonlyscan=off",
+    );
+    const tableOrder = createDb(noIndexes.href, logger);
+    try {
+      await run(record, { keepQueue: true, db: tableOrder });
+      await eventually("three handled events", async () => (await seen()).length === 3);
+      assert.deepEqual(await seen(), ["connecting", "connected", "disconnected"]);
+    } finally {
+      await consumer?.stop();
+      consumer = undefined;
+      await tableOrder.close();
+    }
+  });
+
+  it("survives losing its connection in the middle of an event, and handles it after all", async () => {
+    let killed = false;
+    await run(async (event, tx) => {
+      if (!killed) {
+        killed = true;
+        const { rows } = await tx.query<{ pid: number }>("SELECT pg_backend_pid() AS pid");
+        await testDb.admin.query("SELECT pg_terminate_backend($1)", [rows[0]?.pid]);
+        await tx.query("SELECT 1");
+      }
+      return record(event, tx);
+    });
+    await add(connectionEvent("connected"));
+    await add(connectionEvent("disconnected"));
+    await eventually("both events", async () => (await seen()).length === 2);
+    assert.deepEqual(await seen(), ["connected", "disconnected"]);
+    assert.deepEqual(await states(), ["handled", "handled"]);
+  });
+
+  const listeners = async () => {
+    const { rows } = await testDb.admin.query<{ pid: number }>(
+      "SELECT pid FROM pg_stat_activity WHERE application_name = 'kaya-core-listen' AND datname = current_database()",
+    );
+    return rows.map((row) => row.pid);
+  };
+
+  it("listens again after its listening connection is lost", async () => {
+    await run(record);
+    const [before] = await eventually("the listener", async () => {
+      const pids = await listeners();
+      return pids.length > 0 && pids;
+    });
+    await testDb.admin.query("SELECT pg_terminate_backend($1)", [before]);
+    await eventually("a new listener", async () => {
+      const pids = await listeners();
+      return pids.length > 0 && !pids.includes(before ?? 0);
+    });
+
+    await add(connectionEvent("connected"));
+    await eventually("the event, without the poll", async () => (await seen()).length === 1);
+  });
+
+  it("does not sleep through an event that arrives while it is finishing a round", async () => {
+    await run(record, { purgeEveryMs: 0 });
+    await eventually("the listener", async () => (await listeners()).length > 0);
+    const old = connectionEvent("connecting");
+    await add(old);
+    await eventually("the first event", async () => (await seen()).length === 1);
+    await testDb.admin.query(
+      "UPDATE gateway_events SET finished_at = now() - interval '8 days' WHERE id = $1",
+      [old.id],
+    );
+
+    const blocker = await testDb.admin.connect();
+    try {
+      await blocker.query("BEGIN");
+      await blocker.query("SELECT 1 FROM gateway_events WHERE id = $1 FOR UPDATE", [old.id]);
+      await testDb.admin.query("NOTIFY gateway_events");
+      await eventually("the round to be held up deleting the old event", async () => {
+        const { rows } = await testDb.admin.query(
+          "SELECT 1 FROM pg_stat_activity WHERE wait_event_type = 'Lock' AND query LIKE 'DELETE FROM gateway_events%'",
+        );
+        return rows.length > 0;
+      });
+      await add(connectionEvent("connected"));
+    } finally {
+      await blocker.query("ROLLBACK");
+      blocker.release();
+    }
+    await eventually("the event that arrived meanwhile", async () =>
+      (await seen()).includes("connected"),
+    );
   });
 
   it("reports through its health check whether it is running", async () => {

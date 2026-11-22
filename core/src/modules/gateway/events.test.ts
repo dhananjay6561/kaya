@@ -87,10 +87,17 @@ describe("gateway events", { skip: !testDatabaseUrl && "TEST_DATABASE_URL not se
     );
     events.onSendResult(randomUUID(), () => got.push("someone else's"));
 
-    await handle(
-      events,
-      event("send.result", { request_id: mine, status: "sent", wa_id: "3EB0AAAA" }),
-    );
+    const client = await core.connect();
+    try {
+      const followUp = await events.handle(
+        event("send.result", { request_id: mine, status: "sent", wa_id: "3EB0AAAA" }),
+        client,
+      );
+      assert.deepEqual(got, [], "nobody is told before the event is committed as handled");
+      followUp?.();
+    } finally {
+      client.release();
+    }
     assert.deepEqual(got, ["sent 3EB0AAAA"]);
 
     forget();
