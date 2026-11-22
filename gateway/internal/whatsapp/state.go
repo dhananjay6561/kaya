@@ -25,16 +25,28 @@ func (c *Conn) SetPublisher(p Publisher) { c.publisher = p }
 // set records a new state. A change is queued for core with the time it happened, so an event
 // written late, after the database was away, still says when the connection really changed.
 func (c *Conn) set(state, reason string) {
+	c.setIf(func(Status) bool { return true }, state, reason)
+}
+
+// setIf is set, but only when ok accepts the state as it is at that moment. The check and the
+// change happen under one lock, so a state another event set in between is never overwritten.
+func (c *Conn) setIf(ok func(Status) bool, state, reason string) bool {
 	c.mu.Lock()
 	defer c.mu.Unlock()
+	if !ok(c.status) {
+		return false
+	}
 	if c.announced && c.status.State == state && c.status.Reason == reason {
-		return
+		return true
 	}
 	now := time.Now().UTC()
+	if c.status.State == contracts.StateConnected {
+		c.longestHeld = max(c.longestHeld, now.Sub(c.status.Since))
+	}
 	c.status = Status{State: state, Reason: reason, Since: now}
 	c.announced = true
 	if c.publisher == nil {
-		return
+		return true
 	}
 	data := contracts.ConnectionState{State: state, Reason: reason}
 	if c.device != nil {
@@ -43,7 +55,7 @@ func (c *Conn) set(state, reason string) {
 	event, err := contracts.NewEvent(contracts.EventConnectionState, data)
 	if err != nil {
 		c.logger.Error("could not build a connection state event", logging.Err(err))
-		return
+		return true
 	}
 	event.OccurredAt = contracts.At(now)
 	if len(c.unpublished) == maxUnpublished {
@@ -54,6 +66,7 @@ func (c *Conn) set(state, reason string) {
 	case c.publishAsk <- struct{}{}:
 	default:
 	}
+	return true
 }
 
 // publishLoop writes queued state changes in order. While the database is away it keeps trying,
@@ -99,17 +112,15 @@ func (c *Conn) publishQueued(ctx context.Context) bool {
 		attempt, cancel := context.WithTimeout(ctx, c.publishTimeout)
 		err := c.publisher.Publish(attempt, next)
 		cancel()
-		if errors.Is(err, contracts.ErrInvalid) {
+		switch {
+		case errors.Is(err, contracts.ErrInvalid):
 			c.logger.Error("a connection state change does not fit the contract and was dropped", logging.Err(err))
-			err = nil
-		}
-		if err != nil {
+		case err != nil:
 			if !c.publishFailing.Swap(true) && ctx.Err() == nil {
 				c.logger.Warn("could not store a connection state change, trying again", logging.Err(err))
 			}
 			return false
-		}
-		if c.publishFailing.Swap(false) {
+		case c.publishFailing.Swap(false):
 			c.logger.Info("connection state changes are being stored again")
 		}
 		c.mu.Lock()

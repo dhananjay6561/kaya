@@ -87,6 +87,8 @@ type client interface {
 	AddEventHandlerWithSuccessStatus(handler whatsmeow.EventHandlerWithSuccessStatus) uint32
 	ConnectContext(ctx context.Context) error
 	Disconnect()
+	IsConnected() bool
+	IsLoggedIn() bool
 	GetJoinedGroups(ctx context.Context) ([]*types.GroupInfo, error)
 	DownloadHistorySync(ctx context.Context, notification *waE2E.HistorySyncNotification, synchronousStorage bool) (*waHistorySync.HistorySync, error)
 	ParseWebMessage(chatJID types.JID, webMsg *waWeb.WebMessageInfo) (*events.Message, error)
@@ -118,6 +120,8 @@ type Conn struct {
 	maxBackoff  time.Duration
 	stableAfter time.Duration
 	storeRetry  time.Duration
+	watchEvery  time.Duration
+	watchAfter  time.Duration
 
 	publisher       Publisher
 	publishAsk      chan struct{}
@@ -146,7 +150,7 @@ type Conn struct {
 	status        Status
 	announced     bool
 	unpublished   []contracts.Event
-	connectedAt   time.Time
+	longestHeld   time.Duration
 	current       client
 	device        *store.Device
 	historyWaits  map[int64]historyWait
@@ -174,6 +178,8 @@ func NewConn(sessions *Sessions, sink Sink, logger *slog.Logger) *Conn {
 		minBackoff:        time.Second,
 		maxBackoff:        time.Minute,
 		stableAfter:       time.Minute,
+		watchEvery:        30 * time.Second,
+		watchAfter:        2 * time.Minute,
 		storeRetry:        time.Minute,
 		publishAsk:        make(chan struct{}, 1),
 		publishRetry:      time.Second,
@@ -220,6 +226,7 @@ func (c *Conn) Run(ctx context.Context) error {
 			<-done
 		}()
 	}
+	go c.watch(ctx)
 	go c.groupSyncLoop(ctx)
 	go c.historyLoop(ctx)
 	go c.mediaLoop(ctx)
@@ -244,6 +251,7 @@ func (c *Conn) Run(ctx context.Context) error {
 				c.disconnect(cli)
 				return nil
 			}
+			c.generation.Add(1)
 			cli.Disconnect()
 			if end.permanent {
 				<-ctx.Done()
@@ -276,18 +284,49 @@ func (c *Conn) waitForEnd(ctx context.Context) (ending, bool) {
 	}
 }
 
-// wasStable reports whether the current connection stayed up long enough to count as working.
+// wasStable reports whether the connection that just ended had stayed connected, in one stretch,
+// long enough to count as working.
 func (c *Conn) wasStable() bool {
 	c.mu.RLock()
 	defer c.mu.RUnlock()
-	return !c.connectedAt.IsZero() && time.Since(c.connectedAt) >= c.stableAfter
+	return c.longestHeld >= c.stableAfter
 }
 
+// disconnect ends the connection for good. The generation moves on first, so an event that still
+// arrives from the old client cannot change the state the gateway stops in.
 func (c *Conn) disconnect(cli client) {
+	c.generation.Add(1)
 	if cli != nil {
 		cli.Disconnect()
 	}
 	c.set(contracts.StateDisconnected, ReasonShuttingDown)
+}
+
+// watch corrects a state that says disconnected while the client is in fact connected. whatsmeow
+// sends some events from their own goroutines, so one that says the connection dropped can, very
+// rarely, arrive after the one that says it is back; nothing else would ever correct that.
+func (c *Conn) watch(ctx context.Context) {
+	ticker := time.NewTicker(c.watchEvery)
+	defer ticker.Stop()
+	for {
+		select {
+		case <-ctx.Done():
+			return
+		case <-ticker.C:
+		}
+		c.mu.RLock()
+		cli, was := c.current, c.status
+		c.mu.RUnlock()
+		recovering := was.State == contracts.StateDisconnected && (was.Reason == ReasonReconnecting || was.Reason == ReasonNotAnswering)
+		if cli == nil || !recovering || time.Since(was.Since) < c.watchAfter || !cli.IsConnected() || !cli.IsLoggedIn() {
+			continue
+		}
+		if c.setIf(func(now Status) bool { return now == was }, contracts.StateConnected, "") {
+			c.logger.Warn("whatsapp was connected while reported as disconnected; corrected")
+			c.RequestHistory()
+			c.RequestMedia()
+		}
+	}
 }
 
 func (c *Conn) connect(ctx context.Context) (client, error) {
@@ -308,16 +347,14 @@ func (c *Conn) connect(ctx context.Context) (client, error) {
 	generation := c.generation.Add(1)
 	cli := c.newClient(device)
 	c.mu.Lock()
-	c.current, c.device, c.connectedAt = cli, device, time.Time{}
+	c.current, c.device, c.longestHeld = cli, device, 0
 	c.mu.Unlock()
 	cli.AddEventHandlerWithSuccessStatus(func(evt any) bool {
 		return c.receive(ctx, generation, evt)
 	})
 	// A retry keeps saying why the last attempt failed until it connects, so a long outage is one
 	// state change and not two a minute.
-	if c.Status().State != contracts.StateDisconnected {
-		c.set(contracts.StateConnecting, "")
-	}
+	c.setIf(func(now Status) bool { return now.State != contracts.StateDisconnected }, contracts.StateConnecting, "")
 	if err := cli.ConnectContext(ctx); err != nil {
 		c.set(contracts.StateDisconnected, ReasonUnreachable)
 		return nil, fmt.Errorf("connect to whatsapp: %w", err)
@@ -748,24 +785,19 @@ func (c *Conn) end(generation uint64, e ending) {
 func (c *Conn) handle(generation uint64, evt any) {
 	switch e := evt.(type) {
 	case *events.Connected:
-		c.mu.Lock()
-		if c.connectedAt.IsZero() {
-			c.connectedAt = time.Now()
-		}
-		c.mu.Unlock()
 		c.set(contracts.StateConnected, "")
 		c.logger.Info("whatsapp connected")
 	case *events.Disconnected:
 		c.set(contracts.StateDisconnected, ReasonReconnecting)
 		c.logger.Warn("whatsapp disconnected, reconnecting")
 	case *events.KeepAliveTimeout:
-		if c.Status().State == contracts.StateConnected {
-			c.set(contracts.StateDisconnected, ReasonNotAnswering)
+		connected := func(now Status) bool { return now.State == contracts.StateConnected }
+		if c.setIf(connected, contracts.StateDisconnected, ReasonNotAnswering) {
 			c.logger.Warn("whatsapp stopped answering", "missed_pings", e.ErrorCount)
 		}
 	case *events.KeepAliveRestored:
-		if c.Status().Reason == ReasonNotAnswering {
-			c.set(contracts.StateConnected, "")
+		silent := func(now Status) bool { return now.Reason == ReasonNotAnswering }
+		if c.setIf(silent, contracts.StateConnected, "") {
 			c.logger.Info("whatsapp is answering again")
 			c.RequestHistory()
 			c.RequestMedia()
