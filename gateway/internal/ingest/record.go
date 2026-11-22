@@ -283,6 +283,11 @@ func address(jid, alt types.JID, own Own) Address {
 	return a
 }
 
+// AddressOf merges a JID and its alternative spelling (either may be empty) into one Address.
+func AddressOf(jid, alt types.JID) Address {
+	return address(jid, alt, Address{})
+}
+
 func parseAddress(raw string) Address {
 	if raw == "" {
 		return Address{}

@@ -77,6 +77,50 @@ func (i *Ingester) Handle(ctx context.Context, own Own, evt any) bool {
 	}
 }
 
+const syncBatch = 200
+
+// SyncGroups stores the names of every group in groups.
+func (i *Ingester) SyncGroups(ctx context.Context, groups []*types.GroupInfo) error {
+	for start := 0; start < len(groups); start += syncBatch {
+		batch := groups[start:min(start+syncBatch, len(groups))]
+		err := i.db.InTx(ctx, func(tx pgx.Tx) error {
+			for _, g := range batch {
+				if g == nil || g.JID.Server != types.GroupServer {
+					continue
+				}
+				ref := ChatRef{Kind: ChatGroup, JID: g.JID.ToNonAD().String()}
+				if err := i.store.SetChatName(ctx, tx, ref, g.Name, g.NameSetAt); err != nil {
+					return err
+				}
+			}
+			return nil
+		})
+		if err != nil {
+			return scrub(err)
+		}
+	}
+	return nil
+}
+
+// SyncContacts stores the names of every contact in contacts.
+func (i *Ingester) SyncContacts(ctx context.Context, contacts []ContactNames) error {
+	for start := 0; start < len(contacts); start += syncBatch {
+		batch := contacts[start:min(start+syncBatch, len(contacts))]
+		err := i.db.InTx(ctx, func(tx pgx.Tx) error {
+			for _, names := range batch {
+				if err := i.store.SetContactNames(ctx, tx, names); err != nil {
+					return err
+				}
+			}
+			return nil
+		})
+		if err != nil {
+			return scrub(err)
+		}
+	}
+	return nil
+}
+
 func mergeAddress(base Address, others ...Address) Address {
 	for _, o := range others {
 		if base.LID == "" {
