@@ -24,6 +24,7 @@ import (
 	"github.com/dhananjay6561/kaya/gateway/internal/ingest"
 	"github.com/dhananjay6561/kaya/gateway/internal/logging"
 	"github.com/dhananjay6561/kaya/gateway/internal/media"
+	"github.com/dhananjay6561/kaya/gateway/internal/send"
 )
 
 // Reasons reported in Status. They are fixed strings, so /health never carries error details.
@@ -94,12 +95,19 @@ type client interface {
 	ParseWebMessage(chatJID types.JID, webMsg *waWeb.WebMessageInfo) (*events.Message, error)
 	SendProtocolMessageReceipt(ctx context.Context, id types.MessageID, msgType types.ReceiptType) error
 	media.Downloader
+	send.Client
 }
 
 // MediaWorker downloads the files that were asked for. Step handles one request and reports
 // whether to go straight on to the next.
 type MediaWorker interface {
 	Step(ctx context.Context, dl media.Downloader) bool
+}
+
+// SendWorker sends the messages core asked for. Step handles one request and reports whether to go
+// straight on to the next; cli is nil while WhatsApp is not connected.
+type SendWorker interface {
+	Step(ctx context.Context, cli send.Client, own ingest.Own) bool
 }
 
 // ending is what a connection that whatsmeow will not bring back asks Run to do next.
@@ -141,6 +149,9 @@ type Conn struct {
 	media             MediaWorker
 	mediaAsk          chan struct{}
 	mediaPoll         time.Duration
+	sender            SendWorker
+	sendAsk           chan struct{}
+	sendPoll          time.Duration
 	groupSyncAsk      chan struct{}
 	groupSyncDebounce time.Duration
 	groupSyncMinGap   time.Duration
@@ -192,6 +203,8 @@ func NewConn(sessions *Sessions, sink Sink, logger *slog.Logger) *Conn {
 		historyRetry:      time.Minute,
 		mediaAsk:          make(chan struct{}, 1),
 		mediaPoll:         time.Minute,
+		sendAsk:           make(chan struct{}, 1),
+		sendPoll:          time.Minute,
 		groupSyncAsk:      make(chan struct{}, 1),
 		groupSyncDebounce: groupSyncDebounce,
 		groupSyncMinGap:   groupSyncMinGap,
@@ -230,6 +243,7 @@ func (c *Conn) Run(ctx context.Context) error {
 	go c.groupSyncLoop(ctx)
 	go c.historyLoop(ctx)
 	go c.mediaLoop(ctx)
+	go c.sendLoop(ctx)
 	backoff := c.minBackoff
 	for {
 		cli, err := c.connect(ctx)
@@ -325,6 +339,7 @@ func (c *Conn) watch(ctx context.Context) {
 			c.logger.Warn("whatsapp was connected while reported as disconnected; corrected")
 			c.RequestHistory()
 			c.RequestMedia()
+			c.RequestSend()
 		}
 	}
 }
@@ -424,6 +439,7 @@ func (c *Conn) afterConnected(ctx context.Context) {
 	}
 	c.RequestHistory()
 	c.RequestMedia()
+	c.RequestSend()
 }
 
 // SetMedia gives the connection the worker that downloads requested files. Call it before Run.
@@ -453,6 +469,44 @@ func (c *Conn) mediaLoop(ctx context.Context) {
 			cli := c.current
 			c.mu.RUnlock()
 			if c.media == nil || cli == nil || c.Status().State != contracts.StateConnected || !c.media.Step(ctx, cli) {
+				break
+			}
+		}
+	}
+}
+
+// SetSender gives the connection the worker that sends what core asked for. Call it before Run.
+func (c *Conn) SetSender(w SendWorker) { c.sender = w }
+
+// RequestSend wakes the send worker, for when a request was just queued.
+func (c *Conn) RequestSend() {
+	select {
+	case c.sendAsk <- struct{}{}:
+	default:
+	}
+}
+
+// sendLoop sends queued messages one at a time. It also runs while disconnected, with no client,
+// so requests that expire in the meantime are still answered.
+func (c *Conn) sendLoop(ctx context.Context) {
+	ticker := time.NewTicker(c.sendPoll)
+	defer ticker.Stop()
+	for {
+		select {
+		case <-ctx.Done():
+			return
+		case <-c.sendAsk:
+		case <-ticker.C:
+		}
+		for ctx.Err() == nil && c.sender != nil {
+			c.mu.RLock()
+			cli, connected := c.current, c.status.State == contracts.StateConnected
+			c.mu.RUnlock()
+			var via send.Client
+			if cli != nil && connected {
+				via = cli
+			}
+			if !c.sender.Step(ctx, via, c.own()) {
 				break
 			}
 		}
@@ -801,6 +855,7 @@ func (c *Conn) handle(generation uint64, evt any) {
 			c.logger.Info("whatsapp is answering again")
 			c.RequestHistory()
 			c.RequestMedia()
+			c.RequestSend()
 		}
 	case *events.StreamError:
 		c.logger.Warn("whatsapp closed the connection with an error", "code", e.Code)
