@@ -234,5 +234,32 @@ BEGIN
 END
 $$;
 
+DO $$
+DECLARE
+  ok_id uuid := 'a3bb189e-8bf9-4888-9912-ace4e6543002';
+  n int;
+BEGIN
+  INSERT INTO gateway_events (id, type, payload)
+  VALUES (ok_id, 'connection.state', jsonb_build_object('id', ok_id, 'type', 'connection.state'));
+  PERFORM 1 FROM gateway_events WHERE id = ok_id AND state = 'pending' AND finished_at IS NULL;
+  ASSERT FOUND, 'a new event is pending';
+
+  UPDATE gateway_events SET state = 'handled', finished_at = now() WHERE id = ok_id;
+  PERFORM pg_temp.expect_error(format($q$UPDATE gateway_events SET state = 'dead', finished_at = now() WHERE id = %L$q$, ok_id), '23514');
+
+  PERFORM pg_temp.expect_error($q$INSERT INTO gateway_events (id, type, payload) VALUES
+    ('a3bb189e-8bf9-4888-9912-ace4e6543003', 'message.stored', '{"id": "a3bb189e-8bf9-4888-9912-ace4e6543004", "type": "message.stored"}')$q$, '23514');
+  PERFORM pg_temp.expect_error($q$INSERT INTO gateway_events (id, type, payload) VALUES
+    ('a3bb189e-8bf9-4888-9912-ace4e6543005', 'message.stored', '{"id": "a3bb189e-8bf9-4888-9912-ace4e6543005", "type": "history.synced"}')$q$, '23514');
+  PERFORM pg_temp.expect_error($q$INSERT INTO gateway_events (id, type, payload) VALUES
+    ('a3bb189e-8bf9-4888-9912-ace4e6543006', 'message.read', '{"id": "a3bb189e-8bf9-4888-9912-ace4e6543006", "type": "message.read"}')$q$, '23514');
+  PERFORM pg_temp.expect_error(format($q$INSERT INTO gateway_events (id, type, payload) VALUES (%L, 'connection.state', %L)$q$,
+    ok_id, jsonb_build_object('id', ok_id, 'type', 'connection.state')), '23505');
+
+  SELECT count(*) INTO n FROM gateway_events;
+  ASSERT n = 1, 'only the valid event was stored';
+END
+$$;
+
 ROLLBACK;
 \echo schema tests passed
