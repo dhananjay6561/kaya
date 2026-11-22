@@ -102,8 +102,10 @@ export function createGatewayChannel(deps: GatewayChannelDeps): ChatChannel {
         })
       : undefined;
 
-  async function deliver(message: IncomingMessage): Promise<void> {
-    const results = await Promise.allSettled([...handlers].map(async (handle) => handle(message)));
+  async function deliver(message: IncomingMessage, signal: AbortSignal): Promise<void> {
+    const results = await Promise.allSettled(
+      [...handlers].map(async (handle) => handle(message, { signal })),
+    );
     const failures = results.flatMap((r) => (r.status === "rejected" ? [r.reason] : []));
     if (failures.length === 1) throw failures[0];
     if (failures.length > 1) {
@@ -174,7 +176,7 @@ export function createGatewayChannel(deps: GatewayChannelDeps): ChatChannel {
         unsubscribe = deps.incoming.onMessage(async (message, tx) =>
           (await inbox.record(message, tx)) ? inbox.wake : undefined,
         );
-        inbox.start(deliver);
+        inbox.start(deliver, () => handlers.size > 0);
       }
     },
     async stop() {
@@ -232,6 +234,7 @@ export function createGatewayChannel(deps: GatewayChannelDeps): ChatChannel {
     },
     onMessage(handler: MessageHandler) {
       handlers.add(handler);
+      inbox?.wake();
       return () => handlers.delete(handler);
     },
   });
