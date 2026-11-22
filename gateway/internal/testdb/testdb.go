@@ -20,6 +20,8 @@ import (
 	"github.com/dhananjay6561/kaya/gateway/internal/store"
 )
 
+const migrationLock = 5011601
+
 // New returns a pool on a fresh, empty database that is dropped when the test ends.
 func New(t *testing.T) *store.DB {
 	t.Helper()
@@ -93,7 +95,15 @@ func openAs(t *testing.T, migrate bool, role string) *store.DB {
 	}
 	u.Path = "/" + name
 	if migrate {
+		// The migrations create the service roles, which every database on the server shares.
+		// Tests in other packages run at the same time, so only one may migrate at once.
+		if _, err := admin.Exec(ctx, "SELECT pg_advisory_lock($1)", migrationLock); err != nil {
+			t.Fatal(err)
+		}
 		applyMigrations(t, u.String())
+		if _, err := admin.Exec(ctx, "SELECT pg_advisory_unlock($1)", migrationLock); err != nil {
+			t.Fatal(err)
+		}
 	}
 	if role != "" {
 		q := u.Query()
