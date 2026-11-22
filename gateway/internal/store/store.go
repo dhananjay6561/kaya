@@ -3,12 +3,14 @@ package store
 
 import (
 	"context"
+	"database/sql"
 	"fmt"
 	"net/url"
 	"strings"
 	"time"
 
 	"github.com/jackc/pgx/v5/pgxpool"
+	"github.com/jackc/pgx/v5/stdlib"
 )
 
 // DB is a pool of Postgres connections.
@@ -69,6 +71,11 @@ func (db *DB) Check(ctx context.Context) error {
 		return fmt.Errorf("query db: %w", err)
 	}
 	return nil
+}
+
+// SQL returns a database/sql handle that borrows connections from the same pool, for libraries that need one.
+func (db *DB) SQL() *sql.DB {
+	return stdlib.OpenDBFromPool(db.pool)
 }
 
 // Close waits for queries in flight and closes every connection.
