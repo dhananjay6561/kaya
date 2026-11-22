@@ -4,6 +4,7 @@ import { createContracts } from "./contracts/index.js";
 import { createDb } from "./lib/db.js";
 import { startHttpServer } from "./lib/http-server.js";
 import { createLogger, type Logger } from "./lib/logger.js";
+import { createEventConsumer, createGatewayEvents } from "./modules/gateway/index.js";
 import { createHealthRoute } from "./modules/health/index.js";
 import { createProviders } from "./providers/index.js";
 
@@ -27,9 +28,19 @@ function exitOnCrash(logger: Logger): void {
 
 async function run(config: Config, logger: Logger): Promise<void> {
   const stopping = stopSignal();
-  createContracts();
+  const contracts = createContracts();
   const db = createDb(config.databaseUrl, logger);
-  const providers = createProviders(config);
+  const gatewayEvents = createGatewayEvents(logger);
+  const consumer = createEventConsumer({
+    db,
+    databaseUrl: config.databaseUrl,
+    contracts,
+    logger,
+    handle: gatewayEvents.handle,
+  });
+  const providers = createProviders(config, {
+    gateway: { pool: db.pool, contracts, results: gatewayEvents },
+  });
   try {
     try {
       await db.check(AbortSignal.timeout(5_000));
@@ -42,6 +53,7 @@ async function run(config: Config, logger: Logger): Promise<void> {
       }
     }
     await providers.channel.start();
+    consumer.start();
 
     const server = await startHttpServer({
       host: config.listenHost,
@@ -51,7 +63,7 @@ async function run(config: Config, logger: Logger): Promise<void> {
         "/health": createHealthRoute({
           service: "core",
           version,
-          checks: { db, channel: providers.channel },
+          checks: { db, channel: providers.channel, events: consumer },
         }),
       },
     });
@@ -72,6 +84,7 @@ async function run(config: Config, logger: Logger): Promise<void> {
       await server.close();
     }
   } finally {
+    await consumer.stop();
     await providers.channel.stop();
     await db.close();
   }
