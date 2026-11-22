@@ -32,7 +32,19 @@ func Migrated(t *testing.T) *store.DB {
 	return open(t, true)
 }
 
+// MigratedAs is Migrated, with every connection acting as role (for example kaya_gateway), so a
+// test runs with exactly the rights that service has.
+func MigratedAs(t *testing.T, role string) *store.DB {
+	t.Helper()
+	return openAs(t, true, role)
+}
+
 func open(t *testing.T, migrate bool) *store.DB {
+	t.Helper()
+	return openAs(t, migrate, "")
+}
+
+func openAs(t *testing.T, migrate bool, role string) *store.DB {
 	t.Helper()
 	raw := os.Getenv("TEST_DATABASE_URL")
 	if raw == "" {
@@ -62,6 +74,11 @@ func open(t *testing.T, migrate bool) *store.DB {
 	u.Path = "/" + name
 	if migrate {
 		applyMigrations(t, u.String())
+	}
+	if role != "" {
+		q := u.Query()
+		q.Set("role", role)
+		u.RawQuery = q.Encode()
 	}
 	db, err := store.Open(u.String())
 	if err != nil {

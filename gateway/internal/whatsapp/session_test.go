@@ -3,6 +3,7 @@ package whatsapp
 import (
 	"context"
 	"errors"
+	"strings"
 	"testing"
 
 	"go.mau.fi/whatsmeow/proto/waAdv"
@@ -75,4 +76,53 @@ func TestSessionsAgainstRealPostgres(t *testing.T) {
 	if _, err := reopened.Load(ctx); !errors.Is(err, ErrSeveralSessions) {
 		t.Fatalf("want ErrSeveralSessions, got %v", err)
 	}
+}
+
+func TestTheGatewayRoleKeepsSessionsInItsOwnSchema(t *testing.T) {
+	db := testdb.MigratedAs(t, "kaya_gateway")
+	ctx := context.Background()
+	sqlDB := db.SQL()
+	defer func() { _ = sqlDB.Close() }()
+
+	sessions := NewSessions(sqlDB, waLog.Noop)
+	if _, err := sessions.Load(ctx); err != nil {
+		t.Fatal(err)
+	}
+	savePaired(t, sessions, types.NewADJID("19995550100", 0, 7))
+
+	var inWhatsmeow, inPublic int
+	err := sqlDB.QueryRowContext(ctx, `SELECT
+		count(*) FILTER (WHERE schemaname = 'whatsmeow'),
+		count(*) FILTER (WHERE schemaname = 'public')
+		FROM pg_tables WHERE tablename LIKE 'whatsmeow\_%'`).Scan(&inWhatsmeow, &inPublic)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if inWhatsmeow == 0 || inPublic != 0 {
+		t.Fatalf("whatsmeow tables: %d in its schema, %d in public", inWhatsmeow, inPublic)
+	}
+}
+
+func TestCoreCannotReadTheSession(t *testing.T) {
+	gateway := testdb.MigratedAs(t, "kaya_gateway")
+	ctx := context.Background()
+	sqlDB := gateway.SQL()
+	defer func() { _ = sqlDB.Close() }()
+	if _, err := NewSessions(sqlDB, waLog.Noop).Load(ctx); err != nil {
+		t.Fatal(err)
+	}
+
+	conn, err := sqlDB.Conn(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer func() { _ = conn.Close() }()
+	if _, err := conn.ExecContext(ctx, "RESET ROLE; SET ROLE kaya_core"); err != nil {
+		t.Fatal(err)
+	}
+	_, err = conn.ExecContext(ctx, "SELECT count(*) FROM whatsmeow.whatsmeow_device")
+	if err == nil || !strings.Contains(err.Error(), "42501") {
+		t.Fatalf("want permission denied (42501), got %v", err)
+	}
+	_, _ = conn.ExecContext(ctx, "RESET ROLE; SET ROLE kaya_gateway")
 }
