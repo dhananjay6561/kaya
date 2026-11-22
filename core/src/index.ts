@@ -4,6 +4,7 @@ import { createContracts } from "./contracts/index.js";
 import { createDb } from "./lib/db.js";
 import { startHttpServer } from "./lib/http-server.js";
 import { createLogger, type Logger } from "./lib/logger.js";
+import { startCommands } from "./modules/commands/index.js";
 import { createEventConsumer, createGatewayEvents } from "./modules/gateway/index.js";
 import { createHealthRoute } from "./modules/health/index.js";
 import { createProviders } from "./providers/index.js";
@@ -39,8 +40,15 @@ async function run(config: Config, logger: Logger): Promise<void> {
     handle: gatewayEvents.handle,
   });
   const providers = createProviders(config, {
-    gateway: { pool: db.pool, contracts, results: gatewayEvents },
+    gateway: {
+      pool: db.pool,
+      contracts,
+      results: gatewayEvents,
+      incoming: gatewayEvents,
+      logger,
+    },
   });
+  startCommands({ channel: providers.channel, logger });
   try {
     try {
       await db.check(AbortSignal.timeout(5_000));
