@@ -39,15 +39,21 @@ type sent struct {
 }
 
 type fakeClient struct {
-	mu     sync.Mutex
-	errs   []error
-	sends  []sent
-	during func()
+	mu       sync.Mutex
+	errs     []error
+	sends    []sent
+	during   func()
+	beforeID func()
 }
 
+// GenerateMessageID is the last thing the worker does before it claims a request.
 func (f *fakeClient) GenerateMessageID() types.MessageID {
 	f.mu.Lock()
 	defer f.mu.Unlock()
+	if f.beforeID != nil {
+		f.beforeID()
+		f.beforeID = nil
+	}
 	return fmt.Sprintf("3EB0TEST%04d", len(f.sends)+1)
 }
 
@@ -85,8 +91,17 @@ func (f *fakeClient) texts() []string {
 
 type flakyDB struct {
 	DB
-	mu   sync.Mutex
-	down bool
+	mu        sync.Mutex
+	down      bool
+	lostReply bool
+}
+
+// loseNextReply makes the next transaction commit and then report an error, as when the
+// connection drops after the commit reached the server.
+func (f *flakyDB) loseNextReply() {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	f.lostReply = true
 }
 
 func (f *flakyDB) set(down bool) {
@@ -97,12 +112,16 @@ func (f *flakyDB) set(down bool) {
 
 func (f *flakyDB) InTx(ctx context.Context, fn func(pgx.Tx) error) error {
 	f.mu.Lock()
-	down := f.down
+	down, lost := f.down, f.lostReply
+	f.lostReply = false
 	f.mu.Unlock()
 	if down {
 		return errors.New("connection refused")
 	}
-	return f.DB.InTx(ctx, fn)
+	if err := f.DB.InTx(ctx, fn); err != nil || !lost {
+		return err
+	}
+	return errors.New("unexpected EOF")
 }
 
 type harness struct {
@@ -245,7 +264,7 @@ func TestARequestIsSentOnceStoredAndReported(t *testing.T) {
 			t.Fatalf("sent to %q", h.cli.sends[i].to)
 		}
 	}
-	want := []string{"send.result sent", "message.stored new", "send.result sent", "message.stored new"}
+	want := []string{"message.stored new", "send.result sent", "message.stored new", "send.result sent"}
 	if got := h.results(); !slices.Equal(got, want) {
 		t.Fatalf("events:\n got %q\nwant %q", got, want)
 	}
@@ -274,6 +293,7 @@ func TestOnlyDJsOwnChatMayBeWrittenTo(t *testing.T) {
 	}{
 		{h.queue("to a friend", to("918888888888@s.whatsapp.net")), CodeNotAuthorized},
 		{h.queue("to a group", to("120363000000000000@g.us")), CodeNotAuthorized},
+		{h.queue("to someone else's LID", to("100000000000099@lid")), CodeNotAuthorized},
 		{h.queue("confirmed, to a friend", to("918888888888@s.whatsapp.net"), confirmed()), CodeNotAuthorized},
 		{h.queue("confirmed, to self", confirmed()), CodeNotAuthorized},
 		{h.queue("no content", without("content")), CodeInvalid},
@@ -295,8 +315,9 @@ func TestOnlyDJsOwnChatMayBeWrittenTo(t *testing.T) {
 	}
 	want := []string{
 		"send.result failed not_authorized", "send.result failed not_authorized", "send.result failed not_authorized",
-		"send.result failed not_authorized", "send.result failed invalid_request", "send.result failed expired",
-		"send.result sent", "message.stored new",
+		"send.result failed not_authorized", "send.result failed not_authorized",
+		"send.result failed invalid_request", "send.result failed expired",
+		"message.stored new", "send.result sent",
 	}
 	if got := h.results(); !slices.Equal(got, want) {
 		t.Fatalf("events:\n got %q\nwant %q", got, want)
@@ -411,7 +432,7 @@ func TestAnOutcomeIsRecordedOnceTheDatabaseIsBack(t *testing.T) {
 	if len(h.cli.texts()) != 1 {
 		t.Fatalf("sent %d times", len(h.cli.texts()))
 	}
-	if got := h.results(); !slices.Equal(got, []string{"send.result sent", "message.stored new"}) {
+	if got := h.results(); !slices.Equal(got, []string{"message.stored new", "send.result sent"}) {
 		t.Fatalf("got %q", got)
 	}
 }
@@ -442,8 +463,11 @@ func TestAReplyQuotesTheStoredMessage(t *testing.T) {
 
 type refusingMessages struct{}
 
-func (refusingMessages) Apply(context.Context, pgx.Tx, ingest.Record) (ingest.Applied, error) {
-	return ingest.Applied{}, errors.New("violates check constraint")
+// Apply fails the way a refused row does: with an error from the database, which also leaves the
+// transaction it ran in unusable.
+func (refusingMessages) Apply(ctx context.Context, tx pgx.Tx, _ ingest.Record) (ingest.Applied, error) {
+	_, err := tx.Exec(ctx, "SELECT 1 / 0")
+	return ingest.Applied{}, err
 }
 
 func TestAMessageThatCannotBeStoredIsStillReportedSent(t *testing.T) {
@@ -471,5 +495,116 @@ func TestEveryFailureCodeHasAMessageThatFitsTheContract(t *testing.T) {
 		if _, err := v.EncodeEvent(event); err != nil || messages[code] == "" {
 			t.Fatalf("%s: %v", code, err)
 		}
+	}
+}
+
+func TestAMessageDeliveredAsTheGatewayStopsIsStillRecordedAsSent(t *testing.T) {
+	h := newHarness(t)
+	id := h.queue("hello")
+	ctx, cancel := context.WithCancel(context.Background())
+	h.cli.during = cancel
+	h.worker.Step(ctx, h.cli, own)
+
+	if state, _, _ := h.row(id); state != StateSent {
+		t.Fatalf("WhatsApp took the message, so the request is sent; got %s", state)
+	}
+	if got := h.results(); !slices.Equal(got, []string{"message.stored new", "send.result sent"}) {
+		t.Fatalf("got %q", got)
+	}
+}
+
+func TestAClaimThatMayHaveGoneThroughIsSettledWithoutSending(t *testing.T) {
+	h := newHarness(t)
+	id := h.queue("hello")
+	h.worker.Step(context.Background(), nil, own)
+	h.cli.beforeID = h.db.loseNextReply
+	if h.worker.Step(context.Background(), h.cli, own) {
+		t.Fatal("a failed write must end the round")
+	}
+	if state, _, _ := h.row(id); state != StateSending {
+		t.Fatalf("the test needs the claim to have committed, got %s", state)
+	}
+	if len(h.cli.texts()) != 0 {
+		t.Fatal("nothing may be sent when the claim reported an error")
+	}
+
+	h.drain(h.cli)
+	if state, _, code := h.row(id); state != StateFailed || code != CodeUnknown {
+		t.Fatalf("got %s %s", state, code)
+	}
+	if len(h.cli.texts()) != 0 {
+		t.Fatal("a request that says sending is never sent")
+	}
+}
+
+func TestEveryRequestLeftMidSendIsSettled(t *testing.T) {
+	h := newHarness(t)
+	first, second, untouched := h.queue("one"), h.queue("two"), h.queue("three")
+	for i, id := range []string{first, second} {
+		if claimed, err := h.worker.claim(context.Background(), id, fmt.Sprintf("3EB0LEFT%d", i)); err != nil || !claimed {
+			t.Fatal(claimed, err)
+		}
+	}
+	if steps := h.drain(nil); steps != 0 {
+		t.Fatalf("got %d steps", steps)
+	}
+	for _, id := range []string{first, second} {
+		if state, _, code := h.row(id); state != StateFailed || code != CodeUnknown {
+			t.Fatalf("got %s %s", state, code)
+		}
+	}
+	if state, _, _ := h.row(untouched); state != StatePending {
+		t.Fatalf("got %s", state)
+	}
+	if got := h.results(); !slices.Equal(got, []string{"send.result failed outcome_unknown", "send.result failed outcome_unknown"}) {
+		t.Fatalf("got %q", got)
+	}
+}
+
+func TestARequestIsClaimedAndFinishedOnlyFromTheStateItShouldBeIn(t *testing.T) {
+	h := newHarness(t)
+	ctx := context.Background()
+	id := h.queue("hello")
+	if claimed, err := h.worker.claim(ctx, id, "3EB0FIRST"); err != nil || !claimed {
+		t.Fatal(claimed, err)
+	}
+	if claimed, err := h.worker.claim(ctx, id, "3EB0SECOND"); err != nil || claimed {
+		t.Fatalf("a request that is already being sent must not be claimed again: %v %v", claimed, err)
+	}
+	if _, waID, _ := h.row(id); waID != "3EB0FIRST" {
+		t.Fatalf("got %q", waID)
+	}
+
+	err := h.db.InTx(ctx, func(tx pgx.Tx) error { return h.worker.fail(ctx, tx, id, StatePending, CodeExpired) })
+	if state, _, _ := h.row(id); err != nil || state != StateSending {
+		t.Fatalf("a request that is being sent cannot be refused as if it were still waiting: %s %v", state, err)
+	}
+	if got := h.results(); len(got) != 0 {
+		t.Fatalf("core must be told nothing about a change that did not happen, got %q", got)
+	}
+}
+
+func TestFinishedRequestsAreDeletedAfterAWhile(t *testing.T) {
+	h := newHarness(t)
+	done := h.queue("done")
+	h.drain(h.cli)
+	if state, _, _ := h.row(done); state != StateSent {
+		t.Fatal("a request that just finished is kept")
+	}
+	waiting := h.queue("waiting")
+
+	h.worker.keepFor, h.worker.nextPurge = 0, time.Time{}
+	h.drain(nil)
+	var left []string
+	err := h.admin.InTx(context.Background(), func(tx pgx.Tx) error {
+		rows, err := tx.Query(context.Background(), "SELECT id::text FROM send_requests")
+		if err != nil {
+			return err
+		}
+		left, err = pgx.CollectRows(rows, pgx.RowTo[string])
+		return err
+	})
+	if err != nil || !slices.Equal(left, []string{waiting}) {
+		t.Fatalf("want only the unfinished request left, got %q %v", left, err)
 	}
 }
