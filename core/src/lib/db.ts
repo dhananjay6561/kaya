@@ -69,16 +69,29 @@ export function createDb(url: string, logger: Logger): Db {
   });
 }
 
-const connectionErrorClasses = /^(08|53|57)/;
-const connectionErrorMessages =
-  /connection terminated|connection error|timeout exceeded when trying to connect|pool .*ended/i;
+const serverUnavailable = /^(08|53)|^57P0[123]$|^40001$|^40P01$/;
+const socketErrors = new Set([
+  "ECONNRESET",
+  "ECONNREFUSED",
+  "ECONNABORTED",
+  "EPIPE",
+  "ETIMEDOUT",
+  "EHOSTUNREACH",
+  "ENETUNREACH",
+  "ENOTFOUND",
+  "EAI_AGAIN",
+]);
+const clientGone = [
+  /^Connection terminated/,
+  /^Client has encountered a connection error/,
+  /^Client was closed and is not queryable$/,
+  /^timeout exceeded when trying to connect$/,
+  /^Cannot use a pool after calling end on the pool$/,
+];
 
 export function isConnectionError(err: unknown): boolean {
   if (!(err instanceof Error)) return false;
   const code = (err as { code?: unknown }).code;
-  if (typeof code === "string") {
-    if (connectionErrorClasses.test(code) || code === "40001" || code === "40P01") return true;
-    if (/^E[A-Z]+$/.test(code)) return true;
-  }
-  return connectionErrorMessages.test(err.message);
+  if (typeof code === "string") return serverUnavailable.test(code) || socketErrors.has(code);
+  return clientGone.some((pattern) => pattern.test(err.message));
 }

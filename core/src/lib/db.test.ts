@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import { type AddressInfo, createServer, type Socket } from "node:net";
 import { describe, it } from "node:test";
-import { createDb } from "./db.js";
+import { createDb, isConnectionError } from "./db.js";
 import { createLogger } from "./logger.js";
 
 const url = process.env.TEST_DATABASE_URL;
@@ -64,6 +64,57 @@ describe("createDb", () => {
     } finally {
       for (const socket of sockets) socket.destroy();
       await new Promise((resolve) => silent.close(resolve));
+    }
+  });
+});
+
+describe("isConnectionError", () => {
+  const coded = (code: string, message = "boom") => Object.assign(new Error(message), { code });
+
+  it("recognises a database that is away", () => {
+    for (const err of [
+      coded("08006"),
+      coded("08P01"),
+      coded("57P01"),
+      coded("57P03"),
+      coded("53300"),
+      coded("40001"),
+      coded("40P01"),
+      coded("ECONNRESET"),
+      coded("ECONNREFUSED"),
+      coded("EPIPE"),
+      coded("ETIMEDOUT"),
+      coded("ENOTFOUND"),
+      new Error("Connection terminated unexpectedly"),
+      new Error("Connection terminated"),
+      new Error("Client has encountered a connection error and is not queryable"),
+      new Error("timeout exceeded when trying to connect"),
+    ]) {
+      assert.equal(
+        isConnectionError(err),
+        true,
+        `${(err as { code?: string }).code ?? err.message}`,
+      );
+    }
+  });
+
+  it("does not mistake a failure of the work itself for an outage", () => {
+    for (const err of [
+      coded("23505"),
+      coded("23514"),
+      coded("22P02"),
+      coded("42501"),
+      coded("57014"),
+      coded("ENOENT"),
+      coded("EACCES"),
+      coded("EINVAL"),
+      new Error("Connection error."),
+      new Error("the upstream connection error was logged"),
+      new TypeError("cannot read properties of undefined"),
+      "Connection terminated",
+      undefined,
+    ]) {
+      assert.equal(isConnectionError(err), false, String(err));
     }
   });
 });
