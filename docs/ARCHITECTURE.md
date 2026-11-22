@@ -162,8 +162,12 @@ Folders appear when a phase needs them; empty placeholders are not committed.
 - **Live ingest.** The gateway acknowledges a WhatsApp message only after its transaction commits:
   contact, chat, message and the `message.stored` event together. While Postgres is away it
   retries for 30 s, then drops the connection without acknowledging and reconnects once the
-  database answers, and WhatsApp delivers the message again. A message the database refuses (a
-  constraint, a bug in the mapper) is copied to `ingest_dead`, which only the gateway can read, and
+  database answers, and WhatsApp delivers the message again. The gateway also checks the database
+  every few seconds and drops the connection itself after two failed checks: whatsmeow needs the
+  database to decrypt, so during an outage a message fails inside whatsmeow before the gateway is
+  asked to store it, stays unacknowledged, and is sent again only on a new connection. A message
+  the database refuses (a constraint, a bug in the mapper) is copied to `ingest_dead`, which only
+  the gateway can read, and
   then acknowledged, so one bad message never blocks the rest and can be replayed after a fix.
   Storing the same message twice changes nothing and emits nothing.
 - **History sync.** Each history chunk WhatsApp announces becomes a row in `history_jobs`, stored
