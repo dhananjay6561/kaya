@@ -10,6 +10,7 @@ import (
 	"testing"
 	"time"
 
+	"go.mau.fi/whatsmeow"
 	"go.mau.fi/whatsmeow/store"
 	"go.mau.fi/whatsmeow/types"
 	"go.mau.fi/whatsmeow/types/events"
@@ -22,12 +23,22 @@ type fakePublisher struct {
 	err      error
 	attempts []string
 	stored   []contracts.Event
+	entered  chan struct{}
+	release  chan struct{}
 }
 
-func (f *fakePublisher) Publish(_ context.Context, e contracts.Event) error {
+// Publish fails on a finished context, as a database write would.
+func (f *fakePublisher) Publish(ctx context.Context, e contracts.Event) error {
+	if f.entered != nil {
+		f.entered <- struct{}{}
+		<-f.release
+	}
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	f.attempts = append(f.attempts, e.ID)
+	if err := ctx.Err(); err != nil {
+		return err
+	}
 	if f.err != nil {
 		return f.err
 	}
@@ -274,38 +285,166 @@ func TestASilentConnectionIsReportedUntilItAnswersAgain(t *testing.T) {
 	stop(t, cancel, done)
 }
 
+func TestAChangeDroppedFromTheQueueWhileBeingWrittenTakesNothingElseWithIt(t *testing.T) {
+	c, pub := publishingConn(linked(), &clients{})
+	pub.entered, pub.release = make(chan struct{}), make(chan struct{})
+	c.set(contracts.StateDisconnected, "being written")
+
+	drained := make(chan bool)
+	go func() { drained <- c.publishQueued(context.Background()) }()
+	<-pub.entered
+	for i := range maxUnpublished {
+		c.set(contracts.StateDisconnected, fmt.Sprintf("reason %d", i))
+	}
+	go func() {
+		for range pub.entered {
+			pub.release <- struct{}{}
+		}
+	}()
+	pub.release <- struct{}{}
+	if !<-drained {
+		t.Fatal("the queue must drain")
+	}
+	close(pub.entered)
+
+	got := pub.states(t)
+	if len(got) != maxUnpublished+1 || got[1] != "disconnected: reason 0" {
+		t.Fatalf("want the change being written and all %d behind it, got %d starting %q", maxUnpublished, len(got), got[:min(len(got), 2)])
+	}
+}
+
+func TestStoringIsRetriedLessOftenTheLongerItFails(t *testing.T) {
+	c, pub := publishingConn(linked(), &clients{})
+	c.publishRetry, c.publishRetryMax = 20*time.Millisecond, time.Hour
+	pub.setErr(errors.New("connection refused"))
+	stop, done := make(chan struct{}), make(chan struct{})
+	go c.publishLoop(context.Background(), stop, done)
+	c.set(contracts.StateDisconnected, ReasonReconnecting)
+
+	time.Sleep(150 * time.Millisecond)
+	close(stop)
+	<-done
+	if got := len(pub.tried()); got < 2 || got > 6 {
+		t.Fatalf("want a few attempts spaced further and further apart (about 4, plus the last one), got %d", got)
+	}
+}
+
+func TestALateEventCannotLeaveTheStateWrongForGood(t *testing.T) {
+	made := &clients{}
+	c, pub := publishingConn(linked(), made)
+	c.watchEvery, c.watchAfter = 2*time.Millisecond, 20*time.Millisecond
+	cancel, done := runInBackground(t, c)
+	waitFor(t, "first client", func() bool { return made.count() == 1 })
+	cli := made.get(0)
+	cli.emit(&events.Connected{})
+
+	cli.emit(&events.Disconnected{})
+	time.Sleep(60 * time.Millisecond)
+	if got := c.Status().State; got != contracts.StateDisconnected {
+		t.Fatalf("a connection that really is down must stay reported as down, got %q", got)
+	}
+
+	cli.setSocketUp(true)
+	waitFor(t, "the correction", func() bool { return c.Status().State == contracts.StateConnected })
+	wantStates(t, pub, "connecting", "connected", "disconnected: "+ReasonReconnecting, "connected")
+	stop(t, cancel, done)
+}
+
+func TestTheWatchLeavesOtherStatesAlone(t *testing.T) {
+	made := &clients{}
+	c, _ := newTestConn(paired(), made)
+	c.minBackoff = time.Hour
+	c.watchEvery, c.watchAfter = 2*time.Millisecond, 0
+	cancel, done := runInBackground(t, c)
+	waitFor(t, "first client", func() bool { return made.count() == 1 })
+	cli := made.get(0)
+	cli.setSocketUp(true)
+	cli.emit(&events.Connected{})
+	cli.emit(&events.LoggedOut{Reason: events.ConnectFailureLoggedOut})
+	time.Sleep(30 * time.Millisecond)
+	if got := c.Status(); got.State != contracts.StateLoggedOut {
+		t.Fatalf("only a dropped or silent connection may be corrected, got %+v", got)
+	}
+	stop(t, cancel, done)
+}
+
+func TestNothingFromTheOldClientChangesTheStateAfterShutdown(t *testing.T) {
+	made := &clients{}
+	c, pub := publishingConn(linked(), made)
+	cancel, done := runInBackground(t, c)
+	waitFor(t, "first client", func() bool { return made.count() == 1 })
+	cli := made.get(0)
+	cli.emit(&events.Disconnected{})
+	stop(t, cancel, done)
+
+	cli.emit(&events.Connected{})
+	if got := c.Status(); got.State != contracts.StateDisconnected || got.Reason != ReasonShuttingDown {
+		t.Fatalf("a stopped gateway must not report itself connected, got %+v", got)
+	}
+	if got := pub.states(t); got[len(got)-1] != "disconnected: "+ReasonShuttingDown {
+		t.Fatalf("got %q", got)
+	}
+}
+
+func TestOnlyASilentConnectionIsRestoredByAnAnswer(t *testing.T) {
+	made := &clients{}
+	c, _ := newTestConn(paired(), made)
+	c.minBackoff = time.Hour
+	cancel, done := runInBackground(t, c)
+	waitFor(t, "first client", func() bool { return made.count() == 1 })
+	cli := made.get(0)
+	cli.emit(&events.Connected{})
+	cli.emit(&events.ConnectFailure{})
+	cli.emit(&events.KeepAliveRestored{})
+	if got := c.Status(); got.State != contracts.StateDisconnected || got.Reason != ReasonConnectFailed {
+		t.Fatalf("got %+v", got)
+	}
+	stop(t, cancel, done)
+}
+
+func TestASilentConnectionIsReplacedAfterAMinute(t *testing.T) {
+	if whatsmeow.KeepAliveMaxFailTime != time.Minute {
+		t.Fatalf("got %s", whatsmeow.KeepAliveMaxFailTime)
+	}
+}
+
 func TestTheRetryDelayStartsOverOnlyAfterAConnectionHeld(t *testing.T) {
 	const failures = 8
 	for name, tc := range map[string]struct {
-		stableAfter time.Duration
-		check       func(t *testing.T, waited time.Duration)
+		hold  time.Duration
+		drop  bool
+		reset bool
 	}{
-		"held": {0, func(t *testing.T, waited time.Duration) {
-			if waited > 100*time.Millisecond {
-				t.Fatalf("waited %s; a connection that held must be retried from the shortest delay", waited)
-			}
-		}},
-		"dropped at once": {time.Hour, func(t *testing.T, waited time.Duration) {
-			if waited < 200*time.Millisecond {
-				t.Fatalf("waited only %s; a connection that never held must keep backing off", waited)
-			}
-		}},
+		"held":                               {hold: 60 * time.Millisecond, reset: true},
+		"dropped at once":                    {hold: 0, reset: false},
+		"dropped at once, given up on later": {hold: 60 * time.Millisecond, drop: true, reset: false},
 	} {
 		t.Run(name, func(t *testing.T) {
 			made := &clients{}
 			c, _ := newTestConn(paired(), made)
-			c.minBackoff, c.maxBackoff, c.stableAfter = time.Millisecond, time.Second, tc.stableAfter
+			c.minBackoff, c.maxBackoff, c.stableAfter = time.Millisecond, time.Second, 30*time.Millisecond
 			cancel, done := runInBackground(t, c)
 			for i := range failures {
 				waitFor(t, "the next client", func() bool { return made.count() == i+1 })
 				made.get(i).emit(&events.ConnectFailure{})
 			}
 			waitFor(t, "the client that connects", func() bool { return made.count() == failures+1 })
-			made.get(failures).emit(&events.Connected{})
-			made.get(failures).emit(&events.ConnectFailure{})
+			cli := made.get(failures)
+			cli.emit(&events.Connected{})
+			if tc.drop {
+				cli.emit(&events.Disconnected{})
+			}
+			time.Sleep(tc.hold)
+			cli.emit(&events.ConnectFailure{})
 			dropped := time.Now()
 			waitFor(t, "the client after it", func() bool { return made.count() == failures+2 })
-			tc.check(t, time.Since(dropped))
+			waited := time.Since(dropped)
+			if tc.reset && waited > 100*time.Millisecond {
+				t.Fatalf("waited %s; a connection that held must be retried from the shortest delay", waited)
+			}
+			if !tc.reset && waited < 200*time.Millisecond {
+				t.Fatalf("waited only %s; a connection that never held must keep backing off", waited)
+			}
 			stop(t, cancel, done)
 		})
 	}
