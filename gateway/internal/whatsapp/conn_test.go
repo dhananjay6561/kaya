@@ -48,6 +48,7 @@ type fakeClient struct {
 	mu           sync.Mutex
 	connectErr   error
 	disconnected bool
+	socketUp     bool
 	handler      whatsmeow.EventHandlerWithSuccessStatus
 	groupQueries int
 	downloadErrs []error
@@ -120,11 +121,37 @@ func (f *fakeClient) Disconnect() {
 	f.disconnected = true
 }
 
+// emit waits for the connection to register its handler: a client exists a moment before that.
 func (f *fakeClient) emit(evt any) bool {
+	for deadline := time.Now().Add(2 * time.Second); ; time.Sleep(50 * time.Microsecond) {
+		f.mu.Lock()
+		h := f.handler
+		f.mu.Unlock()
+		if h != nil {
+			return h(evt)
+		}
+		if time.Now().After(deadline) {
+			panic("the connection never registered its event handler")
+		}
+	}
+}
+
+func (f *fakeClient) IsConnected() bool {
 	f.mu.Lock()
-	h := f.handler
-	f.mu.Unlock()
-	return h(evt)
+	defer f.mu.Unlock()
+	return f.socketUp
+}
+
+func (f *fakeClient) IsLoggedIn() bool {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	return f.socketUp
+}
+
+func (f *fakeClient) setSocketUp(v bool) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	f.socketUp = v
 }
 
 type fakeSink struct {
@@ -287,6 +314,7 @@ func newTestConn(loader sessionLoader, made *clients) (*Conn, *bytes.Buffer) {
 	c.minBackoff = time.Millisecond
 	c.maxBackoff = 4 * time.Millisecond
 	c.storeRetry = 5 * time.Millisecond
+	c.watchEvery = time.Hour
 	c.historyPoll = 10 * time.Millisecond
 	c.historyRetry = 2 * time.Millisecond
 	c.mediaPoll = 10 * time.Millisecond
