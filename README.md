@@ -26,7 +26,9 @@ make check         # lint, typecheck, test and build everything (what CI runs)
 make help          # list every target
 ```
 
-Copy `.env.example` to `.env` and fill in the required values first.
+Copy `.env.example` to `.env` and fill in the required values first. The gateway and core each log in
+to Postgres with their own limited role; set `GATEWAY_DB_PASSWORD` and `CORE_DB_PASSWORD` (and change
+`POSTGRES_PASSWORD`) before real chats go in.
 
 Tests that need Postgres run when `TEST_DATABASE_URL` is set and are skipped otherwise (CI always
 sets it). With `make db` running:
