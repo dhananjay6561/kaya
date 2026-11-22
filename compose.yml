@@ -9,10 +9,8 @@ x-service: &service
   cap_drop:
     - ALL
   depends_on:
-    migrate:
+    db-roles:
       condition: service_completed_successfully
-
-x-database-url: &database-url postgres://${POSTGRES_USER:-kaya}:${POSTGRES_PASSWORD:?set POSTGRES_PASSWORD in .env}@db:5432/${POSTGRES_DB:-kaya}
 
 services:
   db:
@@ -55,6 +53,29 @@ services:
       db:
         condition: service_healthy
 
+  db-roles:
+    image: pgvector/pgvector:0.8.7-pg18-trixie@sha256:ab49524d18df7200b74ac9a475e1db6297fc1eb57da4c214c63d10ecc4b754fa
+    user: postgres
+    read_only: true
+    security_opt:
+      - no-new-privileges:true
+    cap_drop:
+      - ALL
+    entrypoint:
+      ["psql", "--no-psqlrc", "--quiet", "--set", "ON_ERROR_STOP=1", "--file", "/db/roles.sql"]
+    environment:
+      PGHOST: db
+      PGUSER: ${POSTGRES_USER:-kaya}
+      PGPASSWORD: ${POSTGRES_PASSWORD:?set POSTGRES_PASSWORD in .env}
+      PGDATABASE: ${POSTGRES_DB:-kaya}
+      GATEWAY_DB_PASSWORD: ${GATEWAY_DB_PASSWORD:?set GATEWAY_DB_PASSWORD in .env}
+      CORE_DB_PASSWORD: ${CORE_DB_PASSWORD:?set CORE_DB_PASSWORD in .env}
+    volumes:
+      - ./db/roles.sql:/db/roles.sql:ro
+    depends_on:
+      migrate:
+        condition: service_completed_successfully
+
   gateway:
     <<: *service
     build:
@@ -65,7 +86,7 @@ services:
     environment:
       LOG_LEVEL: ${LOG_LEVEL:-info}
       GATEWAY_PORT: ${GATEWAY_PORT:-3001}
-      DATABASE_URL: *database-url
+      DATABASE_URL: postgres://kaya_gateway:${GATEWAY_DB_PASSWORD:?set GATEWAY_DB_PASSWORD in .env}@db:5432/${POSTGRES_DB:-kaya}
       DATA_DIR: /data
       LISTEN_HOST: 0.0.0.0
     volumes:
@@ -84,13 +105,16 @@ services:
       dockerfile: core/Dockerfile
       args:
         VERSION: ${VERSION:-dev}
-    env_file:
-      - path: .env
-        required: false
     environment:
       LOG_LEVEL: ${LOG_LEVEL:-info}
       CORE_PORT: ${CORE_PORT:-3000}
-      DATABASE_URL: *database-url
+      DATABASE_URL: postgres://kaya_core:${CORE_DB_PASSWORD:?set CORE_DB_PASSWORD in .env}@db:5432/${POSTGRES_DB:-kaya}
+      LLM_PROVIDER: ${LLM_PROVIDER:-}
+      GROQ_API_KEY: ${GROQ_API_KEY:-}
+      GROQ_MODEL_HEAVY: ${GROQ_MODEL_HEAVY:-}
+      GROQ_MODEL_ROUTINE: ${GROQ_MODEL_ROUTINE:-}
+      CHAT_CHANNEL: ${CHAT_CHANNEL:-}
+      TELEPHONY_PROVIDER: ${TELEPHONY_PROVIDER:-}
       DATA_DIR: /data
       LISTEN_HOST: 0.0.0.0
     volumes:
