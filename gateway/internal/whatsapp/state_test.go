@@ -244,3 +244,40 @@ func TestAStateChangeThatBreaksTheContractIsDroppedNotRetried(t *testing.T) {
 		t.Fatalf("want each tried once, got %d attempts", got)
 	}
 }
+
+func TestTheRetryDelayStartsOverOnlyAfterAConnectionHeld(t *testing.T) {
+	const failures = 8
+	for name, tc := range map[string]struct {
+		stableAfter time.Duration
+		check       func(t *testing.T, waited time.Duration)
+	}{
+		"held": {0, func(t *testing.T, waited time.Duration) {
+			if waited > 100*time.Millisecond {
+				t.Fatalf("waited %s; a connection that held must be retried from the shortest delay", waited)
+			}
+		}},
+		"dropped at once": {time.Hour, func(t *testing.T, waited time.Duration) {
+			if waited < 200*time.Millisecond {
+				t.Fatalf("waited only %s; a connection that never held must keep backing off", waited)
+			}
+		}},
+	} {
+		t.Run(name, func(t *testing.T) {
+			made := &clients{}
+			c, _ := newTestConn(paired(), made)
+			c.minBackoff, c.maxBackoff, c.stableAfter = time.Millisecond, time.Second, tc.stableAfter
+			cancel, done := runInBackground(t, c)
+			for i := range failures {
+				waitFor(t, "the next client", func() bool { return made.count() == i+1 })
+				made.get(i).emit(&events.ConnectFailure{})
+			}
+			waitFor(t, "the client that connects", func() bool { return made.count() == failures+1 })
+			made.get(failures).emit(&events.Connected{})
+			made.get(failures).emit(&events.ConnectFailure{})
+			dropped := time.Now()
+			waitFor(t, "the client after it", func() bool { return made.count() == failures+2 })
+			tc.check(t, time.Since(dropped))
+			stop(t, cancel, done)
+		})
+	}
+}
