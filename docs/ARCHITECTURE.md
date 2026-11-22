@@ -130,6 +130,14 @@ Folders appear when a phase needs them; empty placeholders are not committed.
   constraint, a bug in the mapper) is copied to `ingest_dead`, which only the gateway can read, and
   then acknowledged, so one bad message never blocks the rest and can be replayed after a fix.
   Storing the same message twice changes nothing and emits nothing.
+- **History sync.** Each history chunk WhatsApp announces becomes a row in `history_jobs`, stored
+  in the transaction that acknowledges the announcement. A single worker downloads the chunk,
+  stores it in batches of at most 200 messages (a savepoint per message, so one bad message
+  becomes a dead letter and the rest go in), and confirms it to WhatsApp only after the job is
+  marked `stored`. History rows have `source = 'history'` and emit no `message.stored`; core gets
+  one `history.synced` per chunk and backfills by scanning. Core must therefore accept an `edited`
+  or `deleted` event for a message it never saw as `new`. Live edits and revokes that arrive before
+  their message are kept in `pending_changes` and applied after each job.
 
 ## Engineering standards
 
