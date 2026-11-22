@@ -98,6 +98,12 @@ type HistorySynced struct {
 	Complete bool `json:"complete"`
 }
 
+// Send result statuses.
+const (
+	SendSent   = "sent"
+	SendFailed = "failed"
+)
+
 // SendResult is the data of a send.result event.
 type SendResult struct {
 	RequestID string `json:"request_id"`
