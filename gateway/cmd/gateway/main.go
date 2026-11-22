@@ -17,7 +17,9 @@ import (
 
 	"github.com/dhananjay6561/kaya/gateway/internal/config"
 	"github.com/dhananjay6561/kaya/gateway/internal/contracts"
+	"github.com/dhananjay6561/kaya/gateway/internal/events"
 	"github.com/dhananjay6561/kaya/gateway/internal/httpapi"
+	"github.com/dhananjay6561/kaya/gateway/internal/ingest"
 	"github.com/dhananjay6561/kaya/gateway/internal/logging"
 	"github.com/dhananjay6561/kaya/gateway/internal/store"
 	"github.com/dhananjay6561/kaya/gateway/internal/whatsapp"
@@ -80,7 +82,8 @@ func run(cfg config.Config, logger *slog.Logger) error {
 	defer stop()
 	context.AfterFunc(ctx, stop)
 
-	if _, err := contracts.NewValidator(); err != nil {
+	validator, err := contracts.NewValidator()
+	if err != nil {
 		return err
 	}
 
@@ -104,7 +107,9 @@ func run(cfg config.Config, logger *slog.Logger) error {
 		return fmt.Errorf("listen on %s: %w", addr, err)
 	}
 
-	conn := whatsapp.NewConn(whatsapp.NewSessions(sqlDB, whatsapp.NewLogger(logger)), logger)
+	ingester := ingest.NewIngester(db, ingest.NewStore(events.NewOutbox(validator)), logger)
+	conn := whatsapp.NewConn(whatsapp.NewSessions(sqlDB, whatsapp.NewLogger(logger)), ingester, logger)
+	ingester.NewGroup = conn.RequestGroupSync
 	connDone := make(chan error, 1)
 	go func() { connDone <- conn.Run(ctx) }()
 
