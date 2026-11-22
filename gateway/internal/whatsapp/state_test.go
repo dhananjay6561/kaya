@@ -245,6 +245,35 @@ func TestAStateChangeThatBreaksTheContractIsDroppedNotRetried(t *testing.T) {
 	}
 }
 
+func TestASilentConnectionIsReportedUntilItAnswersAgain(t *testing.T) {
+	made := &clients{}
+	c, pub := publishingConn(linked(), made)
+	cancel, done := runInBackground(t, c)
+	waitFor(t, "first client", func() bool { return made.count() == 1 })
+	cli := made.get(0)
+
+	cli.emit(&events.KeepAliveTimeout{ErrorCount: 1})
+	if got := c.Status().State; got != contracts.StateConnecting {
+		t.Fatalf("a missed ping before the connection is up changes nothing, got %q", got)
+	}
+	cli.emit(&events.Connected{})
+	cli.emit(&events.KeepAliveRestored{})
+	cli.emit(&events.KeepAliveTimeout{ErrorCount: 1})
+	cli.emit(&events.KeepAliveTimeout{ErrorCount: 2})
+	if got := c.Status(); got.State != contracts.StateDisconnected || got.Reason != ReasonNotAnswering {
+		t.Fatalf("got %+v", got)
+	}
+	cli.emit(&events.KeepAliveRestored{})
+	wantStates(t, pub, "connecting", "connected", "disconnected: "+ReasonNotAnswering, "connected")
+
+	cli.emit(&events.Disconnected{})
+	cli.emit(&events.KeepAliveRestored{})
+	if got := c.Status(); got.Reason != ReasonReconnecting {
+		t.Fatalf("a late answer must not mark a dropped connection as connected, got %+v", got)
+	}
+	stop(t, cancel, done)
+}
+
 func TestTheRetryDelayStartsOverOnlyAfterAConnectionHeld(t *testing.T) {
 	const failures = 8
 	for name, tc := range map[string]struct {
