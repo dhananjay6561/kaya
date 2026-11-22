@@ -1,0 +1,151 @@
+import { createHash } from "node:crypto";
+import type pg from "pg";
+import { type Contracts, newSendRequest } from "../../contracts/index.js";
+import { readConnection } from "../../modules/gateway/index.js";
+import { ChannelNotStartedError } from "./stub.js";
+import type { ChatChannel, MessageHandler, OutgoingMessage, SentMessage } from "./types.js";
+
+export type SendResults = Readonly<{
+  onSendResult(requestId: string, listener: () => void): () => void;
+}>;
+
+export type GatewayChannelDeps = Readonly<{
+  pool: pg.Pool;
+  contracts: Contracts;
+  results?: SendResults;
+  pollMs?: number;
+  graceMs?: number;
+}>;
+
+export class GatewayNotLinkedError extends Error {
+  constructor() {
+    super("the gateway has not reported a linked WhatsApp account yet");
+    this.name = "GatewayNotLinkedError";
+  }
+}
+
+export class SendFailedError extends Error {
+  constructor(
+    readonly requestId: string,
+    readonly code: string,
+  ) {
+    super(`the message was not sent: ${code}`);
+    this.name = "SendFailedError";
+  }
+}
+
+export function requestIdFor(idempotencyKey: string): string {
+  const hash = createHash("sha256").update(`kaya:channel:${idempotencyKey}`).digest();
+  hash[6] = ((hash[6] ?? 0) & 0x0f) | 0x50;
+  hash[8] = ((hash[8] ?? 0) & 0x3f) | 0x80;
+  const hex = hash.subarray(0, 16).toString("hex");
+  return [
+    hex.slice(0, 8),
+    hex.slice(8, 12),
+    hex.slice(12, 16),
+    hex.slice(16, 20),
+    hex.slice(20),
+  ].join("-");
+}
+
+type Row = { state: string; wa_id: string | null; error: string | null; finished_at: Date | null };
+
+export function createGatewayChannel(deps: GatewayChannelDeps): ChatChannel {
+  const { pool, contracts } = deps;
+  const pollMs = deps.pollMs ?? 2_000;
+  const graceMs = deps.graceMs ?? 30_000;
+  const handlers = new Set<MessageHandler>();
+  let started = false;
+
+  const assertStarted = () => {
+    if (!started) throw new ChannelNotStartedError("gateway");
+  };
+
+  async function outcome(id: string): Promise<SentMessage | undefined> {
+    const { rows } = await pool.query<Row>(
+      "SELECT state, wa_id, error, finished_at FROM send_requests WHERE id = $1",
+      [id],
+    );
+    const row = rows[0];
+    if (row?.state === "sent" && row.wa_id && row.finished_at) {
+      return { id: row.wa_id, sentAt: row.finished_at };
+    }
+    if (row?.state === "failed") throw new SendFailedError(id, row.error ?? "failed");
+    return undefined;
+  }
+
+  function nudge(id: string, ms: number, signal: AbortSignal | undefined): Promise<void> {
+    return new Promise((resolve, reject) => {
+      const timer = setTimeout(done, ms);
+      const forget = deps.results?.onSendResult(id, done);
+      const aborted = () => {
+        cleanup();
+        reject(signal?.reason);
+      };
+      function cleanup() {
+        clearTimeout(timer);
+        forget?.();
+        signal?.removeEventListener("abort", aborted);
+      }
+      function done() {
+        cleanup();
+        resolve();
+      }
+      signal?.addEventListener("abort", aborted, { once: true });
+    });
+  }
+
+  return Object.freeze({
+    name: "gateway",
+    async start() {
+      started = true;
+    },
+    async stop() {
+      started = false;
+    },
+    async check(signal: AbortSignal) {
+      signal.throwIfAborted();
+      assertStarted();
+    },
+    async send(message: OutgoingMessage, options: Readonly<{ signal?: AbortSignal }> = {}) {
+      options.signal?.throwIfAborted();
+      assertStarted();
+      if (message.idempotencyKey.trim() === "") throw new Error("idempotency key is empty");
+      if (message.text.trim() === "") throw new Error("message text is empty");
+
+      const id = requestIdFor(message.idempotencyKey);
+      const earlier = await outcome(id);
+      if (earlier) return earlier;
+
+      const own = (await readConnection(pool))?.ownJid;
+      if (!own) throw new GatewayNotLinkedError();
+      const request = {
+        ...newSendRequest(
+          own,
+          message.text,
+          { kind: "self_chat" },
+          {
+            ...(message.replyTo ? { replyTo: { wa_id: message.replyTo, sender_jid: own } } : {}),
+          },
+        ),
+        id,
+      };
+      await pool.query(
+        "INSERT INTO send_requests (id, payload, expires_at) VALUES ($1, $2, $3) ON CONFLICT (id) DO NOTHING",
+        [id, contracts.encodeSendRequest(request), request.expires_at],
+      );
+
+      const deadline = Date.parse(request.expires_at) + graceMs;
+      for (;;) {
+        const sent = await outcome(id);
+        if (sent) return sent;
+        if (Date.now() > deadline) throw new SendFailedError(id, "no_answer");
+        await nudge(id, pollMs, options.signal);
+      }
+    },
+    onMessage(handler: MessageHandler) {
+      handlers.add(handler);
+      return () => handlers.delete(handler);
+    },
+  });
+}
