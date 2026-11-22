@@ -20,12 +20,10 @@ async function main(): Promise<void> {
       pool: db.pool,
       contracts: createContracts(),
       pollMs: 500,
+      ttlMs: 60_000,
     });
     await channel.start();
-    const sent = await channel.send(
-      { idempotencyKey: randomUUID(), text },
-      { signal: AbortSignal.timeout(2 * 60_000) },
-    );
+    const sent = await channel.send({ idempotencyKey: randomUUID(), text });
     console.log(`sent to your own chat at ${sent.sentAt.toISOString()} (message ${sent.id})`);
   } finally {
     await db.close();
