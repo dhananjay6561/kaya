@@ -88,9 +88,9 @@ Folders appear when a phase needs them; empty placeholders are not committed.
     loops on it. Transient failures retry with backoff, without reordering later rows.
   - **Retention.** Handled rows are deleted after 7 days; `dead` rows stay until someone looks at
     them.
-  - **Roles.** When the tables land, each service gets its own Postgres role. The gateway can only
-    insert into the events table and update the send-requests table; core the reverse. Neither can
-    write the other's queue.
+  - **Roles.** Each service has its own Postgres role (see "Data ownership"). The gateway can only
+    insert into the events table and, from 1.6, update the send-requests table; core the reverse.
+    Neither can write the other's queue.
 - **Contracts:** every payload has a JSON Schema (draft 2020-12) in `contracts/schemas/v1/` and
   carries `"version": 1`. Both sides validate at the boundary: the writer before inserting, the
   reader before handling.
@@ -111,10 +111,25 @@ Folders appear when a phase needs them; empty placeholders are not committed.
 
 - One schema, in `db/migrations/`, as plain SQL run by dbmate before the services start. Neither
   language runs its own migration system.
-- whatsmeow manages its own session tables; nothing else touches them.
+- whatsmeow manages its own tables (the session, encryption keys and its event buffer) in the
+  `whatsmeow` schema, which the gateway role owns. Nothing else touches them, and core cannot see
+  inside the schema.
 - `gateway` writes contacts, chats, messages and reactions. It resolves every person through
   `contact_id_for()`, never by inserting into `contacts` directly. `core` reads them and owns
   everything it creates (tasks, jobs, pending actions, usage).
+- **Roles.** Each service logs in as its own Postgres role, `kaya_gateway` or `kaya_core`, with
+  exactly the grants it needs: the gateway writes the chat tables and can only insert into
+  `gateway_events`; core reads the chat tables and consumes `gateway_events`. The roles and grants
+  are in the migrations; the passwords come from `.env` and are set by the one-shot `db-roles`
+  Compose step. The admin login (`POSTGRES_USER`) is used only by `migrate` and `db-roles`. A
+  migration that adds a table also grants it, and `db/tests/schema.sql` asserts the whole matrix.
+- **Live ingest.** The gateway acknowledges a WhatsApp message only after its transaction commits:
+  contact, chat, message and the `message.stored` event together. While Postgres is away it
+  retries for 30 s, then drops the connection without acknowledging and reconnects once the
+  database answers, and WhatsApp delivers the message again. A message the database refuses (a
+  constraint, a bug in the mapper) is copied to `ingest_dead`, which only the gateway can read, and
+  then acknowledged, so one bad message never blocks the rest and can be replayed after a fix.
+  Storing the same message twice changes nothing and emits nothing.
 
 ## Engineering standards
 
