@@ -261,5 +261,81 @@ BEGIN
 END
 $$;
 
+DO $$
+DECLARE
+  t text;
+BEGIN
+  FOREACH t IN ARRAY ARRAY['contacts', 'chats', 'messages', 'reactions'] LOOP
+    ASSERT has_table_privilege('kaya_gateway', t, 'SELECT, INSERT, UPDATE, DELETE'), 'the gateway writes ' || t;
+    ASSERT has_table_privilege('kaya_core', t, 'SELECT'), 'core reads ' || t;
+    ASSERT NOT has_table_privilege('kaya_core', t, 'INSERT')
+      AND NOT has_table_privilege('kaya_core', t, 'UPDATE')
+      AND NOT has_table_privilege('kaya_core', t, 'DELETE'), 'core never writes ' || t;
+  END LOOP;
+
+  ASSERT has_table_privilege('kaya_gateway', 'gateway_events', 'INSERT'), 'the gateway adds events';
+  ASSERT NOT has_table_privilege('kaya_gateway', 'gateway_events', 'SELECT')
+    AND NOT has_table_privilege('kaya_gateway', 'gateway_events', 'UPDATE')
+    AND NOT has_table_privilege('kaya_gateway', 'gateway_events', 'DELETE'), 'the gateway only adds events';
+  ASSERT has_table_privilege('kaya_core', 'gateway_events', 'SELECT, UPDATE, DELETE'), 'core consumes events';
+  ASSERT NOT has_table_privilege('kaya_core', 'gateway_events', 'INSERT'), 'core never adds events';
+
+  ASSERT has_table_privilege('kaya_gateway', 'ingest_dead', 'SELECT, INSERT, UPDATE, DELETE');
+  ASSERT NOT has_table_privilege('kaya_core', 'ingest_dead', 'SELECT'), 'core cannot read dead letters';
+
+  ASSERT has_schema_privilege('kaya_gateway', 'whatsmeow', 'CREATE, USAGE'), 'the gateway owns the whatsmeow schema';
+  ASSERT NOT has_schema_privilege('kaya_core', 'whatsmeow', 'USAGE'), 'core cannot look inside the whatsmeow schema';
+  ASSERT NOT has_schema_privilege('kaya_gateway', 'public', 'CREATE')
+    AND NOT has_schema_privilege('kaya_core', 'public', 'CREATE'), 'services create nothing in public';
+
+  ASSERT has_function_privilege('kaya_gateway', 'contact_id_for(text, text, text)', 'EXECUTE');
+  ASSERT NOT has_function_privilege('kaya_core', 'contact_id_for(text, text, text)', 'EXECUTE');
+  ASSERT NOT has_function_privilege('kaya_core', 'merge_contacts(bigint, bigint)', 'EXECUTE');
+END
+$$;
+
+SET LOCAL ROLE kaya_gateway;
+DO $$
+DECLARE
+  by_pn bigint := contact_id_for(NULL, '918888888888@s.whatsapp.net');
+  by_lid bigint := contact_id_for('100000000000088@lid', NULL);
+  chat bigint;
+  msg bigint;
+  event_id uuid := 'a3bb189e-8bf9-4888-9912-ace4e6543099';
+BEGIN
+  INSERT INTO chats (kind, contact_id) VALUES ('direct', by_lid) RETURNING id INTO chat;
+  INSERT INTO messages (chat_id, wa_id, sender_id, from_me, sent_at, kind, body, source)
+  VALUES (chat, 'TESTROLE1', by_lid, false, now(), 'text', 'hi', 'live') RETURNING id INTO msg;
+  ASSERT contact_id_for('100000000000088@lid', '918888888888@s.whatsapp.net') = by_pn, 'the gateway role can merge contacts';
+  INSERT INTO gateway_events (id, type, payload)
+  VALUES (event_id, 'message.stored', jsonb_build_object('id', event_id, 'type', 'message.stored'));
+  INSERT INTO ingest_dead (wa_id, error_code) VALUES ('TESTROLE2', '23514');
+  CREATE TABLE whatsmeow.whatsmeow_probe (id int);
+  DROP TABLE whatsmeow.whatsmeow_probe;
+  PERFORM pg_temp.expect_error('SELECT count(*) FROM gateway_events', '42501');
+  PERFORM pg_temp.expect_error('CREATE TABLE public.sneaky (id int)', '42501');
+END
+$$;
+
+SET LOCAL ROLE kaya_core;
+DO $$
+DECLARE
+  n int;
+BEGIN
+  SELECT count(*) INTO n FROM messages WHERE wa_id = 'TESTROLE1';
+  ASSERT n = 1, 'core reads what the gateway stored';
+  UPDATE gateway_events SET state = 'handled', finished_at = now() WHERE id = 'a3bb189e-8bf9-4888-9912-ace4e6543099';
+  ASSERT FOUND, 'core marks events handled';
+  PERFORM pg_temp.expect_error($q$UPDATE messages SET body = 'changed' WHERE wa_id = 'TESTROLE1'$q$, '42501');
+  PERFORM pg_temp.expect_error($q$INSERT INTO contacts (pn) VALUES ('917000000000@s.whatsapp.net')$q$, '42501');
+  PERFORM pg_temp.expect_error($q$SELECT contact_id_for(NULL, '917000000000@s.whatsapp.net')$q$, '42501');
+  PERFORM pg_temp.expect_error('SELECT count(*) FROM ingest_dead', '42501');
+  PERFORM pg_temp.expect_error('CREATE TABLE whatsmeow.sneaky (id int)', '42501');
+  PERFORM pg_temp.expect_error($q$INSERT INTO gateway_events (id, type, payload) VALUES
+    ('a3bb189e-8bf9-4888-9912-ace4e6543098', 'send.result', '{"id": "a3bb189e-8bf9-4888-9912-ace4e6543098", "type": "send.result"}')$q$, '42501');
+END
+$$;
+RESET ROLE;
+
 ROLLBACK;
 \echo schema tests passed
