@@ -54,7 +54,7 @@ type Sink interface {
 	Handle(ctx context.Context, own ingest.Own, evt any) bool
 	SyncGroups(ctx context.Context, groups []*types.GroupInfo) error
 	SyncContacts(ctx context.Context, contacts []ingest.ContactNames) error
-	NextHistoryJob(ctx context.Context) (*ingest.HistoryJob, error)
+	NextHistoryJob(ctx context.Context, skip []int64) (*ingest.HistoryJob, error)
 	StoreHistory(ctx context.Context, job *ingest.HistoryJob, data *waHistorySync.HistorySync, parser ingest.Parser, own ingest.Own) error
 	FailHistory(ctx context.Context, job *ingest.HistoryJob, code string, final bool) (dead bool, err error)
 	FinishHistory(ctx context.Context, job *ingest.HistoryJob) error
@@ -114,6 +114,7 @@ type Conn struct {
 
 	historyAsk        chan struct{}
 	historyPoll       time.Duration
+	historyRetry      time.Duration
 	media             MediaWorker
 	mediaAsk          chan struct{}
 	mediaPoll         time.Duration
@@ -126,6 +127,7 @@ type Conn struct {
 	status        Status
 	current       client
 	device        *store.Device
+	historyWaits  map[int64]historyWait
 	lastGroupSync time.Time
 	contactsDone  bool
 }
@@ -153,6 +155,7 @@ func NewConn(sessions *Sessions, sink Sink, logger *slog.Logger) *Conn {
 		ended:             make(chan ending, 1),
 		historyAsk:        make(chan struct{}, 1),
 		historyPoll:       time.Minute,
+		historyRetry:      time.Minute,
 		mediaAsk:          make(chan struct{}, 1),
 		mediaPoll:         time.Minute,
 		groupSyncAsk:      make(chan struct{}, 1),
@@ -281,7 +284,15 @@ func (c *Conn) connect(ctx context.Context) (client, error) {
 // receive handles one event and reports whether whatsmeow may acknowledge it. An event from a
 // connection that was replaced, or that already failed to store something, is never acknowledged:
 // WhatsApp delivers it again on the next connection.
-func (c *Conn) receive(ctx context.Context, generation uint64, evt any) bool {
+func (c *Conn) receive(ctx context.Context, generation uint64, evt any) (ok bool) {
+	// whatsmeow counts a handler that panics as one that succeeded. Nothing here may be
+	// acknowledged on the strength of a panic.
+	defer func() {
+		if r := recover(); r != nil {
+			c.logger.Error("the event handler panicked", "event", fmt.Sprintf("%T", evt))
+			ok = false
+		}
+	}()
 	if generation != c.generation.Load() || generation == c.failed.Load() {
 		return false
 	}
@@ -393,7 +404,8 @@ func (c *Conn) historyLoop(ctx context.Context) {
 	}
 }
 
-// historyStep handles one job and reports whether to go straight on to the next.
+// historyStep handles one job and reports whether to look for another straight away. A job that
+// failed for now is skipped for a growing while, so the jobs behind it are not held up.
 func (c *Conn) historyStep(ctx context.Context) bool {
 	c.mu.RLock()
 	cli := c.current
@@ -401,7 +413,7 @@ func (c *Conn) historyStep(ctx context.Context) bool {
 	if c.sink == nil || cli == nil || c.Status().State != contracts.StateConnected {
 		return false
 	}
-	job, err := c.sink.NextHistoryJob(ctx)
+	job, err := c.sink.NextHistoryJob(ctx, c.historyWaiting())
 	if err != nil {
 		c.logger.Warn("could not read the history queue", logging.Err(err))
 		return false
@@ -419,39 +431,87 @@ func (c *Conn) historyStep(ctx context.Context) bool {
 			code, final, countable := classifyHistoryDownload(err)
 			if !countable {
 				c.logger.Warn("could not download a history chunk, trying again later", "sync_type", job.SyncType, "error_code", code)
-				return false
+				return c.historyLater(job)
 			}
 			return c.failHistory(ctx, cli, job, code, final)
 		}
-		if err := c.sink.StoreHistory(ctx, job, data, cli, c.own()); err != nil {
+		switch err := c.sink.StoreHistory(ctx, job, data, cli, c.own()); {
+		case errors.Is(err, ingest.ErrUnavailable):
 			c.logger.Warn("could not store a history chunk, trying again later", "sync_type", job.SyncType, logging.Err(err))
-			return false
+			return c.historyLater(job)
+		case err != nil:
+			c.logger.Warn("a history chunk was refused", "sync_type", job.SyncType, logging.Err(err))
+			return c.failHistory(ctx, cli, job, "store_refused", false)
 		}
 	}
 	if err := cli.SendProtocolMessageReceipt(ctx, job.WAID, types.ReceiptTypeHistorySync); err != nil {
 		c.logger.Warn("could not confirm a history chunk, trying again later", logging.Err(err))
-		return false
+		return c.historyLater(job)
 	}
 	if err := c.sink.FinishHistory(ctx, job); err != nil {
 		c.logger.Warn("could not finish a history job", logging.Err(err))
-		return false
+		return c.historyLater(job)
 	}
+	c.historyDone(job)
 	go c.syncContacts(ctx)
 	return true
+}
+
+type historyWait struct {
+	fails int
+	until time.Time
+}
+
+// historyLater puts a job aside for a while: one minute after the first failure, doubling up to
+// half an hour. It returns true so the worker moves on to the next job.
+func (c *Conn) historyLater(job *ingest.HistoryJob) bool {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	if c.historyWaits == nil {
+		c.historyWaits = map[int64]historyWait{}
+	}
+	w := c.historyWaits[job.ID]
+	w.fails++
+	delay := c.historyRetry << min(w.fails-1, 5)
+	w.until = time.Now().Add(min(delay, 30*c.historyRetry))
+	c.historyWaits[job.ID] = w
+	return true
+}
+
+func (c *Conn) historyDone(job *ingest.HistoryJob) {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	delete(c.historyWaits, job.ID)
+}
+
+// historyWaiting lists the jobs that are still waiting out a failure.
+func (c *Conn) historyWaiting() []int64 {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	now := time.Now()
+	ids := []int64{}
+	for id, w := range c.historyWaits {
+		if now.Before(w.until) {
+			ids = append(ids, id)
+		}
+	}
+	return ids
 }
 
 func (c *Conn) failHistory(ctx context.Context, cli client, job *ingest.HistoryJob, code string, final bool) bool {
 	dead, err := c.sink.FailHistory(ctx, job, code, final)
 	if err != nil {
 		c.logger.Warn("could not record a failed history job", logging.Err(err))
-		return false
+		return c.historyLater(job)
 	}
-	if dead {
-		if err := cli.SendProtocolMessageReceipt(ctx, job.WAID, types.ReceiptTypeHistorySync); err != nil {
-			c.logger.Warn("could not confirm a history chunk that was given up on", logging.Err(err))
-		}
+	if !dead {
+		return c.historyLater(job)
 	}
-	return dead
+	c.historyDone(job)
+	if err := cli.SendProtocolMessageReceipt(ctx, job.WAID, types.ReceiptTypeHistorySync); err != nil {
+		c.logger.Warn("could not confirm a history chunk that was given up on", logging.Err(err))
+	}
+	return true
 }
 
 // classifyHistoryDownload sorts download failures: gone from WhatsApp's servers (final), a payload
@@ -466,9 +526,15 @@ func classifyHistoryDownload(err error) (code string, final, countable bool) {
 	case errors.Is(err, whatsmeow.ErrMediaDownloadFailedWith410):
 		return "http_410", true, true
 	}
+	var status whatsmeow.DownloadHTTPError
 	msg := err.Error()
-	if strings.Contains(msg, "decompress") || strings.Contains(msg, "unmarshal") {
+	switch {
+	case errors.Is(err, whatsmeow.ErrInvalidMediaHMAC), errors.Is(err, whatsmeow.ErrInvalidMediaSHA256),
+		errors.Is(err, whatsmeow.ErrInvalidMediaEncSHA256), errors.Is(err, whatsmeow.ErrTooShortFile),
+		strings.Contains(msg, "decompress"), strings.Contains(msg, "unmarshal"):
 		return "bad_blob", false, true
+	case errors.As(err, &status):
+		return "http_error", false, true
 	}
 	return "download_failed", false, false
 }
@@ -568,18 +634,63 @@ func (c *Conn) syncContacts(ctx context.Context) {
 			lids = map[types.JID]types.JID{}
 		}
 	}
-	names := make([]ingest.ContactNames, 0, len(all))
-	for jid, info := range all {
-		names = append(names, ingest.ContactNames{
-			Address: ingest.AddressOf(jid, lids[jid]), Saved: info.FullName, First: info.FirstName,
-			Push: info.PushName, Business: info.BusinessName, AddressBook: true,
-		})
-	}
+	names := mergeContacts(all, lids)
 	if err := c.sink.SyncContacts(ctx, names); err != nil {
 		c.logger.Warn("could not store contacts", logging.Err(err))
 		return
 	}
 	c.logger.Info("contacts synced", "contacts", len(names))
+}
+
+// mergeContacts turns whatsmeow's contact rows into one entry per person. whatsmeow keeps a row
+// for each spelling of a person: the one under the phone number has the address-book name, the one
+// under the LID usually only the name they set themselves. Taken one by one, the LID row would wipe
+// the saved name, so the rows are joined first and a name from either one is kept.
+func mergeContacts(all map[types.JID]types.ContactInfo, lidForPN map[types.JID]types.JID) []ingest.ContactNames {
+	pnForLID := make(map[types.JID]types.JID, len(lidForPN))
+	for pn, lid := range lidForPN {
+		if !lid.IsEmpty() {
+			pnForLID[lid.ToNonAD()] = pn.ToNonAD()
+		}
+	}
+	first := func(a, b string) string {
+		if a != "" {
+			return a
+		}
+		return b
+	}
+	people := map[types.JID]*ingest.ContactNames{}
+	var order []types.JID
+	for jid, info := range all {
+		key, alt := jid.ToNonAD(), types.EmptyJID
+		switch key.Server {
+		case types.DefaultUserServer:
+			alt = lidForPN[key].ToNonAD()
+		case types.HiddenUserServer:
+			if pn, ok := pnForLID[key]; ok {
+				key, alt = pn, key
+			}
+		}
+		p := people[key]
+		if p == nil {
+			p = &ingest.ContactNames{}
+			people[key] = p
+			order = append(order, key)
+		}
+		addr := ingest.AddressOf(key, alt)
+		p.Address = ingest.Address{LID: first(p.Address.LID, addr.LID), PN: first(p.Address.PN, addr.PN), Bot: first(p.Address.Bot, addr.Bot)}
+		p.Saved, p.First = first(p.Saved, info.FullName), first(p.First, info.FirstName)
+		p.Push, p.Business = first(p.Push, info.PushName), first(p.Business, info.BusinessName)
+	}
+	names := make([]ingest.ContactNames, 0, len(order))
+	for _, key := range order {
+		p := people[key]
+		// Only the phone-number row is the address book. A person known by LID alone says nothing
+		// about whether they are saved, so their saved name is left as it is.
+		p.AddressBook = p.Address.PN != "" || p.Saved != ""
+		names = append(names, *p)
+	}
+	return names
 }
 
 func (c *Conn) end(generation uint64, e ending) {

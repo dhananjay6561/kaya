@@ -5,6 +5,8 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"net/http"
+	"slices"
 	"strings"
 	"sync"
 	"testing"
@@ -134,12 +136,16 @@ type fakeSink struct {
 	jobs     []*ingest.HistoryJob
 	storeErr error
 	log      []string
+	fails    map[int64]int
 }
 
-func (f *fakeSink) NextHistoryJob(context.Context) (*ingest.HistoryJob, error) {
+func (f *fakeSink) NextHistoryJob(_ context.Context, skip []int64) (*ingest.HistoryJob, error) {
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	for _, job := range f.jobs {
+		if slices.Contains(skip, job.ID) {
+			continue
+		}
 		if job.State == ingest.JobPending || job.State == ingest.JobStored {
 			copied := *job
 			return &copied, nil
@@ -160,6 +166,9 @@ func (f *fakeSink) job(id int64) *ingest.HistoryJob {
 func (f *fakeSink) StoreHistory(_ context.Context, job *ingest.HistoryJob, _ *waHistorySync.HistorySync, _ ingest.Parser, _ ingest.Own) error {
 	f.mu.Lock()
 	defer f.mu.Unlock()
+	if job.WAID == "REFUSED" {
+		return errors.New("history chunk refused by the database: 22021")
+	}
 	if f.storeErr != nil {
 		err := f.storeErr
 		f.storeErr = nil
@@ -174,10 +183,12 @@ func (f *fakeSink) FailHistory(_ context.Context, job *ingest.HistoryJob, code s
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	f.log = append(f.log, job.WAID+" failed "+code)
-	if final {
+	f.fails[job.ID]++
+	if final || f.fails[job.ID] >= 5 {
 		f.job(job.ID).State = ingest.JobDead
+		return true, nil
 	}
-	return final, nil
+	return false, nil
 }
 
 func (f *fakeSink) FinishHistory(_ context.Context, job *ingest.HistoryJob) error {
@@ -277,6 +288,7 @@ func newTestConn(loader sessionLoader, made *clients) (*Conn, *bytes.Buffer) {
 	c.maxBackoff = 4 * time.Millisecond
 	c.storeRetry = 5 * time.Millisecond
 	c.historyPoll = 10 * time.Millisecond
+	c.historyRetry = 2 * time.Millisecond
 	c.mediaPoll = 10 * time.Millisecond
 	c.groupSyncDebounce = 5 * time.Millisecond
 	c.groupSyncMinGap = 30 * time.Millisecond
@@ -550,11 +562,13 @@ func TestHistoryIsConfirmedOnlyAfterItIsStored(t *testing.T) {
 	c, _ := newTestConn(paired(), made)
 	sink := &fakeSink{
 		storeErr: ingest.ErrUnavailable,
+		fails:    map[int64]int{},
 		jobs: []*ingest.HistoryJob{
 			{ID: 1, WAID: "GONE", State: ingest.JobPending, Notification: notification},
 			{ID: 2, WAID: "BROKEN", State: ingest.JobPending, Notification: []byte{0xff, 0xff}},
-			{ID: 3, WAID: "CHUNK", State: ingest.JobPending, Notification: notification},
-			{ID: 4, WAID: "RESUMED", State: ingest.JobStored},
+			{ID: 3, WAID: "REFUSED", State: ingest.JobPending, Notification: notification},
+			{ID: 4, WAID: "CHUNK", State: ingest.JobPending, Notification: notification},
+			{ID: 5, WAID: "RESUMED", State: ingest.JobStored},
 		},
 	}
 	c.sink = sink
@@ -562,7 +576,7 @@ func TestHistoryIsConfirmedOnlyAfterItIsStored(t *testing.T) {
 	waitFor(t, "first client", func() bool { return made.count() == 1 })
 	cli := made.get(0)
 	cli.mu.Lock()
-	cli.downloadErrs = []error{whatsmeow.ErrMediaDownloadFailedWith410, errors.New("dial tcp: i/o timeout")}
+	cli.downloadErrs = []error{whatsmeow.ErrMediaDownloadFailedWith410}
 	cli.mu.Unlock()
 
 	time.Sleep(30 * time.Millisecond)
@@ -571,18 +585,25 @@ func TestHistoryIsConfirmedOnlyAfterItIsStored(t *testing.T) {
 	}
 	cli.emit(&events.Connected{})
 
-	waitFor(t, "every job handled", func() bool { return len(sink.history()) == 5 })
+	waitFor(t, "every job handled", func() bool {
+		_, receipts := cli.history()
+		return len(receipts) == 5
+	})
 	log := strings.Join(sink.history(), ", ")
-	for _, step := range []string{"GONE failed http_410", "BROKEN failed unreadable", "CHUNK stored, CHUNK done", "RESUMED done"} {
+	for _, step := range []string{"GONE failed http_410", "BROKEN failed unreadable", "CHUNK stored", "CHUNK done", "RESUMED done"} {
 		if !strings.Contains(log, step) {
 			t.Fatalf("missing %q in %s", step, log)
 		}
 	}
-	downloads, receipts := cli.history()
-	if downloads != 4 {
-		t.Fatalf("want 4 downloads (gone, timed out, store failed, stored), got %d", downloads)
+	if n := strings.Count(log, "REFUSED failed store_refused"); n != 5 {
+		t.Fatalf("a chunk the database refuses is counted and given up on after 5 tries, got %d in %s", n, log)
 	}
-	if strings.Join(receipts, ",") != "GONE:hist_sync,BROKEN:hist_sync,CHUNK:hist_sync,RESUMED:hist_sync" {
+	if strings.Index(log, "RESUMED done") > strings.LastIndex(log, "REFUSED failed") {
+		t.Fatalf("a failing chunk must not hold up the ones behind it: %s", log)
+	}
+	_, receipts := cli.history()
+	slices.Sort(receipts)
+	if strings.Join(receipts, ",") != "BROKEN:hist_sync,CHUNK:hist_sync,GONE:hist_sync,REFUSED:hist_sync,RESUMED:hist_sync" {
 		t.Fatalf("each chunk is confirmed once, after it is stored or given up on: %v", receipts)
 	}
 	stop(t, cancel, done)
@@ -598,6 +619,8 @@ func TestClassifyHistoryDownload(t *testing.T) {
 		{fmt.Errorf("failed to download: %w", whatsmeow.ErrMediaDownloadFailedWith403), "http_403", true, true},
 		{errors.New("failed to decompress: zlib: invalid header"), "bad_blob", false, true},
 		{errors.New("failed to unmarshal: proto: cannot parse"), "bad_blob", false, true},
+		{whatsmeow.ErrInvalidMediaHMAC, "bad_blob", false, true},
+		{whatsmeow.DownloadHTTPError{Response: &http.Response{StatusCode: 500}}, "http_error", false, true},
 		{errors.New("websocket not connected"), "download_failed", false, false},
 	} {
 		code, final, countable := classifyHistoryDownload(tc.err)
@@ -647,3 +670,54 @@ func TestRequestedMediaIsDownloadedOnlyWhileConnected(t *testing.T) {
 	waitFor(t, "the queue drained", func() bool { return worker.done() == 3 })
 	stop(t, cancel, done)
 }
+
+func TestMergeContactsKeepsTheSavedName(t *testing.T) {
+	pn := types.NewJID("911111111111", types.DefaultUserServer)
+	lid := types.NewJID("100000000000001", types.HiddenUserServer)
+	stranger := types.NewJID("100000000000002", types.HiddenUserServer)
+	all := map[types.JID]types.ContactInfo{
+		pn:       {FullName: "Rahul Sharma", FirstName: "Rahul", PushName: "rahul.s"},
+		lid:      {PushName: "rahul.s", BusinessName: "Sharma Travels"},
+		stranger: {PushName: "Someone"},
+	}
+	for range 50 {
+		got := mergeContacts(all, map[types.JID]types.JID{pn: lid})
+		if len(got) != 2 {
+			t.Fatalf("want one entry per person, got %+v", got)
+		}
+		for _, c := range got {
+			switch c.Address.PN {
+			case pn.String():
+				want := ingest.ContactNames{
+					Address: ingest.Address{LID: lid.String(), PN: pn.String()},
+					Saved:   "Rahul Sharma", First: "Rahul", Push: "rahul.s", Business: "Sharma Travels", AddressBook: true,
+				}
+				if c != want {
+					t.Fatalf("got %+v", c)
+				}
+			case "":
+				if c.Address.LID != stranger.String() || c.AddressBook || c.Push != "Someone" {
+					t.Fatalf("a person known by LID alone must not clear a saved name: %+v", c)
+				}
+			default:
+				t.Fatalf("unexpected entry %+v", c)
+			}
+		}
+	}
+}
+
+func TestAPanickingSinkIsNeverAcknowledged(t *testing.T) {
+	made := &clients{}
+	c, _ := newTestConn(paired(), made)
+	c.sink = &panickySink{}
+	cancel, done := runInBackground(t, c)
+	waitFor(t, "first client", func() bool { return made.count() == 1 })
+	if made.get(0).emit(&events.Message{}) {
+		t.Fatal("a panic must not count as stored")
+	}
+	stop(t, cancel, done)
+}
+
+type panickySink struct{ fakeSink }
+
+func (*panickySink) Handle(context.Context, ingest.Own, any) bool { panic("bug") }
