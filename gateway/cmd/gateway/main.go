@@ -21,6 +21,7 @@ import (
 	"github.com/dhananjay6561/kaya/gateway/internal/httpapi"
 	"github.com/dhananjay6561/kaya/gateway/internal/ingest"
 	"github.com/dhananjay6561/kaya/gateway/internal/logging"
+	"github.com/dhananjay6561/kaya/gateway/internal/media"
 	"github.com/dhananjay6561/kaya/gateway/internal/store"
 	"github.com/dhananjay6561/kaya/gateway/internal/whatsapp"
 )
@@ -38,8 +39,11 @@ func main() {
 		case "pair":
 			exitOnError(pair(os.Args[2:]))
 			return
+		case "media":
+			exitOnError(mediaCommand(os.Args[2:]))
+			return
 		default:
-			exitOnError(fmt.Errorf("unknown command %q; the commands are healthcheck and pair", os.Args[1]))
+			exitOnError(fmt.Errorf("unknown command %q; the commands are healthcheck, pair and media", os.Args[1]))
 		}
 	}
 
@@ -111,6 +115,17 @@ func run(cfg config.Config, logger *slog.Logger) error {
 	conn := whatsapp.NewConn(whatsapp.NewSessions(sqlDB, whatsapp.NewLogger(logger)), ingester, logger)
 	ingester.NewGroup = conn.RequestGroupSync
 	ingester.HistoryQueued = conn.RequestHistory
+
+	files := media.NewFiles(cfg.DataDir)
+	ingester.RemoveFile = func(sha256 string) {
+		if err := files.Remove(sha256); err != nil {
+			logger.Warn("could not delete the file of a revoked message", logging.Err(err))
+		}
+	}
+	worker := media.NewWorker(db, files, logger, cfg.MediaMaxBytes, cfg.MediaMaxPerHour)
+	conn.SetMedia(worker)
+	go worker.Sweep(ctx)
+	go db.Listen(ctx, "media_requests", conn.RequestMedia)
 	connDone := make(chan error, 1)
 	go func() { connDone <- conn.Run(ctx) }()
 
@@ -132,6 +147,35 @@ func run(cfg config.Config, logger *slog.Logger) error {
 		return err
 	}
 	logger.Info("gateway stopped")
+	return nil
+}
+
+// mediaCommand implements `gateway media fetch <message id>`. It only talks to the database: the
+// running gateway, which holds the WhatsApp connection, does the download.
+func mediaCommand(args []string) error {
+	if len(args) != 2 || args[0] != "fetch" {
+		return errors.New("usage: gateway media fetch <message id>")
+	}
+	messageID, err := strconv.ParseInt(args[1], 10, 64)
+	if err != nil || messageID < 1 {
+		return errors.New("the message id is the number in messages.id")
+	}
+	cfg, err := loadConfig()
+	if err != nil {
+		return err
+	}
+	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
+	defer stop()
+	db, err := store.Open(cfg.DatabaseURL)
+	if err != nil {
+		return err
+	}
+	defer db.Close()
+	path, err := media.Fetch(ctx, db, media.NewFiles(cfg.DataDir), messageID, 2*time.Minute, time.Second)
+	if err != nil {
+		return err
+	}
+	fmt.Println(path)
 	return nil
 }
 
