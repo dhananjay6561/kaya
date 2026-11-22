@@ -2,6 +2,7 @@ package ingest
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"time"
@@ -14,8 +15,12 @@ import (
 
 // Applied says what storing a record did.
 type Applied struct {
-	// Changed is true when a message row was inserted or changed and an event was emitted.
+	// Changed is true when a message row was inserted or changed.
 	Changed bool
+	// NewChat is true when the record created its chat row.
+	NewChat bool
+	// Parked is true when an edit or revoke had no target yet and was kept for later.
+	Parked bool
 	// NewGroup is true when the record created a group chat row, whose name is not known yet.
 	NewGroup bool
 	// NoTarget is true when an edit, revoke or reaction pointed at a message that is not stored.
@@ -99,14 +104,24 @@ func (s *Store) Apply(ctx context.Context, tx pgx.Tx, rec Record) (Applied, erro
 	if err != nil {
 		return Applied{}, err
 	}
-	if err := s.setSeenNames(ctx, tx, senderID, rec.PushName, rec.BusinessName); err != nil {
+	if rec.Source == SourceHistory {
+		err = s.fillSeenNames(ctx, tx, senderID, rec.PushName, rec.BusinessName)
+	} else {
+		err = s.setSeenNames(ctx, tx, senderID, rec.PushName, rec.BusinessName)
+	}
+	if err != nil {
 		return Applied{}, err
 	}
 	switch rec.Op {
 	case OpStore:
 		return s.storeMessage(ctx, tx, rec, senderID)
 	case OpEdit, OpRevoke:
-		return s.changeMessage(ctx, tx, rec)
+		out, err := s.changeMessage(ctx, tx, rec)
+		if err == nil && out.NoTarget && rec.Source != SourceHistory {
+			out.Parked = true
+			err = s.park(ctx, tx, rec)
+		}
+		return out, err
 	case OpReact:
 		return s.react(ctx, tx, rec, senderID)
 	default:
@@ -128,12 +143,27 @@ func (s *Store) setSeenNames(ctx context.Context, tx pgx.Tx, contactID int64, pu
 	return nil
 }
 
+// fillSeenNames stores names only where none is stored: history carries names as they were then.
+func (s *Store) fillSeenNames(ctx context.Context, tx pgx.Tx, contactID int64, pushName, businessName string) error {
+	if pushName == "" && businessName == "" {
+		return nil
+	}
+	_, err := tx.Exec(ctx, `
+		UPDATE contacts SET push_name = COALESCE(push_name, NULLIF($2, '')), business_name = COALESCE(business_name, NULLIF($3, ''))
+		WHERE id = $1 AND ((push_name IS NULL AND $2 <> '') OR (business_name IS NULL AND $3 <> ''))`,
+		contactID, pushName, businessName)
+	if err != nil {
+		return fmt.Errorf("fill names: %w", err)
+	}
+	return nil
+}
+
 func (s *Store) storeMessage(ctx context.Context, tx pgx.Tx, rec Record, senderID int64) (Applied, error) {
 	chatID, created, err := s.ensureChat(ctx, tx, rec.Chat)
 	if err != nil {
 		return Applied{}, err
 	}
-	out := Applied{NewGroup: created && rec.Chat.Kind == ChatGroup}
+	out := Applied{NewChat: created, NewGroup: created && rec.Chat.Kind == ChatGroup}
 
 	var replyID *string
 	var replySender *int64
@@ -145,30 +175,98 @@ func (s *Store) storeMessage(ctx context.Context, tx pgx.Tx, rec Record, senderI
 		replyID, replySender = &rec.ReplyTo.WAID, &id
 	}
 
+	// A live copy of a message that history stored first becomes live, so core still hears of it.
 	var messageID int64
+	var inserted bool
 	err = tx.QueryRow(ctx, `
 		INSERT INTO messages (chat_id, wa_id, sender_id, from_me, sent_at, kind, body, reply_to_wa_id,
 			reply_to_sender_id, source, view_once, expires_at)
 		VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12)
-		ON CONFLICT (chat_id, wa_id, sender_id) DO NOTHING
-		RETURNING id`,
+		ON CONFLICT (chat_id, wa_id, sender_id) DO UPDATE SET source = 'live'
+			WHERE messages.source = 'history' AND EXCLUDED.source = 'live'
+		RETURNING id, xmax = 0`,
 		chatID, rec.WAID, senderID, rec.FromMe, rec.At, rec.Kind, rec.Body, replyID, replySender, rec.Source,
-		rec.ViewOnce, rec.ExpiresAt).Scan(&messageID)
+		rec.ViewOnce, rec.ExpiresAt).Scan(&messageID, &inserted)
 	if errors.Is(err, pgx.ErrNoRows) {
 		return out, nil
 	}
 	if err != nil {
 		return Applied{}, fmt.Errorf("store message: %w", err)
 	}
-	_, err = tx.Exec(ctx, "UPDATE chats SET last_message_at = $2 WHERE id = $1 AND (last_message_at IS NULL OR last_message_at < $2)", chatID, rec.At)
-	if err != nil {
-		return Applied{}, fmt.Errorf("update chat: %w", err)
-	}
 	out.Changed = true
+	if inserted {
+		_, err = tx.Exec(ctx, "UPDATE chats SET last_message_at = $2 WHERE id = $1 AND (last_message_at IS NULL OR last_message_at < $2)", chatID, rec.At)
+		if err != nil {
+			return Applied{}, fmt.Errorf("update chat: %w", err)
+		}
+	}
+	if rec.Source == SourceHistory {
+		return out, nil
+	}
 	return out, s.emit(ctx, tx, contracts.MessageStored{
 		MessageID: messageID, ChatID: chatID, SenderID: senderID, WAID: rec.WAID, FromMe: rec.FromMe,
-		Kind: rec.Kind, Source: rec.Source, Change: "new", SentAt: contracts.At(rec.At),
+		Kind: rec.Kind, Source: SourceLive, Change: "new", SentAt: contracts.At(rec.At),
 	})
+}
+
+func (s *Store) park(ctx context.Context, tx pgx.Tx, rec Record) error {
+	raw, err := json.Marshal(rec)
+	if err != nil {
+		return fmt.Errorf("encode parked change: %w", err)
+	}
+	if _, err := tx.Exec(ctx, "INSERT INTO pending_changes (record) VALUES ($1)", raw); err != nil {
+		return fmt.Errorf("park change: %w", err)
+	}
+	return nil
+}
+
+const parkedFor = 7 * 24 * time.Hour
+
+// ReplayParked applies the edits and revokes that were waiting for their message, and drops the
+// ones that have waited too long. It returns how many it applied.
+func (s *Store) ReplayParked(ctx context.Context, tx pgx.Tx) (int, error) {
+	if _, err := tx.Exec(ctx, "DELETE FROM pending_changes WHERE created_at < $1", time.Now().Add(-parkedFor)); err != nil {
+		return 0, fmt.Errorf("purge parked changes: %w", err)
+	}
+	rows, err := tx.Query(ctx, "SELECT id, record FROM pending_changes ORDER BY id")
+	if err != nil {
+		return 0, fmt.Errorf("read parked changes: %w", err)
+	}
+	type parked struct {
+		id  int64
+		rec Record
+	}
+	var all []parked
+	for rows.Next() {
+		var p parked
+		var raw []byte
+		if err := rows.Scan(&p.id, &raw); err != nil {
+			rows.Close()
+			return 0, err
+		}
+		if json.Unmarshal(raw, &p.rec) == nil {
+			all = append(all, p)
+		}
+	}
+	rows.Close()
+	if err := rows.Err(); err != nil {
+		return 0, err
+	}
+	applied := 0
+	for _, p := range all {
+		out, err := s.changeMessage(ctx, tx, p.rec)
+		if err != nil {
+			return applied, err
+		}
+		if out.NoTarget {
+			continue
+		}
+		if _, err := tx.Exec(ctx, "DELETE FROM pending_changes WHERE id = $1", p.id); err != nil {
+			return applied, fmt.Errorf("clear parked change: %w", err)
+		}
+		applied++
+	}
+	return applied, nil
 }
 
 func (s *Store) changeMessage(ctx context.Context, tx pgx.Tx, rec Record) (Applied, error) {
@@ -287,6 +385,8 @@ type ContactNames struct {
 	Business string
 	// AddressBook is true when Saved and First are authoritative, including when they are empty.
 	AddressBook bool
+	// FillOnly keeps a name that is already stored: for old names, such as those in a history sync.
+	FillOnly bool
 }
 
 // SetContactNames creates the contact if needed and writes the names that changed.
@@ -307,6 +407,9 @@ func (s *Store) SetContactNames(ctx context.Context, tx pgx.Tx, names ContactNam
 			return fmt.Errorf("store saved name: %w", err)
 		}
 	}
+	if names.FillOnly {
+		return s.fillSeenNames(ctx, tx, id, names.Push, names.Business)
+	}
 	return s.setSeenNames(ctx, tx, id, names.Push, names.Business)
 }
 
@@ -324,7 +427,11 @@ type DeadLetter struct {
 func (s *Store) AddDeadLetter(ctx context.Context, tx pgx.Tx, d DeadLetter) error {
 	_, err := tx.Exec(ctx, `
 		INSERT INTO ingest_dead (wa_id, chat_jid, sender_jid, error_code, info, raw)
-		VALUES (NULLIF($1, ''), NULLIF($2, ''), NULLIF($3, ''), $4, $5, $6)`,
+		SELECT NULLIF($1, ''), NULLIF($2, ''), NULLIF($3, ''), $4, $5, $6
+		WHERE NOT EXISTS (
+			SELECT FROM ingest_dead
+			WHERE wa_id IS NOT DISTINCT FROM NULLIF($1, '') AND chat_jid IS NOT DISTINCT FROM NULLIF($2, '')
+				AND sender_jid IS NOT DISTINCT FROM NULLIF($3, '') AND error_code = $4)`,
 		d.WAID, d.ChatJID, d.SenderJID, d.ErrorCode, d.Info, d.Raw)
 	if err != nil {
 		return fmt.Errorf("store dead letter: %w", err)

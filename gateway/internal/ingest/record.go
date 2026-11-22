@@ -10,6 +10,7 @@ import (
 	"go.mau.fi/whatsmeow/proto/waE2E"
 	"go.mau.fi/whatsmeow/types"
 	"go.mau.fi/whatsmeow/types/events"
+	"google.golang.org/protobuf/proto"
 	"google.golang.org/protobuf/reflect/protoreflect"
 )
 
@@ -87,6 +88,9 @@ type Record struct {
 
 	Target Target
 	Emoji  string
+
+	// raw is the message as WhatsApp sent it, kept only to make a dead letter if storing fails.
+	raw proto.Message
 }
 
 func skip(reason string) Record { return Record{Op: OpSkip, SkipReason: reason} }

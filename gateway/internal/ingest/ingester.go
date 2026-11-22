@@ -11,6 +11,7 @@ import (
 
 	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgconn"
+	"go.mau.fi/whatsmeow/proto/waE2E"
 	"go.mau.fi/whatsmeow/types"
 	"go.mau.fi/whatsmeow/types/events"
 	"google.golang.org/protobuf/proto"
@@ -33,6 +34,8 @@ type Ingester struct {
 
 	// NewGroup is called, if set, when a message arrives from a group that had no row yet.
 	NewGroup func()
+	// HistoryQueued is called, if set, when a history chunk was announced and queued.
+	HistoryQueued func()
 
 	attemptTimeout time.Duration
 	retryFirst     time.Duration
@@ -55,6 +58,9 @@ func NewIngester(db DB, store *Store, logger *slog.Logger) *Ingester {
 func (i *Ingester) Handle(ctx context.Context, own Own, evt any) bool {
 	switch e := evt.(type) {
 	case *events.Message:
+		if notification := e.Message.GetProtocolMessage().GetHistorySyncNotification(); notification != nil && e.Info.IsFromMe {
+			return i.historyAnnounced(ctx, e.Info.ID, notification)
+		}
 		return i.message(ctx, e.Info, e.RawMessage, func() Record { return FromMessage(e, own, SourceLive) })
 	case *events.UndecryptableMessage:
 		return i.message(ctx, e.Info, nil, func() Record { return FromUndecryptable(e, own) })
@@ -121,6 +127,32 @@ func (i *Ingester) SyncContacts(ctx context.Context, contacts []ContactNames) er
 	return nil
 }
 
+// historyAnnounced queues the chunk WhatsApp just announced. The announcement is acknowledged once
+// the job row is stored; downloading and storing the chunk happens afterwards.
+func (i *Ingester) historyAnnounced(ctx context.Context, waID string, notification *waE2E.HistorySyncNotification) bool {
+	raw, err := proto.Marshal(notification)
+	if err != nil || waID == "" {
+		i.logger.Error("a history announcement could not be queued", "error_code", "unreadable")
+		return true
+	}
+	job := HistoryJob{
+		WAID: waID, Notification: raw, SyncType: notification.GetSyncType().String(),
+		ChunkOrder: int(notification.GetChunkOrder()),
+	}
+	if notification.Progress != nil {
+		progress := int(min(notification.GetProgress(), 100))
+		job.Progress = &progress
+	}
+	result, _ := i.run(ctx, "history job", func(tx pgx.Tx) error { return i.store.AddHistoryJob(ctx, tx, job) })
+	if result == unavailable {
+		return false
+	}
+	if result == stored && i.HistoryQueued != nil {
+		i.HistoryQueued()
+	}
+	return true
+}
+
 func mergeAddress(base Address, others ...Address) Address {
 	for _, o := range others {
 		if base.LID == "" {
@@ -157,8 +189,8 @@ func (i *Ingester) message(ctx context.Context, info types.MessageInfo, raw prot
 		})
 		switch result {
 		case stored:
-			if applied.NoTarget {
-				i.logger.Info("dropped a change to a message that is not stored", "op", int(rec.Op))
+			if applied.Parked {
+				i.logger.Info("kept an edit or revoke for a message that is not stored yet")
 			}
 			if applied.NewGroup && i.NewGroup != nil {
 				i.NewGroup()
