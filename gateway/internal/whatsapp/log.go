@@ -5,11 +5,16 @@ import (
 	"context"
 	"fmt"
 	"log/slog"
+	"regexp"
 
+	waBinary "go.mau.fi/whatsmeow/binary"
 	waLog "go.mau.fi/whatsmeow/util/log"
 )
 
-// whatsmeow logs at debug level can include message contents, so they are never passed on.
+var jid = regexp.MustCompile(`[0-9]+(?:[.:-][0-9]+)*@(?:s\.whatsapp\.net|c\.us|lid|g\.us|broadcast|newsletter|bot|hosted(?:\.lid)?)\b`)
+
+// whatsmeow logs at debug level can include message contents, so they are never passed on. Other
+// lines name people by JID and sometimes dump raw protocol messages; both are masked.
 type logAdapter struct {
 	logger *slog.Logger
 }
@@ -23,7 +28,15 @@ func (l logAdapter) log(level slog.Level, msg string, args []any) {
 	if !l.logger.Enabled(context.Background(), level) {
 		return
 	}
-	l.logger.Log(context.Background(), level, fmt.Sprintf(msg, args...))
+	for i, arg := range args {
+		switch node := arg.(type) {
+		case *waBinary.Node:
+			args[i] = "<" + node.Tag + " node>"
+		case waBinary.Node:
+			args[i] = "<" + node.Tag + " node>"
+		}
+	}
+	l.logger.Log(context.Background(), level, jid.ReplaceAllString(fmt.Sprintf(msg, args...), "<jid>"))
 }
 
 func (l logAdapter) Errorf(msg string, args ...any) { l.log(slog.LevelError, msg, args) }
