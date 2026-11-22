@@ -304,6 +304,12 @@ BEGIN
     AND NOT has_table_privilege('kaya_gateway', 'connection_state', 'INSERT')
     AND NOT has_table_privilege('kaya_gateway', 'connection_state', 'UPDATE'), 'the gateway cannot touch core''s copy of the state';
 
+  ASSERT has_table_privilege('kaya_core', 'commands', 'SELECT, INSERT, UPDATE, DELETE'), 'core owns its command inbox';
+  ASSERT NOT has_table_privilege('kaya_gateway', 'commands', 'SELECT')
+    AND NOT has_table_privilege('kaya_gateway', 'commands', 'INSERT')
+    AND NOT has_table_privilege('kaya_gateway', 'commands', 'UPDATE')
+    AND NOT has_table_privilege('kaya_gateway', 'commands', 'DELETE'), 'the gateway cannot add or see commands';
+
   ASSERT has_table_privilege('kaya_gateway', 'media', 'SELECT, INSERT, UPDATE, DELETE'), 'the gateway writes media';
   ASSERT has_table_privilege('kaya_core', 'media', 'SELECT'), 'core reads media';
   ASSERT NOT has_table_privilege('kaya_core', 'media', 'INSERT')
@@ -468,6 +474,35 @@ BEGIN
   PERFORM pg_temp.expect_error(format($q$UPDATE send_requests SET wa_id = '3EB0OTHER' WHERE id = %L$q$, req), '23514');
   DELETE FROM send_requests WHERE id = req;
   ASSERT FOUND, 'the gateway removes finished requests';
+END
+$$;
+RESET ROLE;
+
+SET LOCAL ROLE kaya_core;
+DO $$
+DECLARE
+  cmd bigint;
+BEGIN
+  INSERT INTO commands (message_id, wa_id, sent_at) VALUES (900001, '3EB0COMMAND', now()) RETURNING id INTO cmd;
+  PERFORM 1 FROM commands WHERE id = cmd AND state = 'pending' AND attempts = 0 AND finished_at IS NULL;
+  ASSERT FOUND, 'a new command is pending';
+  PERFORM pg_temp.expect_error($q$INSERT INTO commands (message_id, wa_id, sent_at) VALUES (900001, '3EB0AGAIN', now())$q$, '23505');
+  INSERT INTO commands (message_id, wa_id, sent_at) VALUES (900001, '3EB0AGAIN', now()) ON CONFLICT (message_id) DO NOTHING;
+  PERFORM pg_temp.expect_error(format($q$UPDATE commands SET state = 'done' WHERE id = %s$q$, cmd), '23514');
+  PERFORM pg_temp.expect_error(format($q$UPDATE commands SET state = 'failed', finished_at = now() WHERE id = %s$q$, cmd), '23514');
+  PERFORM pg_temp.expect_error(format($q$UPDATE commands SET state = 'running' WHERE id = %s$q$, cmd), '23514');
+  PERFORM pg_temp.expect_error(format($q$UPDATE commands SET attempts = -1 WHERE id = %s$q$, cmd), '23514');
+  UPDATE commands SET attempts = attempts + 1 WHERE id = cmd;
+  UPDATE commands SET state = 'failed', error = 'handler_failed', finished_at = now() WHERE id = cmd;
+  DELETE FROM commands WHERE id = cmd;
+END
+$$;
+
+SET LOCAL ROLE kaya_gateway;
+DO $$
+BEGIN
+  PERFORM pg_temp.expect_error('SELECT count(*) FROM commands', '42501');
+  PERFORM pg_temp.expect_error($q$INSERT INTO commands (message_id, wa_id, sent_at) VALUES (900002, '3EB0FORGED', now())$q$, '42501');
 END
 $$;
 RESET ROLE;
