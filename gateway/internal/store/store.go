@@ -9,6 +9,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgxpool"
 	"github.com/jackc/pgx/v5/stdlib"
 )
@@ -71,6 +72,11 @@ func (db *DB) Check(ctx context.Context) error {
 		return fmt.Errorf("query db: %w", err)
 	}
 	return nil
+}
+
+// InTx runs fn in a transaction, committing when it returns nil and rolling back otherwise.
+func (db *DB) InTx(ctx context.Context, fn func(pgx.Tx) error) error {
+	return pgx.BeginFunc(ctx, db.pool, fn)
 }
 
 // SQL returns a database/sql handle that borrows connections from the same pool, for libraries that need one.
