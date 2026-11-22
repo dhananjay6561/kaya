@@ -56,7 +56,7 @@ func (s *Store) AddHistoryJob(ctx context.Context, tx pgx.Tx, job HistoryJob) er
 
 // NextHistoryJob returns the oldest job that still needs work, or nil. Jobs that have waited too
 // long are given up on first, since WhatsApp no longer holds their data.
-func (s *Store) NextHistoryJob(ctx context.Context, tx pgx.Tx) (*HistoryJob, error) {
+func (s *Store) NextHistoryJob(ctx context.Context, tx pgx.Tx, skip []int64) (*HistoryJob, error) {
 	_, err := tx.Exec(ctx, `
 		UPDATE history_jobs SET state = 'dead', notification = NULL, error_code = 'waited_too_long', finished_at = now()
 		WHERE state = 'pending' AND created_at < $1`, time.Now().Add(-historyMaxWait))
@@ -67,7 +67,7 @@ func (s *Store) NextHistoryJob(ctx context.Context, tx pgx.Tx) (*HistoryJob, err
 	var chunkOrder *int
 	err = tx.QueryRow(ctx, `
 		SELECT id, wa_id, notification, sync_type, chunk_order, progress, state FROM history_jobs
-		WHERE state IN ('pending', 'stored') ORDER BY id LIMIT 1`).
+		WHERE state IN ('pending', 'stored') AND id <> ALL($1) ORDER BY id LIMIT 1`, skip).
 		Scan(&job.ID, &job.WAID, &job.Notification, &job.SyncType, &chunkOrder, &job.Progress, &job.State)
 	if errors.Is(err, pgx.ErrNoRows) {
 		return nil, nil
@@ -165,11 +165,15 @@ func (s *Store) finishHistoryJob(ctx context.Context, tx pgx.Tx, job *HistoryJob
 	return s.outbox.Add(ctx, tx, event)
 }
 
-// NextHistoryJob returns the oldest history job that still needs work, or nil.
-func (i *Ingester) NextHistoryJob(ctx context.Context) (*HistoryJob, error) {
+// NextHistoryJob returns the oldest history job that still needs work, or nil. Jobs in skip are
+// passed over: the caller is waiting before trying them again.
+func (i *Ingester) NextHistoryJob(ctx context.Context, skip []int64) (*HistoryJob, error) {
+	if skip == nil {
+		skip = []int64{}
+	}
 	var job *HistoryJob
 	err := i.db.InTx(ctx, func(tx pgx.Tx) (err error) {
-		job, err = i.store.NextHistoryJob(ctx, tx)
+		job, err = i.store.NextHistoryJob(ctx, tx, skip)
 		return err
 	})
 	return job, scrub(err)

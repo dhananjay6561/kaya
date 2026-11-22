@@ -49,7 +49,7 @@ func history() *waHistorySync.HistorySync {
 
 func nextJob(t *testing.T, i *Ingester) *HistoryJob {
 	t.Helper()
-	job, err := i.NextHistoryJob(context.Background())
+	job, err := i.NextHistoryJob(context.Background(), nil)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -364,5 +364,21 @@ func TestARefusedAnnouncementIsKept(t *testing.T) {
 	}
 	if n := f.count("SELECT count(*) FROM ingest_dead WHERE error_code = 'history_22021' AND length(raw) > 0"); n != 1 {
 		t.Fatalf("the announcement must be kept as a dead letter, got %d", n)
+	}
+}
+
+func TestAWaitingJobDoesNotBlockTheOnesBehindIt(t *testing.T) {
+	f := newFixture(t)
+	i, _ := newIngester(f, f.gateway)
+	ctx := context.Background()
+	i.Handle(ctx, own, announcement(t, "HIST1", 10))
+	i.Handle(ctx, own, announcement(t, "HIST2", 20))
+	first := nextJob(t, i)
+	second, err := i.NextHistoryJob(ctx, []int64{first.ID})
+	if err != nil || second == nil || second.WAID != "HIST2" {
+		t.Fatalf("got %+v, %v", second, err)
+	}
+	if none, _ := i.NextHistoryJob(ctx, []int64{first.ID, second.ID}); none != nil {
+		t.Fatalf("got %+v", none)
 	}
 }
