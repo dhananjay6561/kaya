@@ -280,13 +280,19 @@ BEGIN
   ASSERT has_table_privilege('kaya_core', 'gateway_events', 'SELECT, UPDATE, DELETE'), 'core consumes events';
   ASSERT NOT has_table_privilege('kaya_core', 'gateway_events', 'INSERT'), 'core never adds events';
 
-  FOREACH t IN ARRAY ARRAY['ingest_dead', 'history_jobs', 'pending_changes'] LOOP
+  FOREACH t IN ARRAY ARRAY['ingest_dead', 'history_jobs', 'pending_changes', 'media_keys', 'media_requests'] LOOP
     ASSERT has_table_privilege('kaya_gateway', t, 'SELECT, INSERT, UPDATE, DELETE'), 'the gateway owns ' || t;
     ASSERT NOT has_table_privilege('kaya_core', t, 'SELECT')
       AND NOT has_table_privilege('kaya_core', t, 'INSERT')
       AND NOT has_table_privilege('kaya_core', t, 'UPDATE')
       AND NOT has_table_privilege('kaya_core', t, 'DELETE'), 'core cannot touch ' || t;
   END LOOP;
+
+  ASSERT has_table_privilege('kaya_gateway', 'media', 'SELECT, INSERT, UPDATE, DELETE'), 'the gateway writes media';
+  ASSERT has_table_privilege('kaya_core', 'media', 'SELECT'), 'core reads media';
+  ASSERT NOT has_table_privilege('kaya_core', 'media', 'INSERT')
+    AND NOT has_table_privilege('kaya_core', 'media', 'UPDATE')
+    AND NOT has_table_privilege('kaya_core', 'media', 'DELETE'), 'core never writes media';
 
   ASSERT has_schema_privilege('kaya_gateway', 'whatsmeow', 'CREATE, USAGE'), 'the gateway owns the whatsmeow schema';
   ASSERT NOT has_schema_privilege('kaya_core', 'whatsmeow', 'USAGE'), 'core cannot look inside the whatsmeow schema';
@@ -353,6 +359,37 @@ BEGIN
   PERFORM pg_temp.expect_error(format($q$UPDATE history_jobs SET state = 'paused', notification = NULL WHERE id = %s$q$, job), '23514');
   UPDATE history_jobs SET state = 'stored', notification = NULL WHERE id = job;
   UPDATE history_jobs SET state = 'done' WHERE id = job;
+END
+$$;
+
+DO $$
+DECLARE
+  dj bigint := contact_id_for(NULL, '919000000000@s.whatsapp.net');
+  chat bigint;
+  msg bigint;
+  sha text := repeat('ab', 32);
+BEGIN
+  INSERT INTO chats (kind, jid) VALUES ('group', '120363333333333333@g.us') RETURNING id INTO chat;
+  INSERT INTO messages (chat_id, wa_id, sender_id, from_me, sent_at, kind, source)
+  VALUES (chat, 'TESTMEDIA1', dj, true, now(), 'voice', 'live') RETURNING id INTO msg;
+
+  INSERT INTO media (message_id, mime_type, size_bytes, duration_s, sha256) VALUES (msg, 'audio/ogg', 4096, 7, sha);
+  INSERT INTO media_keys (message_id, media_key, direct_path, file_enc_sha256, media_type) VALUES (msg, '\x01', '/v/t62/x', '\x02', 'audio');
+  INSERT INTO media_requests (message_id) VALUES (msg);
+
+  PERFORM pg_temp.expect_error(format($q$UPDATE media SET state = 'stored' WHERE message_id = %s$q$, msg), '23514');
+  PERFORM pg_temp.expect_error(format($q$UPDATE media SET state = 'gone' WHERE message_id = %s$q$, msg), '23514');
+  PERFORM pg_temp.expect_error(format($q$UPDATE media SET sha256 = 'ABC' WHERE message_id = %s$q$, msg), '23514');
+  PERFORM pg_temp.expect_error(format($q$UPDATE media_keys SET media_type = 'sticker' WHERE message_id = %s$q$, msg), '23514');
+  PERFORM pg_temp.expect_error(format($q$INSERT INTO media_requests (message_id) VALUES (%s)$q$, msg), '23505');
+  PERFORM pg_temp.expect_error($q$INSERT INTO media_requests (message_id) VALUES (-1)$q$, '23503');
+  UPDATE media SET state = 'stored', stored_at = now() WHERE message_id = msg;
+
+  DELETE FROM messages WHERE id = msg;
+  PERFORM 1 FROM media_keys WHERE message_id = msg;
+  ASSERT NOT FOUND, 'deleting a message deletes its media, keys and requests';
+  PERFORM 1 FROM media_requests WHERE message_id = msg;
+  ASSERT NOT FOUND;
 END
 $$;
 
