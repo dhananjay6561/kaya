@@ -14,6 +14,7 @@ import (
 	waLog "go.mau.fi/whatsmeow/util/log"
 
 	"github.com/dhananjay6561/kaya/gateway/internal/logging"
+	"github.com/dhananjay6561/kaya/gateway/internal/testdb"
 )
 
 func TestNormalizePhone(t *testing.T) {
@@ -138,7 +139,7 @@ func TestCancellingAfterTheLinkSaysSo(t *testing.T) {
 }
 
 func TestPairRefusesWhenASessionIsStored(t *testing.T) {
-	db := testDB(t)
+	db := testdb.New(t)
 	ctx := context.Background()
 	sqlDB := db.SQL()
 	defer func() { _ = sqlDB.Close() }()
