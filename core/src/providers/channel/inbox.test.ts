@@ -68,6 +68,7 @@ describe("command inbox", { skip: !testDatabaseUrl && "TEST_DATABASE_URL not set
     change: "new" | "edited" | "deleted";
     body: string | null;
     deleted: boolean;
+    forwarded: boolean;
     sentAt: Date;
   }>;
 
@@ -76,8 +77,8 @@ describe("command inbox", { skip: !testDatabaseUrl && "TEST_DATABASE_URL not set
     const waId = `3EB0TEST${String(++next).padStart(4, "0")}`;
     const sentAt = fixture.sentAt ?? new Date();
     const { rows } = await testDb.admin.query<{ id: string }>(
-      `INSERT INTO messages (chat_id, wa_id, sender_id, from_me, sent_at, kind, body, source, deleted_at)
-       VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9) RETURNING id`,
+      `INSERT INTO messages (chat_id, wa_id, sender_id, from_me, sent_at, kind, body, source, deleted_at, forwarded)
+       VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10) RETURNING id`,
       [
         fixture.chat ?? selfChat,
         waId,
@@ -88,6 +89,7 @@ describe("command inbox", { skip: !testDatabaseUrl && "TEST_DATABASE_URL not set
         fixture.body === undefined ? "do the thing" : fixture.body,
         fixture.source ?? "live",
         fixture.deleted ? new Date() : null,
+        fixture.forwarded ?? false,
       ],
     );
     return {
@@ -137,6 +139,10 @@ describe("command inbox", { skip: !testDatabaseUrl && "TEST_DATABASE_URL not set
       "a deletion": await message({ change: "deleted" }),
       "a photo": await message({ kind: "image", body: "a caption" }),
       "a message deleted before it was looked at": await message({ deleted: true }),
+      "someone else's words, forwarded by DJ to himself": await message({ forwarded: true }),
+      "a message from two days ago, only handled now": await message({
+        sentAt: new Date(Date.now() - 2 * 24 * 60 * 60_000),
+      }),
     };
     for (const [what, stored] of Object.entries(cases)) {
       assert.equal(await record(stored), false, what);
@@ -168,8 +174,14 @@ describe("command inbox", { skip: !testDatabaseUrl && "TEST_DATABASE_URL not set
   });
 
   function started(
-    deliver: (message: IncomingMessage) => Promise<void>,
-    options: { maxAttempts?: number } = {},
+    deliver: (message: IncomingMessage, signal: AbortSignal) => Promise<void>,
+    options: {
+      maxAttempts?: number;
+      maxPerMinute?: number;
+      retentionMs?: number;
+      purgeEveryMs?: number;
+    } = {},
+    ready: () => boolean = () => true,
   ): Inbox {
     inbox = createInbox({
       pool: core,
@@ -179,12 +191,22 @@ describe("command inbox", { skip: !testDatabaseUrl && "TEST_DATABASE_URL not set
       maxRetryMs: 20,
       ...options,
     });
-    inbox.start(deliver);
+    inbox.start(deliver, ready);
     return inbox;
   }
 
-  it("hands commands over oldest first, one at a time, with the text and when it was sent", async () => {
-    const sentAt = new Date("2026-11-23T09:00:00Z");
+  const attempts = async () =>
+    (
+      await testDb.admin.query<{ attempts: number }>("SELECT attempts FROM commands ORDER BY id")
+    ).rows.map((row) => row.attempts);
+
+  const untilStopped = (signal: AbortSignal) =>
+    new Promise<void>((_, reject) => {
+      signal.addEventListener("abort", () => reject(signal.reason), { once: true });
+    });
+
+  it("hands commands over oldest first, one at a time, with the text and both times", async () => {
+    const sentAt = new Date(Date.now() - 5 * 60_000);
     const first = await message({ body: "  first  ", sentAt });
     const second = await message({ body: "second" });
     await record(first);
@@ -200,10 +222,19 @@ describe("command inbox", { skip: !testDatabaseUrl && "TEST_DATABASE_URL not set
       running--;
     });
     await eventually("both commands", async () => seen.length === 2);
-    assert.deepEqual(seen, [
-      { id: first.wa_id, text: "first", receivedAt: sentAt },
-      { id: second.wa_id, text: "second", receivedAt: new Date(second.sent_at) },
-    ]);
+    assert.deepEqual(
+      seen.map((m) => [m.id, m.text]),
+      [
+        [first.wa_id, "first"],
+        [second.wa_id, "second"],
+      ],
+    );
+    assert.deepEqual(seen[0]?.sentAt, sentAt);
+    const takenIn = seen[0]?.receivedAt.getTime() ?? 0;
+    assert.ok(
+      Math.abs(takenIn - Date.now()) < 60_000,
+      "receivedAt is when core recorded the command",
+    );
     assert.equal(overlapped, false);
     await eventually("both marked done", async () =>
       (await commands()).every((c) => c.endsWith("done")),
@@ -219,6 +250,26 @@ describe("command inbox", { skip: !testDatabaseUrl && "TEST_DATABASE_URL not set
     await record(await message({ body: "typed just now" }));
     box.wake();
     await eventually("the command, without waiting for the poll", async () => seen.length === 1);
+  });
+
+  it("keeps commands waiting while nobody is there to handle them", async () => {
+    const typed = await message();
+    await record(typed);
+    let ready = false;
+    const seen: string[] = [];
+    const box = started(
+      async (incoming) => {
+        seen.push(incoming.id);
+      },
+      {},
+      () => ready,
+    );
+    await new Promise((resolve) => setTimeout(resolve, 40));
+    assert.deepEqual(await commands(), [`${typed.wa_id} pending`]);
+    assert.deepEqual(await attempts(), [0]);
+    ready = true;
+    box.wake();
+    await eventually("the command once a handler exists", async () => seen.length === 1);
   });
 
   it("marks a failed command and carries on with the next", async () => {
@@ -246,34 +297,85 @@ describe("command inbox", { skip: !testDatabaseUrl && "TEST_DATABASE_URL not set
     ]);
   });
 
-  it("runs a command again after a restart, and gives up on one that never finishes", async () => {
-    const typed = await message({ body: "interrupted twice" });
-    await record(typed);
+  it("drops commands that come faster than a person types", async () => {
+    const typed = [];
+    for (let i = 0; i < 5; i++) typed.push(await message({ body: `command ${i}` }));
+    for (const stored of typed) await record(stored);
+    const seen: string[] = [];
+    started(
+      async (incoming) => {
+        seen.push(incoming.text);
+      },
+      { maxPerMinute: 3 },
+    );
+    await eventually("all five to be settled", async () =>
+      (await commands()).every((c) => !c.endsWith("pending")),
+    );
+    assert.deepEqual(seen, ["command 0", "command 1", "command 2"]);
+    assert.deepEqual(
+      (await commands()).map((c) => c.split(" ").slice(1).join(" ")),
+      ["done", "done", "done", "failed rate_limited", "failed rate_limited"],
+    );
+  });
 
-    for (let run = 1; run <= 2; run++) {
-      let entered = false;
-      const box = started(
-        () =>
-          new Promise<void>(() => {
-            entered = true;
-          }),
-        { maxAttempts: 2 },
-      );
-      await eventually(`run ${run} to start on it`, async () => entered);
-      const stopping = box.stop();
-      await Promise.race([stopping, new Promise((resolve) => setTimeout(resolve, 50))]);
-      inbox = undefined;
-      assert.deepEqual(
-        await commands(),
-        [`${typed.wa_id} pending`],
-        "an unfinished command stays pending",
-      );
+  it("runs each command in one worker even when two are started", async () => {
+    for (let i = 0; i < 6; i++) await record(await message({ body: `command ${i}` }));
+    const calls: string[] = [];
+    const deliver = async (incoming: IncomingMessage) => {
+      calls.push(incoming.text);
+      await new Promise((resolve) => setTimeout(resolve, 5));
+    };
+    const one = createInbox({ pool: core, logger, pollMs: 10, retryMs: 5 });
+    const two = createInbox({ pool: core, logger, pollMs: 10, retryMs: 5 });
+    one.start(deliver);
+    two.start(deliver);
+    try {
+      await eventually("all six", async () => (await commands()).every((c) => c.endsWith("done")));
+      assert.equal(calls.length, 6, `each command must run once, got ${calls.join(", ")}`);
+      assert.deepEqual(await attempts(), [1, 1, 1, 1, 1, 1]);
+    } finally {
+      await one.stop();
+      await two.stop();
     }
+  });
 
-    started(async () => {}, { maxAttempts: 2 });
+  it("stops at once, and an orderly stop never counts against the command", async () => {
+    const typed = await message({ body: "waiting on a reply" });
+    await record(typed);
+    for (let run = 1; run <= 7; run++) {
+      let entered = false;
+      const box = started(async (_incoming, signal) => {
+        entered = true;
+        await untilStopped(signal);
+      });
+      await eventually(`run ${run} to start on it`, async () => entered);
+      const began = performance.now();
+      await box.stop();
+      assert.ok(
+        performance.now() - began < 1_000,
+        "stop must not wait for the handler's own patience",
+      );
+      inbox = undefined;
+    }
+    assert.deepEqual(await commands(), [`${typed.wa_id} pending`]);
+    assert.deepEqual(await attempts(), [0]);
+  });
+
+  it("gives up on a command that was started too many times without finishing", async () => {
+    const typed = await message({ body: "crashes core every time" });
+    await record(typed);
+    await testDb.admin.query("UPDATE commands SET attempts = 2");
+    let ran = false;
+    started(
+      async () => {
+        ran = true;
+      },
+      { maxAttempts: 2 },
+    );
     await eventually("the command to be given up on", async () =>
       (await commands())[0]?.endsWith("failed interrupted"),
     );
+    assert.equal(ran, false);
   });
 
   it("leaves the command pending when the database goes away mid-way, and finishes it later", async () => {
@@ -281,10 +383,38 @@ describe("command inbox", { skip: !testDatabaseUrl && "TEST_DATABASE_URL not set
     await record(typed);
     let calls = 0;
     started(async () => {
-      if (++calls === 1)
+      if (++calls === 1) {
         throw Object.assign(new Error("Connection terminated unexpectedly"), { code: "08006" });
+      }
     });
     await eventually("the retry", async () => (await commands())[0]?.endsWith("done"));
     assert.equal(calls, 2);
+    assert.deepEqual(await attempts(), [1], "an outage is not the command's fault");
+  });
+
+  it("deletes finished commands after a while and keeps the unfinished", async () => {
+    const done = await message({ body: "done long ago" });
+    await record(done);
+    started(
+      async () => {},
+      { retentionMs: 0, purgeEveryMs: 0 },
+      () => true,
+    );
+    await eventually(
+      "the finished command to be deleted",
+      async () => (await commands()).length === 0,
+    );
+    await inbox?.stop();
+    inbox = undefined;
+
+    const kept = await message({ body: "still to do" });
+    await record(kept);
+    started(
+      async () => {},
+      { retentionMs: 0, purgeEveryMs: 0 },
+      () => false,
+    );
+    await new Promise((resolve) => setTimeout(resolve, 40));
+    assert.deepEqual(await commands(), [`${kept.wa_id} pending`]);
   });
 });

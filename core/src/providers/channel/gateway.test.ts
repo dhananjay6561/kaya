@@ -257,6 +257,33 @@ describe("gateway channel", { skip: !testDatabaseUrl && "TEST_DATABASE_URL not s
     await assert.rejects(sending, /gave up/);
   });
 
+  it("ends a wait at once when the channel stops", async () => {
+    await linked();
+    const c = await channel({ pollMs: 60_000 });
+    const sending = c.send({ idempotencyKey: "interrupted by a stop", text: "hi" });
+    sending.catch(() => {});
+    await eventually("the queued request", async () => (await queued()).length === 1);
+    const began = performance.now();
+    await c.stop();
+    await assert.rejects(sending, ChannelNotStartedError);
+    assert.ok(performance.now() - began < 1_000);
+    assert.equal((await queued())[0]?.state, "pending", "the request itself stays queued");
+  });
+
+  it("lets one message set how long it stays worth sending", async () => {
+    await linked();
+    const c = await channel();
+    const sending = c.send({ idempotencyKey: "short-lived", text: "hi" }, { ttlMs: 45_000 });
+    sending.catch(() => {});
+    const [row] = await eventually("the queued request", async () => {
+      const rows = await queued();
+      return rows.length > 0 && rows;
+    });
+    const request = contracts.parseSendRequest(row?.payload);
+    assert.equal(Date.parse(request.expires_at) - Date.parse(request.created_at), 45_000);
+    await c.stop();
+  });
+
   it("refuses to send before an account is linked, before start and when empty", async () => {
     const c = await channel();
     await assert.rejects(c.send({ idempotencyKey: "k", text: "hi" }), GatewayNotLinkedError);
