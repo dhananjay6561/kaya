@@ -1,7 +1,8 @@
 # Kaya — architecture
 
-How the code is organised and the standards every change follows. Deployment and hardware are in
-`INFRA.md`; the reasons behind each choice are in `DECISIONS.md`.
+How the code is organised and the standards every change follows. The reasons behind each choice
+are in `DECISIONS.md`. The feature spec, the phase-by-phase build plan and the hosting notes are
+kept outside this repository.
 
 ## Services
 

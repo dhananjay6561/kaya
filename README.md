@@ -42,8 +42,8 @@ contact, and it works with everything your WhatsApp account can see.
   a dedicated Linux laptop at home, reachable only over Tailscale.
 - **Split by job.** A Go service owns the WhatsApp connection, a TypeScript service is the agent, and
   they share one Postgres database. Each can be restarted, updated or replaced on its own.
-- **Built in small phases.** Every phase ships with tests and a clear "done when" check, tracked in
-  [docs/PHASES.md](docs/PHASES.md).
+- **Built in small phases.** Every phase ships with tests and a clear "done when" check. Stage
+  status is in the [roadmap](#project-status-and-roadmap).
 
 ## Features
 
@@ -99,8 +99,8 @@ In build order. Status for each stage is in the [roadmap](#project-status-and-ro
 
 ## Safety and privacy principles
 
-Kaya can read private chats and will act on logged-in accounts, so every phase follows these rules
-from [docs/SPEC.md](docs/SPEC.md):
+Kaya can read private chats and will act on logged-in accounts, so every phase follows these
+rules:
 
 1. **Confirm before acting outward.** Kaya never messages anyone else, spends money or places a call
    without your "yes" on WhatsApp.
@@ -497,10 +497,9 @@ Tests use made-up data, never real chats.
 
 ## Project status and roadmap
 
-<!-- The single place for stage status in this README. Phase-level status lives in docs/PHASES.md. -->
+<!-- The single place for stage status in this README. -->
 
-Kaya is built in 17 stages of small phases. Phase-by-phase detail and "done when" checks are in
-[docs/PHASES.md](docs/PHASES.md).
+Kaya is built in 17 stages of small phases.
 
 Status key: ✅ done · 🟨 in progress · ⬜ not started
 
@@ -528,11 +527,8 @@ Status key: ✅ done · 🟨 in progress · ⬜ not started
 
 | Document | What it covers |
 |---|---|
-| [docs/SPEC.md](docs/SPEC.md) | What Kaya does, feature areas and the safety rules |
 | [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md) | Services, repo layout, how services talk, engineering standards |
-| [docs/INFRA.md](docs/INFRA.md) | Environments, networking, data layout, host setup |
 | [docs/DECISIONS.md](docs/DECISIONS.md) | Every settled decision with its reason, plus open questions |
-| [docs/PHASES.md](docs/PHASES.md) | The build plan in small phases, with live status |
 | [contracts/README.md](contracts/README.md) | The gateway and core contracts, and how to change them |
 
 ## Contributing
