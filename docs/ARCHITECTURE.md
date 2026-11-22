@@ -172,6 +172,11 @@ Folders appear when a phase needs them; empty placeholders are not committed.
   - Every outward action (`send`, `placeCall`) takes a required `idempotencyKey`. A repeated key
     returns the first result and never acts twice. Stubs never report that an outward action
     happened.
+- **Metrics (from stage 15):** every service exposes `GET /metrics` in Prometheus format on its
+  existing HTTP port. Names start with `kaya_` and carry the unit (`kaya_ingest_delay_seconds`).
+  Labels hold only small fixed sets (service, kind, state, outcome): never a JID, a name, a chat id
+  or message text, both for privacy and because every distinct label value is a new time series.
+  Counters for what happened, gauges for what is waiting, histograms for how long things took.
 - **Logging:** structured JSON to stdout, one logger per service (pino in core, `log/slog` in Go).
   Every line has `time`, `level`, `msg`, `service` and `version`. A request id travels in the
   `X-Request-Id` header and appears on every log line for that request. Errors are logged with an
