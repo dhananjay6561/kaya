@@ -106,9 +106,10 @@ type Conn struct {
 	logger    *slog.Logger
 	newClient func(*store.Device) client
 
-	minBackoff time.Duration
-	maxBackoff time.Duration
-	storeRetry time.Duration
+	minBackoff  time.Duration
+	maxBackoff  time.Duration
+	stableAfter time.Duration
+	storeRetry  time.Duration
 
 	publisher       Publisher
 	publishAsk      chan struct{}
@@ -137,6 +138,7 @@ type Conn struct {
 	status        Status
 	announced     bool
 	unpublished   []contracts.Event
+	connectedAt   time.Time
 	current       client
 	device        *store.Device
 	historyWaits  map[int64]historyWait
@@ -163,6 +165,7 @@ func NewConn(sessions *Sessions, sink Sink, logger *slog.Logger) *Conn {
 		},
 		minBackoff:        time.Second,
 		maxBackoff:        time.Minute,
+		stableAfter:       time.Minute,
 		storeRetry:        time.Minute,
 		publishAsk:        make(chan struct{}, 1),
 		publishRetry:      time.Second,
@@ -197,9 +200,9 @@ func (c *Conn) Status() Status {
 // Run connects with the stored session and keeps it connected until ctx is done. Without a session
 // it waits, since pairing happens in a separate `gateway pair` run that restarts the service.
 // whatsmeow reconnects by itself after ordinary drops; Run starts a new connection, with backoff,
-// when the first attempt fails or whatsmeow gives up (a refused connection or a temporary ban). It
-// stops trying when the phone logged Kaya out, the session is in use elsewhere, or the client is
-// too old.
+// when the first attempt fails or whatsmeow gives up (a refused connection or a temporary ban). The
+// wait doubles after each failure and starts over once a connection has held for a while. It stops
+// trying when the phone logged Kaya out, the session is in use elsewhere, or the client is too old.
 func (c *Conn) Run(ctx context.Context) error {
 	if c.publisher != nil {
 		stop, done := make(chan struct{}), make(chan struct{})
@@ -238,6 +241,9 @@ func (c *Conn) Run(ctx context.Context) error {
 				<-ctx.Done()
 				return nil
 			}
+			if c.wasStable() {
+				backoff = c.minBackoff
+			}
 			wait = max(end.retryAfter, backoff)
 		}
 		select {
@@ -260,6 +266,13 @@ func (c *Conn) waitForEnd(ctx context.Context) (ending, bool) {
 			}
 		}
 	}
+}
+
+// wasStable reports whether the current connection stayed up long enough to count as working.
+func (c *Conn) wasStable() bool {
+	c.mu.RLock()
+	defer c.mu.RUnlock()
+	return !c.connectedAt.IsZero() && time.Since(c.connectedAt) >= c.stableAfter
 }
 
 func (c *Conn) disconnect(cli client) {
@@ -287,7 +300,7 @@ func (c *Conn) connect(ctx context.Context) (client, error) {
 	generation := c.generation.Add(1)
 	cli := c.newClient(device)
 	c.mu.Lock()
-	c.current, c.device = cli, device
+	c.current, c.device, c.connectedAt = cli, device, time.Time{}
 	c.mu.Unlock()
 	cli.AddEventHandlerWithSuccessStatus(func(evt any) bool {
 		return c.receive(ctx, generation, evt)
@@ -727,6 +740,11 @@ func (c *Conn) end(generation uint64, e ending) {
 func (c *Conn) handle(generation uint64, evt any) {
 	switch e := evt.(type) {
 	case *events.Connected:
+		c.mu.Lock()
+		if c.connectedAt.IsZero() {
+			c.connectedAt = time.Now()
+		}
+		c.mu.Unlock()
 		c.set(contracts.StateConnected, "")
 		c.logger.Info("whatsapp connected")
 	case *events.Disconnected:
