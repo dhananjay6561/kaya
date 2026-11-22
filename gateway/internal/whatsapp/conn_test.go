@@ -25,6 +25,7 @@ import (
 	"github.com/dhananjay6561/kaya/gateway/internal/ingest"
 	"github.com/dhananjay6561/kaya/gateway/internal/logging"
 	"github.com/dhananjay6561/kaya/gateway/internal/media"
+	"github.com/dhananjay6561/kaya/gateway/internal/send"
 )
 
 type fakeLoader struct {
@@ -70,6 +71,12 @@ func (f *fakeClient) DownloadHistorySync(context.Context, *waE2E.HistorySyncNoti
 
 func (f *fakeClient) DownloadMediaWithPathToFile(context.Context, string, []byte, []byte, []byte, whatsmeow.MediaType, string, bool, whatsmeow.File) error {
 	return nil
+}
+
+func (f *fakeClient) GenerateMessageID() types.MessageID { return "3EB0TEST" }
+
+func (f *fakeClient) SendMessage(context.Context, types.JID, *waE2E.Message, ...whatsmeow.SendRequestExtra) (whatsmeow.SendResponse, error) {
+	return whatsmeow.SendResponse{}, nil
 }
 
 func (f *fakeClient) ParseWebMessage(types.JID, *waWeb.WebMessageInfo) (*events.Message, error) {
@@ -318,6 +325,7 @@ func newTestConn(loader sessionLoader, made *clients) (*Conn, *bytes.Buffer) {
 	c.historyPoll = 10 * time.Millisecond
 	c.historyRetry = 2 * time.Millisecond
 	c.mediaPoll = 10 * time.Millisecond
+	c.sendPoll = 10 * time.Millisecond
 	c.groupSyncDebounce = 5 * time.Millisecond
 	c.groupSyncMinGap = 30 * time.Millisecond
 	return c, &buf
@@ -749,3 +757,63 @@ func TestAPanickingSinkIsNeverAcknowledged(t *testing.T) {
 type panickySink struct{ fakeSink }
 
 func (*panickySink) Handle(context.Context, ingest.Own, any) bool { panic("bug") }
+
+type fakeSender struct {
+	mu    sync.Mutex
+	steps []bool
+	owns  []ingest.Own
+}
+
+func (f *fakeSender) Step(_ context.Context, cli send.Client, own ingest.Own) bool {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	f.steps = append(f.steps, cli != nil)
+	f.owns = append(f.owns, own)
+	return false
+}
+
+func (f *fakeSender) seen() (withClient, without int) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	for _, connected := range f.steps {
+		if connected {
+			withClient++
+		} else {
+			without++
+		}
+	}
+	return withClient, without
+}
+
+func TestTheSendWorkerGetsAClientOnlyWhileConnected(t *testing.T) {
+	made := &clients{}
+	c, _ := newTestConn(linked(), made)
+	sender := &fakeSender{}
+	c.SetSender(sender)
+	cancel, done := runInBackground(t, c)
+	waitFor(t, "first client", func() bool { return made.count() == 1 })
+
+	c.RequestSend()
+	waitFor(t, "a step while still connecting", func() bool { _, without := sender.seen(); return without > 0 })
+	if with, _ := sender.seen(); with != 0 {
+		t.Fatal("nothing may be sent before WhatsApp is connected")
+	}
+
+	made.get(0).emit(&events.Connected{})
+	waitFor(t, "a step with the client", func() bool { with, _ := sender.seen(); return with > 0 })
+	sender.mu.Lock()
+	own := sender.owns[len(sender.owns)-1]
+	sender.mu.Unlock()
+	if own.PN != "919999999999@s.whatsapp.net" {
+		t.Fatalf("the worker must be told whose account this is, got %+v", own)
+	}
+
+	made.get(0).emit(&events.KeepAliveTimeout{ErrorCount: 1})
+	before, _ := sender.seen()
+	c.RequestSend()
+	time.Sleep(30 * time.Millisecond)
+	if after, _ := sender.seen(); after != before {
+		t.Fatal("nothing may be sent over a connection that stopped answering")
+	}
+	stop(t, cancel, done)
+}
