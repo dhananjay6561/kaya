@@ -7,6 +7,7 @@ import {
   ChannelNotStartedError,
   createGatewayChannel,
   GatewayNotLinkedError,
+  IdempotencyKeyReusedError,
   requestIdFor,
   SendFailedError,
 } from "./index.js";
@@ -48,7 +49,9 @@ describe("gateway channel", { skip: !testDatabaseUrl && "TEST_DATABASE_URL not s
     );
   }
 
-  async function channel(options: { pollMs?: number; graceMs?: number } = {}) {
+  async function channel(
+    options: { pollMs?: number; graceMs?: number; sendingGraceMs?: number } = {},
+  ) {
     const c = createGatewayChannel({
       pool: core,
       contracts,
@@ -155,6 +158,83 @@ describe("gateway channel", { skip: !testDatabaseUrl && "TEST_DATABASE_URL not s
       (err: unknown) =>
         err instanceof SendFailedError && err.code === "outcome_unknown" && err.requestId === id,
     );
+  });
+
+  it("keeps waiting while the gateway is sending, and says unknown if it never hears back", async () => {
+    await linked();
+    const day = 24 * 60 * 60_000;
+    const id = requestIdFor("slow");
+    const first = (await channel()).send({ idempotencyKey: "slow", text: "hi" });
+    await eventually("the queued request", async () => (await queued()).length === 1);
+    await testDb.admin.query(
+      "UPDATE send_requests SET state = 'sending', wa_id = '3EB0SLOW' WHERE id = $1",
+      [id],
+    );
+
+    const pastExpiry = await channel({ graceMs: -day, sendingGraceMs: 2 * day });
+    let settled = false;
+    const patient = pastExpiry.send({ idempotencyKey: "slow", text: "hi" }).finally(() => {
+      settled = true;
+    });
+    await new Promise((resolve) => setTimeout(resolve, 60));
+    assert.equal(
+      settled,
+      false,
+      "a request that is being sent may still go out, even past its expiry",
+    );
+
+    const longAfter = await channel({ graceMs: -day, sendingGraceMs: 0 });
+    await assert.rejects(
+      longAfter.send({ idempotencyKey: "slow", text: "hi" }),
+      (err: unknown) => err instanceof SendFailedError && err.code === "outcome_unknown",
+    );
+
+    await testDb.admin.query(
+      "UPDATE send_requests SET state = 'sent', finished_at = now() WHERE id = $1",
+      [id],
+    );
+    assert.equal((await first).id, "3EB0SLOW");
+    assert.equal((await patient).id, "3EB0SLOW");
+  });
+
+  it("refuses a key that was already used for a different message", async () => {
+    await linked();
+    const c = await channel();
+    const first = c.send({ idempotencyKey: "reused", text: "the first message" });
+    await eventually("the queued request", async () => (await queued()).length === 1);
+    await assert.rejects(
+      c.send({ idempotencyKey: "reused", text: "a different message" }),
+      IdempotencyKeyReusedError,
+    );
+    await assert.rejects(
+      c.send({ idempotencyKey: "reused", text: "the first message", replyTo: "3EB0OTHER" }),
+      IdempotencyKeyReusedError,
+    );
+    await gatewaySends(requestIdFor("reused"), "3EB0FIRST");
+    assert.equal((await first).id, "3EB0FIRST");
+    assert.equal((await queued()).length, 1);
+  });
+
+  it("stops waiting even when the caller gives up in the middle of a check", async () => {
+    await linked();
+    const giveUp = new AbortController();
+    let checks = 0;
+    const watched = {
+      query: (text: string, values?: unknown[]) => {
+        if (text.includes("FROM send_requests") && ++checks === 2) {
+          giveUp.abort(new Error("gave up"));
+        }
+        return core.query(text, values);
+      },
+    } as unknown as pg.Pool;
+    const c = createGatewayChannel({ pool: watched, contracts, pollMs: 60_000 });
+    await c.start();
+    const started = performance.now();
+    await assert.rejects(
+      c.send({ idempotencyKey: "mid-check", text: "hi" }, { signal: giveUp.signal }),
+      /gave up/,
+    );
+    assert.ok(performance.now() - started < 5_000);
   });
 
   it("gives up waiting a while after the request has expired", async () => {
