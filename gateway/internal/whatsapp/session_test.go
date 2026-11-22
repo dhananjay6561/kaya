@@ -12,9 +12,9 @@ import (
 	"github.com/jackc/pgx/v5"
 	"go.mau.fi/whatsmeow/proto/waAdv"
 	"go.mau.fi/whatsmeow/types"
+	waLog "go.mau.fi/whatsmeow/util/log"
 
 	"github.com/dhananjay6561/kaya/gateway/internal/store"
-	waLog "go.mau.fi/whatsmeow/util/log"
 )
 
 func savePaired(t *testing.T, s *Sessions, jid types.JID) {
@@ -71,18 +71,33 @@ func testDB(t *testing.T) *store.DB {
 	return db
 }
 
+func TestSessionsWaitForTheDatabase(t *testing.T) {
+	db, err := store.Open("postgres://127.0.0.1:1/kaya?connect_timeout=1")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer db.Close()
+	sqlDB := db.SQL()
+	defer func() { _ = sqlDB.Close() }()
+
+	sessions := NewSessions(sqlDB, waLog.Noop)
+	if _, err := sessions.Load(context.Background()); err == nil {
+		t.Fatal("want an error while the database is down")
+	}
+	if sessions.upgraded {
+		t.Fatal("a failed upgrade must be retried on the next load")
+	}
+}
+
 func TestSessionsAgainstRealPostgres(t *testing.T) {
 	db := testDB(t)
 	ctx := context.Background()
 	sqlDB := db.SQL()
 	defer func() { _ = sqlDB.Close() }()
 
-	sessions, err := OpenSessions(ctx, sqlDB, waLog.Noop)
-	if err != nil {
+	sessions := NewSessions(sqlDB, waLog.Noop)
+	if _, err := NewSessions(sqlDB, waLog.Noop).Load(ctx); err != nil {
 		t.Fatal(err)
-	}
-	if _, err := OpenSessions(ctx, sqlDB, waLog.Noop); err != nil {
-		t.Fatalf("opening the session tables a second time must be a no-op: %v", err)
 	}
 
 	device, err := sessions.Load(ctx)
@@ -93,10 +108,7 @@ func TestSessionsAgainstRealPostgres(t *testing.T) {
 	jid := types.NewADJID("19995550100", 0, 7)
 	savePaired(t, sessions, jid)
 
-	reopened, err := OpenSessions(ctx, sqlDB, waLog.Noop)
-	if err != nil {
-		t.Fatal(err)
-	}
+	reopened := NewSessions(sqlDB, waLog.Noop)
 	device, err = reopened.Load(ctx)
 	if err != nil || device == nil || device.ID == nil || *device.ID != jid {
 		t.Fatalf("the session must survive a restart, got %v, %v", device, err)

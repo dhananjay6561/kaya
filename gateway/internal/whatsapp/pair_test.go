@@ -127,13 +127,13 @@ func TestPairRefusesWhenASessionIsStored(t *testing.T) {
 	ctx := context.Background()
 	sqlDB := db.SQL()
 	defer func() { _ = sqlDB.Close() }()
-	sessions, err := OpenSessions(ctx, sqlDB, waLog.Noop)
-	if err != nil {
+	sessions := NewSessions(sqlDB, waLog.Noop)
+	if _, err := sessions.Load(ctx); err != nil {
 		t.Fatal(err)
 	}
 	savePaired(t, sessions, types.NewADJID("19995550100", 0, 7))
 
-	err = Pair(ctx, sessions, logging.New(&bytes.Buffer{}, "info"), PairOptions{Out: &bytes.Buffer{}})
+	err := Pair(ctx, sessions, logging.New(&bytes.Buffer{}, "info"), PairOptions{Out: &bytes.Buffer{}})
 	if !errors.Is(err, ErrAlreadyPaired) {
 		t.Fatalf("want ErrAlreadyPaired, got %v", err)
 	}
