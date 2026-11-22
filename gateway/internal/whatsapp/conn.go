@@ -131,6 +131,10 @@ type Conn struct {
 	watchEvery  time.Duration
 	watchAfter  time.Duration
 
+	storeCheck        func(ctx context.Context) error
+	storeCheckEvery   time.Duration
+	storeCheckTimeout time.Duration
+
 	publisher       Publisher
 	publishAsk      chan struct{}
 	publishRetry    time.Duration
@@ -191,6 +195,8 @@ func NewConn(sessions *Sessions, sink Sink, logger *slog.Logger) *Conn {
 		stableAfter:       time.Minute,
 		watchEvery:        30 * time.Second,
 		watchAfter:        2 * time.Minute,
+		storeCheckEvery:   5 * time.Second,
+		storeCheckTimeout: 2 * time.Second,
 		storeRetry:        time.Minute,
 		publishAsk:        make(chan struct{}, 1),
 		publishRetry:      time.Second,
@@ -240,6 +246,7 @@ func (c *Conn) Run(ctx context.Context) error {
 		}()
 	}
 	go c.watch(ctx)
+	go c.watchStore(ctx)
 	go c.groupSyncLoop(ctx)
 	go c.historyLoop(ctx)
 	go c.mediaLoop(ctx)
@@ -320,6 +327,58 @@ func (c *Conn) disconnect(cli client) {
 		cli.Disconnect()
 	}
 	c.set(contracts.StateDisconnected, ReasonShuttingDown)
+}
+
+// SetStoreCheck gives the connection a way to ask whether the database answers. Call it before Run.
+func (c *Conn) SetStoreCheck(check func(ctx context.Context) error) { c.storeCheck = check }
+
+// watchStore drops the connection when the database stops answering, and Run brings it back once
+// the session can be read again. whatsmeow needs the database to decrypt a message, so while the
+// database is away a message fails inside whatsmeow, before the sink is ever asked to store it.
+// whatsmeow leaves such a message unacknowledged, and WhatsApp sends it again only on a new
+// connection; without this the connection would stay up and the message would wait for the next
+// drop, however long that took.
+func (c *Conn) watchStore(ctx context.Context) {
+	if c.storeCheck == nil {
+		return
+	}
+	ticker := time.NewTicker(c.storeCheckEvery)
+	defer ticker.Stop()
+	failures := 0
+	for {
+		select {
+		case <-ctx.Done():
+			return
+		case <-ticker.C:
+		}
+		generation := c.generation.Load()
+		c.mu.RLock()
+		cli, was := c.current, c.status
+		c.mu.RUnlock()
+		live := was.State == contracts.StateConnected ||
+			(was.State == contracts.StateDisconnected && (was.Reason == ReasonReconnecting || was.Reason == ReasonNotAnswering))
+		if cli == nil || !live || generation == c.failed.Load() {
+			failures = 0
+			continue
+		}
+		check, cancel := context.WithTimeout(ctx, c.storeCheckTimeout)
+		err := c.storeCheck(check)
+		cancel()
+		if err == nil || ctx.Err() != nil {
+			failures = 0
+			continue
+		}
+		if failures++; failures < 2 {
+			continue
+		}
+		failures = 0
+		current := func(Status) bool { return c.generation.Load() == generation }
+		if c.setIf(current, contracts.StateDisconnected, ReasonDatabaseDown) {
+			c.failed.Store(generation)
+			c.logger.Error("the database stopped answering; dropping the whatsapp connection until it is back", logging.Err(err))
+			c.end(generation, ending{retryAfter: c.storeRetry})
+		}
+	}
 }
 
 // watch corrects a state that says disconnected while the client is in fact connected. whatsmeow

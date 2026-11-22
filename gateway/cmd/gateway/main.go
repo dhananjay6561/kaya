@@ -117,6 +117,7 @@ func run(cfg config.Config, logger *slog.Logger) error {
 	ingester := ingest.NewIngester(db, messages, logger)
 	conn := whatsapp.NewConn(whatsapp.NewSessions(sqlDB, whatsapp.NewLogger(logger)), ingester, logger)
 	conn.SetPublisher(events.NewPublisher(db, outbox))
+	conn.SetStoreCheck(db.Check)
 	ingester.NewGroup = conn.RequestGroupSync
 	ingester.HistoryQueued = conn.RequestHistory
 
