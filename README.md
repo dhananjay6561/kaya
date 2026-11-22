@@ -94,7 +94,8 @@ In build order. Status for each stage is in the [roadmap](#project-status-and-ro
 - Acting on websites you are logged into, and ordering with spending caps
 - Phone calls from Kaya's own number, with a transcript and summary sent to you
 - Kaya as its own WhatsApp contact on a spare number
-- Alerts on a fallback channel, backups and hosting on a home Linux machine
+- Metrics and dashboards with Prometheus and Grafana, and alerts on a fallback channel
+- Backups and hosting on a home Linux machine
 
 ## Safety and privacy principles
 
@@ -520,7 +521,7 @@ Status key: ✅ done · 🟨 in progress · ⬜ not started
 | 12. Ordering | Cart up to checkout, pay on "yes" with spending caps, order status | ⬜ |
 | 13. Phone calls | Outbound calls with AI disclosure, transcript and summary | ⬜ |
 | 14. Kaya as a contact | A second device on a spare number | ⬜ |
-| 15. Hardening | Fallback alerts, regression test set, status page | ⬜ |
+| 15. Hardening | Fallback alerts, regression test set, metrics and dashboards (Prometheus, Grafana) | ⬜ |
 | 16. Home hosting | Linux host setup, GPU model, backups, move day | ⬜ |
 
 ## Documentation
