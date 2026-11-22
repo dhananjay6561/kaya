@@ -44,6 +44,17 @@ export async function createTestDb(baseUrl: string): Promise<TestDb> {
     },
     async drop() {
       await admin.end();
+      // A connection that is still closing would be cut off by the forced drop and report that
+      // as an error nobody is listening for, so give every connection time to finish first.
+      const deadline = Date.now() + 3_000;
+      while (Date.now() < deadline) {
+        const { rows } = await root.query<{ open: number }>(
+          "SELECT count(*)::int AS open FROM pg_stat_activity WHERE datname = $1",
+          [name],
+        );
+        if (rows[0]?.open === 0) break;
+        await new Promise((resolve) => setTimeout(resolve, 10));
+      }
       await root.query(`DROP DATABASE ${name} WITH (FORCE)`);
       await root.end();
     },
