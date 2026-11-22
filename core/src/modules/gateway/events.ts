@@ -8,7 +8,10 @@ import type {
 import type { Logger } from "../../lib/logger.js";
 import type { AfterCommit, EventHandler } from "./consumer.js";
 
-export type MessageListener = (message: MessageStored, tx: pg.ClientBase) => Promise<void>;
+export type MessageListener = (
+  message: MessageStored,
+  tx: pg.ClientBase,
+) => Promise<AfterCommit | undefined>;
 
 export type SendResultListener = (result: SendResult) => void;
 
@@ -70,10 +73,16 @@ export function createGatewayEvents(logger: Logger): GatewayEvents {
         case "connection.state":
           return connectionChanged(event.data, event.occurred_at, tx);
         case "message.stored": {
-          for (const listener of messageListeners) await listener(event.data, tx);
+          const followUps: AfterCommit[] = [];
+          for (const listener of messageListeners) {
+            const followUp = await listener(event.data, tx);
+            if (followUp) followUps.push(followUp);
+          }
           const { message_id, chat_id, kind, change, source } = event.data;
           logger.debug({ message_id, chat_id, kind, change, source }, "message event handled");
-          return undefined;
+          return () => {
+            for (const followUp of followUps) followUp();
+          };
         }
         case "send.result": {
           const result = event.data;
