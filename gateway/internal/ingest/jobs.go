@@ -212,7 +212,9 @@ func (i *Ingester) StoreHistory(ctx context.Context, job *HistoryJob, data *waHi
 		batch := chunk.Names[start:min(start+historyBatch, len(chunk.Names))]
 		steps = append(steps, func(tx pgx.Tx) error {
 			for _, n := range batch {
-				if err := i.store.SetChatName(ctx, tx, n.Chat, n.Name, time.Time{}); err != nil {
+				if err := i.optional(ctx, tx, func(sp pgx.Tx) error {
+					return i.store.SetChatName(ctx, sp, n.Chat, n.Name, time.Time{})
+				}); err != nil {
 					return err
 				}
 			}
@@ -238,14 +240,23 @@ func (i *Ingester) StoreHistory(ctx context.Context, job *HistoryJob, data *waHi
 	return nil
 }
 
-// linkAddresses makes sure a LID and its phone number are one contact. A pairing the database
-// refuses (two bots, say) is skipped: it is a hint from old data, not something to fail history on.
+// linkAddresses makes sure a LID and its phone number are one contact.
 func (i *Ingester) linkAddresses(ctx context.Context, tx pgx.Tx, a Address) error {
+	return i.optional(ctx, tx, func(sp pgx.Tx) error {
+		_, err := i.store.contact(ctx, sp, a)
+		return err
+	})
+}
+
+// optional runs a step that history can do without (a name, an address pairing) behind a
+// savepoint. If the database refuses it, the step is skipped: old data being odd is no reason to
+// fail the whole chunk. Only the database being away is passed on.
+func (i *Ingester) optional(ctx context.Context, tx pgx.Tx, step func(pgx.Tx) error) error {
 	sp, err := tx.Begin(ctx)
 	if err != nil {
 		return err
 	}
-	if _, err = i.store.contact(ctx, sp, a); err == nil {
+	if err = step(sp); err == nil {
 		return sp.Commit(ctx)
 	}
 	_ = sp.Rollback(ctx)

@@ -209,10 +209,23 @@ func (s *Store) storeMessage(ctx context.Context, tx pgx.Tx, rec Record, senderI
 	if rec.Source == SourceHistory {
 		return out, nil
 	}
-	return out, s.emit(ctx, tx, contracts.MessageStored{
+	if err := s.emit(ctx, tx, contracts.MessageStored{
 		MessageID: messageID, ChatID: chatID, SenderID: senderID, WAID: rec.WAID, FromMe: rec.FromMe,
 		Kind: rec.Kind, Source: SourceLive, Change: "new", SentAt: contracts.At(rec.At),
-	})
+	}); err != nil {
+		return Applied{}, err
+	}
+	// An edit or revoke may have arrived before this message; apply it now that its target exists.
+	var waiting bool
+	if err := tx.QueryRow(ctx, "SELECT EXISTS (SELECT FROM pending_changes)").Scan(&waiting); err != nil {
+		return Applied{}, fmt.Errorf("check parked changes: %w", err)
+	}
+	if waiting {
+		if _, err := s.ReplayParked(ctx, tx); err != nil {
+			return Applied{}, err
+		}
+	}
+	return out, nil
 }
 
 // storeMedia records a message's file. The keys go in their own table, which only the gateway can
@@ -372,14 +385,14 @@ func (s *Store) changeMessage(ctx context.Context, tx pgx.Tx, rec Record) (Appli
 	return out, s.emit(ctx, tx, stored)
 }
 
+// react stores a reaction even when its message, or its whole chat, is not stored yet: reactions
+// can arrive first, which is why the table has no foreign key to messages.
 func (s *Store) react(ctx context.Context, tx pgx.Tx, rec Record, senderID int64) (Applied, error) {
-	chatID, err := s.findChat(ctx, tx, rec.Chat)
+	chatID, created, err := s.ensureChat(ctx, tx, rec.Chat)
 	if err != nil {
 		return Applied{}, err
 	}
-	if chatID == 0 {
-		return Applied{NoTarget: true}, nil
-	}
+	out := Applied{NewChat: created, NewGroup: created && rec.Chat.Kind == ChatGroup}
 	targetSender, err := s.contact(ctx, tx, rec.Target.Sender)
 	if err != nil {
 		return Applied{}, err
@@ -401,7 +414,7 @@ func (s *Store) react(ctx context.Context, tx pgx.Tx, rec Record, senderID int64
 	if err != nil {
 		return Applied{}, fmt.Errorf("store reaction: %w", err)
 	}
-	return Applied{}, nil
+	return out, nil
 }
 
 func (s *Store) emit(ctx context.Context, tx pgx.Tx, stored contracts.MessageStored) error {

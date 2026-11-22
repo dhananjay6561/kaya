@@ -5,8 +5,10 @@ import (
 	"testing"
 	"time"
 
+	"go.mau.fi/whatsmeow/proto/waCommon"
 	"go.mau.fi/whatsmeow/proto/waE2E"
 	"go.mau.fi/whatsmeow/proto/waHistorySync"
+	"go.mau.fi/whatsmeow/proto/waWeb"
 	"go.mau.fi/whatsmeow/types"
 	"go.mau.fi/whatsmeow/types/events"
 	"google.golang.org/protobuf/proto"
@@ -261,5 +263,106 @@ func TestFailingAndExpiringHistoryJobs(t *testing.T) {
 	}
 	if !contains(logs.String(), "gave up on a history chunk") {
 		t.Fatal("giving up must be logged")
+	}
+}
+
+func TestHistoryKeepsReactionsAndBothSpellings(t *testing.T) {
+	reacted := historyMsg("H1", false, "", textMsg("old message"))
+	reacted.Message.Reactions = []*waWeb.Reaction{
+		{Key: &waCommon.MessageKey{ID: proto.String("R1"), FromMe: proto.Bool(true)}, Text: proto.String("👍"), SenderTimestampMS: proto.Int64(253402300800000)},
+		{Key: &waCommon.MessageKey{ID: proto.String("R2")}, Text: proto.String("")},
+	}
+	data := &waHistorySync.HistorySync{
+		Conversations: []*waHistorySync.Conversation{{
+			ID: proto.String(rahulLID), PnJID: proto.String(rahulPN), Messages: []*waHistorySync.HistorySyncMsg{reacted},
+		}},
+		PhoneNumberToLidMappings: []*waHistorySync.PhoneNumberToLIDMapping{
+			{PnJID: proto.String("912222222222@c.us"), LidJID: proto.String(priyaLID)},
+		},
+	}
+
+	chunk := FromHistory(data, fakeParser{}, own)
+	if len(chunk.Records) != 2 || chunk.Records[0].Chat.Contact != (Address{LID: rahulLID, PN: rahulPN}) {
+		t.Fatalf("the chat must know both of Rahul's addresses: %+v", chunk.Records)
+	}
+	reaction := chunk.Records[1]
+	if reaction.Op != OpReact || reaction.Emoji != "👍" || reaction.Sender != own || !reaction.At.Equal(sentAt) ||
+		reaction.Target != (Target{WAID: "H1", Sender: Address{LID: rahulLID, PN: rahulPN}}) {
+		t.Fatalf("got %+v", reaction)
+	}
+	if len(chunk.Mappings) != 1 || chunk.Mappings[0] != (Address{LID: priyaLID, PN: "912222222222@s.whatsapp.net"}) {
+		t.Fatalf("a number spelled @c.us is the same number: %+v", chunk.Mappings)
+	}
+
+	f := newFixture(t)
+	i, _ := newIngester(f, f.gateway)
+	ctx := context.Background()
+	i.Handle(ctx, own, announcement(t, "HIST1", 10))
+	if err := i.StoreHistory(ctx, nextJob(t, i), data, fakeParser{}, own); err != nil {
+		t.Fatal(err)
+	}
+	if n := f.count("SELECT count(*) FROM reactions WHERE emoji = '👍' AND target_wa_id = 'H1'"); n != 1 {
+		t.Fatalf("want the history reaction stored, got %d", n)
+	}
+}
+
+func TestAnOddNameDoesNotFailAHistoryChunk(t *testing.T) {
+	f := newFixture(t)
+	i, _ := newIngester(f, f.gateway)
+	ctx := context.Background()
+	data := history()
+	data.Conversations[1].Name = proto.String("Trip\x00planning")
+	i.Handle(ctx, own, announcement(t, "HIST1", 10))
+	if err := i.StoreHistory(ctx, nextJob(t, i), data, fakeParser{}, own); err != nil {
+		t.Fatalf("a name the database refuses is skipped: %v", err)
+	}
+	if n := f.count("SELECT count(*) FROM history_jobs WHERE state = 'stored' AND messages = 3"); n != 1 {
+		t.Fatal("the chunk must still be stored")
+	}
+}
+
+func TestAReactionCanArriveBeforeItsChat(t *testing.T) {
+	f := newFixture(t)
+	early := Record{Op: OpReact, Chat: group, Sender: rahul, WAID: "R1", At: sentAt, Source: SourceLive, Emoji: "👍", Target: Target{WAID: "G1", Sender: own}}
+	if got := f.apply(early); got.NoTarget || !got.NewGroup {
+		t.Fatalf("got %+v", got)
+	}
+	if n := f.count("SELECT count(*) FROM reactions"); n != 1 {
+		t.Fatal("the reaction must be stored")
+	}
+}
+
+func TestAParkedRevokeIsAppliedWhenItsMessageArrivesLive(t *testing.T) {
+	f := newFixture(t)
+	f.apply(Record{Op: OpRevoke, Chat: dm, Sender: rahul, WAID: "REV1", At: sentAt.Add(time.Minute), Source: SourceLive, Target: Target{WAID: "LATE", Sender: rahul}})
+	f.apply(message(dm, rahul, "LATE", "this was deleted before it arrived"))
+	if n := f.count("SELECT count(*) FROM messages WHERE wa_id = 'LATE' AND body IS NULL AND deleted_at IS NOT NULL"); n != 1 {
+		t.Fatal("the message must end up deleted")
+	}
+	if n := f.count("SELECT count(*) FROM pending_changes"); n != 0 {
+		t.Fatal("the parked change is cleared")
+	}
+}
+
+func TestParkedChangesArePurgedOnConnect(t *testing.T) {
+	f := newFixture(t)
+	i, _ := newIngester(f, f.gateway)
+	f.apply(Record{Op: OpRevoke, Chat: dm, Sender: rahul, WAID: "REV1", At: sentAt, Source: SourceLive, Target: Target{WAID: "NEVER", Sender: rahul}})
+	if err := f.admin.Query(context.Background(), "UPDATE pending_changes SET created_at = now() - interval '8 days' RETURNING 1", nil, new(int)); err != nil {
+		t.Fatal(err)
+	}
+	if !i.Handle(context.Background(), own, &events.Connected{}) || f.count("SELECT count(*) FROM pending_changes") != 0 {
+		t.Fatal("connecting drops changes that waited over a week")
+	}
+}
+
+func TestARefusedAnnouncementIsKept(t *testing.T) {
+	f := newFixture(t)
+	i, _ := newIngester(f, f.gateway)
+	if !i.Handle(context.Background(), own, announcement(t, "HIST\x00BAD", 10)) {
+		t.Fatal("acknowledged once a copy is kept")
+	}
+	if n := f.count("SELECT count(*) FROM ingest_dead WHERE error_code = 'history_22021' AND length(raw) > 0"); n != 1 {
+		t.Fatalf("the announcement must be kept as a dead letter, got %d", n)
 	}
 }

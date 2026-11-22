@@ -67,12 +67,13 @@ func FromHistory(data *waHistorySync.HistorySync, parser Parser, own Own) Histor
 				chunk.Names = append(chunk.Names, ChatName{Chat: ChatRef{Kind: ChatBroadcast, JID: chat.ToNonAD().String()}, Name: name})
 			}
 		}
+		alt := otherSpelling(chat, conv)
 		for _, item := range conv.GetMessages() {
 			web := item.GetMessage()
 			if web == nil || web.GetMessage() == nil {
 				continue
 			}
-			rec, code := historyRecord(chat, web, parser, own)
+			rec, code := historyRecord(chat, alt, web, parser, own)
 			switch {
 			case code != "":
 				d := DeadLetter{WAID: web.GetKey().GetID(), ChatJID: chat.ToNonAD().String(), ErrorCode: code, Info: historyInfo}
@@ -81,13 +82,31 @@ func FromHistory(data *waHistorySync.HistorySync, parser Parser, own Own) Histor
 			case rec.Op == OpStore:
 				rec.raw = web
 				chunk.Records = append(chunk.Records, rec)
+				chunk.Records = append(chunk.Records, historyReactions(rec, web, own)...)
 			}
 		}
 	}
 	return chunk
 }
 
-func historyRecord(chat types.JID, web *waWeb.WebMessageInfo, parser Parser, own Own) (rec Record, code string) {
+// otherSpelling returns the second address history gives for a direct chat: the phone number of a
+// chat keyed by LID, or the LID of one keyed by number.
+func otherSpelling(chat types.JID, conv *waHistorySync.Conversation) types.JID {
+	raw := conv.GetPnJID()
+	if chat.Server == types.DefaultUserServer || chat.Server == types.HostedServer || chat.Server == types.LegacyUserServer {
+		raw = conv.GetLidJID()
+	}
+	if raw == "" || chat.Server == types.GroupServer || chat.Server == types.BroadcastServer {
+		return types.EmptyJID
+	}
+	alt, err := types.ParseJID(raw)
+	if err != nil {
+		return types.EmptyJID
+	}
+	return alt.ToNonAD()
+}
+
+func historyRecord(chat, alt types.JID, web *waWeb.WebMessageInfo, parser Parser, own Own) (rec Record, code string) {
 	defer func() {
 		if r := recover(); r != nil {
 			code = "mapper_panic"
@@ -97,5 +116,42 @@ func historyRecord(chat types.JID, web *waWeb.WebMessageInfo, parser Parser, own
 	if err != nil {
 		return Record{}, "unparseable"
 	}
+	if !alt.IsEmpty() {
+		if evt.Info.IsFromMe {
+			evt.Info.RecipientAlt = alt
+		} else {
+			evt.Info.SenderAlt = alt
+		}
+	}
 	return FromMessage(evt, own, SourceHistory), ""
+}
+
+// historyReactions maps the reactions history attaches to a message. Live reactions arrive as
+// messages of their own; history folds them into the message they belong to.
+func historyReactions(target Record, web *waWeb.WebMessageInfo, own Own) []Record {
+	var out []Record
+	for _, reaction := range web.GetReactions() {
+		key := reaction.GetKey()
+		if reaction.GetText() == "" {
+			continue
+		}
+		var sender Address
+		switch {
+		case key.GetFromMe():
+			sender = own
+		case target.Chat.Kind == ChatDirect:
+			sender = target.Chat.Contact
+		default:
+			sender = parseAddress(key.GetParticipant())
+		}
+		if sender.IsZero() {
+			continue
+		}
+		out = append(out, Record{
+			Op: OpReact, Chat: target.Chat, Sender: sender, WAID: key.GetID(), FromMe: key.GetFromMe(),
+			At: saneTime(reaction.GetSenderTimestampMS(), target.At), Source: SourceHistory,
+			Emoji: reaction.GetText(), Target: Target{WAID: target.WAID, Sender: target.Sender},
+		})
+	}
+	return out
 }
