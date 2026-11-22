@@ -91,9 +91,10 @@ needs only gateway, core and db.
 Two separate connections:
 
 **1. Reading DJ's chats (linked device).** The gateway (Go, whatsmeow) becomes a linked device on DJ's
-own number, like WhatsApp Web. Pairing is by QR (served on a small page over Tailscale, or in the
-terminal) or by an 8-character pairing code ("Link with phone number instead"), which is easier on
-a headless box. The session is stored in Postgres through whatsmeow's session store and survives restarts.
+own number, like WhatsApp Web, named "Kaya". Pairing is `make pair`: a QR code in the terminal, or
+with `PHONE=` an 8-character pairing code ("Link with phone number instead"), which is easier on a
+headless box (a QR page over Tailscale can come later). The session is stored in Postgres through
+whatsmeow's session store and survives restarts.
 
 - On first link it syncs recent history; WhatsApp decides how far back. After that, everything
   arrives live, including messages DJ sends from his phone.
