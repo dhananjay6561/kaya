@@ -140,15 +140,20 @@ set a proper device name, back off slowly on reconnects.
 ```
 /srv/kaya/
 ├── postgres/         chats, tasks, call transcripts, embeddings, WhatsApp session
-├── browser-profile/  logged-in sessions (most sensitive folder)
+├── gateway/          the gateway's /data
+├── core/             core's /data
+├── browser/          logged-in browser profile (most sensitive folder; stage 11)
+├── docs/             generated decks/PDFs before Drive upload (stage 9)
 ├── models/           ollama + whisper models (~5 GB)
-├── files/            generated decks/PDFs before Drive upload
 ├── compose.yml
 └── .env              keys (chmod 600)
 ```
 
+Each service gets its own folder under `DATA_DIR`, mounted at `/data` in its container, and only
+that service writes to it. A service that needs storage adds its folder in the phase that adds it.
+
 **Backups:** restic nightly, encrypted, to Drive or Backblaze B2. Covers a `postgres` dump (which
-includes the WhatsApp session) and `browser-profile`. Keep 7 daily and 4 weekly. Models are not backed up.
+includes the WhatsApp session) and `browser/`. Keep 7 daily and 4 weekly. Models are not backed up.
 
 ## One-time host setup (Mint)
 
