@@ -70,6 +70,20 @@ describe("gateway events", { skip: !testDatabaseUrl && "TEST_DATABASE_URL not se
 
     await handle(
       events,
+      event(
+        "connection.state",
+        { state: "disconnected", reason: "session store unavailable" },
+        "2026-11-22T10:30:00Z",
+      ),
+    );
+    assert.equal(
+      (await readConnection(core))?.ownJid,
+      own,
+      "a state that does not name the account does not make core forget whose it is",
+    );
+
+    await handle(
+      events,
       event("connection.state", { state: "logged_out" }, "2026-11-22T11:00:00Z"),
     );
     assert.deepEqual(await readConnection(core), {

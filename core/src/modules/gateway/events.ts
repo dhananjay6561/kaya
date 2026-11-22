@@ -57,7 +57,9 @@ export function createGatewayEvents(logger: Logger): GatewayEvents {
     const { rowCount } = await tx.query(
       `INSERT INTO connection_state (state, reason, own_jid, occurred_at) VALUES ($1, $2, $3, $4)
        ON CONFLICT (only_row) DO UPDATE
-       SET state = EXCLUDED.state, reason = EXCLUDED.reason, own_jid = EXCLUDED.own_jid,
+       SET state = EXCLUDED.state, reason = EXCLUDED.reason,
+           own_jid = CASE WHEN EXCLUDED.state = 'logged_out' THEN EXCLUDED.own_jid
+                          ELSE coalesce(EXCLUDED.own_jid, connection_state.own_jid) END,
            occurred_at = EXCLUDED.occurred_at, updated_at = now()
        WHERE connection_state.occurred_at <= EXCLUDED.occurred_at`,
       [data.state, data.reason ?? null, data.own_jid ?? null, occurredAt],
