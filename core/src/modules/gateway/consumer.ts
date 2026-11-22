@@ -51,7 +51,7 @@ export function createEventConsumer(options: EventConsumerOptions): EventConsume
   let loops: Promise<unknown> | undefined;
   let woken = false;
   let wakeUp: (() => void) | undefined;
-  let listener: pg.Client | undefined;
+  let halt: (() => void) | undefined;
   let nextPurge = 0;
 
   const wake = () => {
@@ -79,6 +79,10 @@ export function createEventConsumer(options: EventConsumerOptions): EventConsume
   async function step(): Promise<boolean> {
     const client = await db.pool.connect();
     let broken = false;
+    const lost = () => {
+      broken = true;
+    };
+    client.on("error", lost);
     try {
       await client.query("BEGIN");
       const { rows } = await client.query<{ seq: string; payload: unknown }>(
@@ -143,6 +147,7 @@ export function createEventConsumer(options: EventConsumerOptions): EventConsume
       await client.query("ROLLBACK").catch(() => {});
       throw err;
     } finally {
+      client.off("error", lost);
       client.release(broken);
     }
   }
@@ -187,10 +192,10 @@ export function createEventConsumer(options: EventConsumerOptions): EventConsume
         keepAlive: true,
         connectionTimeoutMillis: 5_000,
       });
-      listener = client;
       const closed = new Promise<void>((resolve) => {
-        client.once("error", () => resolve());
+        client.on("error", () => resolve());
         client.once("end", () => resolve());
+        halt = resolve;
       });
       const listening = async () => {
         await client.connect();
@@ -204,9 +209,19 @@ export function createEventConsumer(options: EventConsumerOptions): EventConsume
       } catch (err) {
         if (running) logger.debug({ err }, "the gateway event listener lost its connection");
       } finally {
-        await client.end().catch(() => {});
+        halt = undefined;
+        client.end().catch(() => {});
       }
-      if (running) await new Promise((resolve) => setTimeout(resolve, retryMs).unref());
+      if (running) {
+        await new Promise<void>((resolve) => {
+          const timer = setTimeout(resolve, retryMs);
+          halt = () => {
+            clearTimeout(timer);
+            resolve();
+          };
+        });
+        halt = undefined;
+      }
     }
   }
 
@@ -220,7 +235,7 @@ export function createEventConsumer(options: EventConsumerOptions): EventConsume
       if (!running) return;
       running = false;
       wake();
-      await listener?.end().catch(() => {});
+      halt?.();
       await loops;
     },
     async check(signal: AbortSignal) {
