@@ -22,6 +22,7 @@ import (
 	"github.com/dhananjay6561/kaya/gateway/internal/contracts"
 	"github.com/dhananjay6561/kaya/gateway/internal/ingest"
 	"github.com/dhananjay6561/kaya/gateway/internal/logging"
+	"github.com/dhananjay6561/kaya/gateway/internal/media"
 )
 
 type fakeLoader struct {
@@ -62,6 +63,10 @@ func (f *fakeClient) DownloadHistorySync(context.Context, *waE2E.HistorySyncNoti
 		return nil, err
 	}
 	return &waHistorySync.HistorySync{}, nil
+}
+
+func (f *fakeClient) DownloadMediaWithPathToFile(context.Context, string, []byte, []byte, []byte, whatsmeow.MediaType, string, bool, whatsmeow.File) error {
+	return nil
 }
 
 func (f *fakeClient) ParseWebMessage(types.JID, *waWeb.WebMessageInfo) (*events.Message, error) {
@@ -272,6 +277,7 @@ func newTestConn(loader sessionLoader, made *clients) (*Conn, *bytes.Buffer) {
 	c.maxBackoff = 4 * time.Millisecond
 	c.storeRetry = 5 * time.Millisecond
 	c.historyPoll = 10 * time.Millisecond
+	c.mediaPoll = 10 * time.Millisecond
 	c.groupSyncDebounce = 5 * time.Millisecond
 	c.groupSyncMinGap = 30 * time.Millisecond
 	return c, &buf
@@ -599,4 +605,45 @@ func TestClassifyHistoryDownload(t *testing.T) {
 			t.Errorf("%v: got %s %v %v", tc.err, code, final, countable)
 		}
 	}
+}
+
+type fakeMedia struct {
+	mu    sync.Mutex
+	left  int
+	steps int
+}
+
+func (f *fakeMedia) Step(_ context.Context, dl media.Downloader) bool {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	if dl == nil || f.left == 0 {
+		return false
+	}
+	f.left--
+	f.steps++
+	return true
+}
+
+func (f *fakeMedia) done() int {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	return f.steps
+}
+
+func TestRequestedMediaIsDownloadedOnlyWhileConnected(t *testing.T) {
+	made := &clients{}
+	c, _ := newTestConn(paired(), made)
+	worker := &fakeMedia{left: 3}
+	c.SetMedia(worker)
+	cancel, done := runInBackground(t, c)
+	waitFor(t, "first client", func() bool { return made.count() == 1 })
+
+	c.RequestMedia()
+	time.Sleep(30 * time.Millisecond)
+	if worker.done() != 0 {
+		t.Fatal("media must wait until WhatsApp is connected")
+	}
+	made.get(0).emit(&events.Connected{})
+	waitFor(t, "the queue drained", func() bool { return worker.done() == 3 })
+	stop(t, cancel, done)
 }

@@ -23,6 +23,7 @@ import (
 	"github.com/dhananjay6561/kaya/gateway/internal/contracts"
 	"github.com/dhananjay6561/kaya/gateway/internal/ingest"
 	"github.com/dhananjay6561/kaya/gateway/internal/logging"
+	"github.com/dhananjay6561/kaya/gateway/internal/media"
 )
 
 // Reasons reported in Status. They are fixed strings, so /health never carries error details.
@@ -80,6 +81,13 @@ type client interface {
 	DownloadHistorySync(ctx context.Context, notification *waE2E.HistorySyncNotification, synchronousStorage bool) (*waHistorySync.HistorySync, error)
 	ParseWebMessage(chatJID types.JID, webMsg *waWeb.WebMessageInfo) (*events.Message, error)
 	SendProtocolMessageReceipt(ctx context.Context, id types.MessageID, msgType types.ReceiptType) error
+	media.Downloader
+}
+
+// MediaWorker downloads the files that were asked for. Step handles one request and reports
+// whether to go straight on to the next.
+type MediaWorker interface {
+	Step(ctx context.Context, dl media.Downloader) bool
 }
 
 // ending is what a connection that whatsmeow will not bring back asks Run to do next.
@@ -106,6 +114,9 @@ type Conn struct {
 
 	historyAsk        chan struct{}
 	historyPoll       time.Duration
+	media             MediaWorker
+	mediaAsk          chan struct{}
+	mediaPoll         time.Duration
 	groupSyncAsk      chan struct{}
 	groupSyncDebounce time.Duration
 	groupSyncMinGap   time.Duration
@@ -142,6 +153,8 @@ func NewConn(sessions *Sessions, sink Sink, logger *slog.Logger) *Conn {
 		ended:             make(chan ending, 1),
 		historyAsk:        make(chan struct{}, 1),
 		historyPoll:       time.Minute,
+		mediaAsk:          make(chan struct{}, 1),
+		mediaPoll:         time.Minute,
 		groupSyncAsk:      make(chan struct{}, 1),
 		groupSyncDebounce: groupSyncDebounce,
 		groupSyncMinGap:   groupSyncMinGap,
@@ -176,6 +189,7 @@ func (c *Conn) set(state, reason string) {
 func (c *Conn) Run(ctx context.Context) error {
 	go c.groupSyncLoop(ctx)
 	go c.historyLoop(ctx)
+	go c.mediaLoop(ctx)
 	backoff := c.minBackoff
 	for {
 		cli, err := c.connect(ctx)
@@ -317,6 +331,40 @@ func (c *Conn) afterConnected(ctx context.Context) {
 		go c.syncGroups(ctx)
 	}
 	c.RequestHistory()
+	c.RequestMedia()
+}
+
+// SetMedia gives the connection the worker that downloads requested files. Call it before Run.
+func (c *Conn) SetMedia(w MediaWorker) { c.media = w }
+
+// RequestMedia wakes the media worker, for when a file was just asked for.
+func (c *Conn) RequestMedia() {
+	select {
+	case c.mediaAsk <- struct{}{}:
+	default:
+	}
+}
+
+// mediaLoop downloads requested files one at a time while connected.
+func (c *Conn) mediaLoop(ctx context.Context) {
+	ticker := time.NewTicker(c.mediaPoll)
+	defer ticker.Stop()
+	for {
+		select {
+		case <-ctx.Done():
+			return
+		case <-c.mediaAsk:
+		case <-ticker.C:
+		}
+		for ctx.Err() == nil {
+			c.mu.RLock()
+			cli := c.current
+			c.mu.RUnlock()
+			if c.media == nil || cli == nil || c.Status().State != contracts.StateConnected || !c.media.Step(ctx, cli) {
+				break
+			}
+		}
+	}
 }
 
 // RequestHistory wakes the history worker, for when a chunk was just queued.
