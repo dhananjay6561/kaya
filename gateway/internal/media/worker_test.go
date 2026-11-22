@@ -5,6 +5,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"io"
 	"os"
 	"strings"
 	"testing"
@@ -22,6 +23,7 @@ type fakeDownloader struct {
 	errs    []error
 	calls   int
 	seen    []string
+	during  func()
 }
 
 func (f *fakeDownloader) DownloadMediaWithPathToFile(_ context.Context, directPath string, _, _, _ []byte, mediaType whatsmeow.MediaType, mms string, allowNoHash bool, file whatsmeow.File) error {
@@ -37,7 +39,11 @@ func (f *fakeDownloader) DownloadMediaWithPathToFile(_ context.Context, directPa
 			return err
 		}
 	}
-	_, err := file.Write(f.content)
+	if f.during != nil {
+		f.during()
+	}
+	// whatsmeow writes the download with io.Copy, which uses the destination's ReadFrom when it has one.
+	_, err := io.Copy(file, bytes.NewReader(f.content))
 	return err
 }
 
@@ -270,5 +276,48 @@ func TestFetch(t *testing.T) {
 	_, err = Fetch(context.Background(), idle.db, e.files, waiting, 30*time.Millisecond, 5*time.Millisecond)
 	if err == nil || !strings.Contains(err.Error(), "timed out") {
 		t.Fatalf("with no gateway working, fetch times out: %v", err)
+	}
+}
+
+func TestTheCapHoldsHoweverTheDownloadIsWritten(t *testing.T) {
+	file, err := os.CreateTemp(t.TempDir(), "capped")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer func() { _ = file.Close() }()
+	capped := &cappedFile{f: file, max: 1024}
+	if _, ok := any(capped).(io.ReaderFrom); ok {
+		t.Fatal("the capped file must not offer ReadFrom, or io.Copy skips the cap")
+	}
+	n, err := io.Copy(capped, bytes.NewReader(make([]byte, 8<<20)))
+	if !errors.Is(err, errTooLarge) || n > 1024 {
+		t.Fatalf("copied %d bytes, err %v", n, err)
+	}
+	if info, _ := file.Stat(); info.Size() > 1024 {
+		t.Fatalf("%d bytes reached the disk past a 1024-byte cap", info.Size())
+	}
+	if _, err := capped.WriteAt([]byte("x"), 1024); !errors.Is(err, errTooLarge) {
+		t.Fatalf("WriteAt past the cap: %v", err)
+	}
+	if err := capped.Truncate(2048); !errors.Is(err, errTooLarge) {
+		t.Fatalf("Truncate past the cap: %v", err)
+	}
+}
+
+func TestAFileWhoseMessageWasDeletedDuringTheDownloadIsNotKept(t *testing.T) {
+	e := newEnv(t)
+	id := e.addMedia(shaA, 5, true)
+	e.request(id)
+	dl := &fakeDownloader{content: []byte("photo")}
+	dl.during = func() { e.exec("DELETE FROM media WHERE message_id = $1", id) }
+
+	if !e.worker.Step(context.Background(), dl) {
+		t.Fatal("the request is closed")
+	}
+	if e.files.Exists(shaA) {
+		t.Fatal("the file of a message that is gone must not stay on disk")
+	}
+	if strings.Contains(e.logs.String(), "media stored") {
+		t.Fatalf("nothing was stored: %s", e.logs)
 	}
 }
