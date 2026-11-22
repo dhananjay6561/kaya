@@ -10,6 +10,7 @@ CREATE TABLE send_requests (
   created_at timestamptz NOT NULL DEFAULT now(),
   finished_at timestamptz,
   CHECK (payload ->> 'id' IS NOT DISTINCT FROM id::text),
+  CHECK (payload ->> 'expires_at' ~ '^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(\.\d+)?Z$'),
   CHECK ((payload ->> 'expires_at')::timestamptz IS NOT DISTINCT FROM expires_at),
   CHECK ((state IN ('sent', 'failed')) = (finished_at IS NOT NULL)),
   CHECK ((state = 'failed') = (error IS NOT NULL)),
@@ -37,6 +38,22 @@ $$;
 CREATE TRIGGER send_requests_notify AFTER INSERT ON send_requests
 FOR EACH STATEMENT EXECUTE FUNCTION notify_send_requests();
 
+CREATE FUNCTION guard_send_request() RETURNS trigger
+LANGUAGE plpgsql AS $$
+BEGIN
+  IF NOT ((OLD.state = 'pending' AND NEW.state IN ('sending', 'failed'))
+       OR (OLD.state = 'sending' AND NEW.state IN ('sent', 'failed'))) THEN
+    RAISE EXCEPTION 'a send request cannot go from % to %', OLD.state, NEW.state USING ERRCODE = 'check_violation';
+  END IF;
+  RETURN NEW;
+END
+$$;
+
+COMMENT ON FUNCTION guard_send_request() IS 'Allows only pending to sending or failed, and sending to sent or failed. A finished request can never be changed, so an outcome core has been told cannot be rewritten.';
+
+CREATE TRIGGER send_requests_guard BEFORE UPDATE ON send_requests
+FOR EACH ROW EXECUTE FUNCTION guard_send_request();
+
 CREATE TABLE connection_state (
   only_row boolean PRIMARY KEY DEFAULT true CHECK (only_row),
   state text NOT NULL CHECK (state IN ('connecting', 'pairing', 'connected', 'disconnected', 'logged_out')),
@@ -58,4 +75,5 @@ GRANT SELECT, INSERT, UPDATE ON connection_state TO kaya_core;
 -- migrate:down
 DROP TABLE connection_state;
 DROP TABLE send_requests;
+DROP FUNCTION guard_send_request();
 DROP FUNCTION notify_send_requests();

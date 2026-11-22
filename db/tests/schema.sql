@@ -430,6 +430,8 @@ BEGIN
     ('b3bb189e-8bf9-4888-9912-ace4e6543002', '{"id": "b3bb189e-8bf9-4888-9912-ace4e6543002", "expires_at": "2026-11-23T10:00:00Z"}', '2030-01-01T00:00:00Z')$q$, '23514');
   PERFORM pg_temp.expect_error($q$INSERT INTO send_requests (id, payload, expires_at) VALUES
     ('b3bb189e-8bf9-4888-9912-ace4e6543002', '{"id": "b3bb189e-8bf9-4888-9912-ace4e6543002"}', '2026-11-23T10:00:00Z')$q$, '23514');
+  PERFORM pg_temp.expect_error($q$INSERT INTO send_requests (id, payload, expires_at) VALUES
+    ('b3bb189e-8bf9-4888-9912-ace4e6543002', '{"id": "b3bb189e-8bf9-4888-9912-ace4e6543002", "expires_at": "infinity"}', 'infinity')$q$, '23514');
   PERFORM pg_temp.expect_error($q$INSERT INTO send_requests (id, payload, expires_at, state, wa_id) VALUES
     ('b3bb189e-8bf9-4888-9912-ace4e6543002', '{"id": "b3bb189e-8bf9-4888-9912-ace4e6543002", "expires_at": "2026-11-23T10:00:00Z"}', '2026-11-23T10:00:00Z', 'sent', 'FORGED')$q$, '42501');
   PERFORM pg_temp.expect_error(format($q$UPDATE send_requests SET state = 'sending', wa_id = 'FORGED' WHERE id = %L$q$, req), '42501');
@@ -458,9 +460,12 @@ BEGIN
     ('b3bb189e-8bf9-4888-9912-ace4e6543009', '{"id": "b3bb189e-8bf9-4888-9912-ace4e6543009", "expires_at": "2026-11-23T10:00:00Z"}', '2026-11-23T10:00:00Z')$q$, '42501');
   PERFORM pg_temp.expect_error('SELECT count(*) FROM connection_state', '42501');
 
+  PERFORM pg_temp.expect_error(format($q$UPDATE send_requests SET state = 'sent', wa_id = '3EB0TEST', finished_at = now() WHERE id = %L$q$, req), '23514');
   UPDATE send_requests SET state = 'sending', wa_id = '3EB0TEST' WHERE id = req;
+  PERFORM pg_temp.expect_error(format($q$UPDATE send_requests SET state = 'pending', wa_id = NULL WHERE id = %L$q$, req), '23514');
   UPDATE send_requests SET state = 'sent', finished_at = now() WHERE id = req;
-  UPDATE send_requests SET state = 'failed', error = 'outcome_unknown' WHERE id = req;
+  PERFORM pg_temp.expect_error(format($q$UPDATE send_requests SET state = 'failed', error = 'outcome_unknown' WHERE id = %L$q$, req), '23514');
+  PERFORM pg_temp.expect_error(format($q$UPDATE send_requests SET wa_id = '3EB0OTHER' WHERE id = %L$q$, req), '23514');
   DELETE FROM send_requests WHERE id = req;
   ASSERT FOUND, 'the gateway removes finished requests';
 END
