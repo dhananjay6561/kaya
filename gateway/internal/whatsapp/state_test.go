@@ -1,0 +1,246 @@
+package whatsapp
+
+import (
+	"context"
+	"encoding/json"
+	"errors"
+	"fmt"
+	"slices"
+	"sync"
+	"testing"
+	"time"
+
+	"go.mau.fi/whatsmeow/store"
+	"go.mau.fi/whatsmeow/types"
+	"go.mau.fi/whatsmeow/types/events"
+
+	"github.com/dhananjay6561/kaya/gateway/internal/contracts"
+)
+
+type fakePublisher struct {
+	mu       sync.Mutex
+	err      error
+	attempts []string
+	stored   []contracts.Event
+}
+
+func (f *fakePublisher) Publish(_ context.Context, e contracts.Event) error {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	f.attempts = append(f.attempts, e.ID)
+	if f.err != nil {
+		return f.err
+	}
+	f.stored = append(f.stored, e)
+	return nil
+}
+
+func (f *fakePublisher) setErr(err error) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	f.err = err
+}
+
+func (f *fakePublisher) tried() []string {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	return slices.Clone(f.attempts)
+}
+
+func (f *fakePublisher) events() []contracts.Event {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	return slices.Clone(f.stored)
+}
+
+func (f *fakePublisher) states(t *testing.T) []string {
+	t.Helper()
+	var out []string
+	for _, e := range f.events() {
+		var data contracts.ConnectionState
+		if err := json.Unmarshal(e.Data, &data); err != nil {
+			t.Fatal(err)
+		}
+		s := data.State
+		if data.Reason != "" {
+			s += ": " + data.Reason
+		}
+		out = append(out, s)
+	}
+	return out
+}
+
+func linked() *fakeLoader {
+	id := types.NewJID("919999999999", types.DefaultUserServer)
+	id.Device = 7
+	return &fakeLoader{device: &store.Device{ID: &id}}
+}
+
+func publishingConn(loader sessionLoader, made *clients) (*Conn, *fakePublisher) {
+	c, _ := newTestConn(loader, made)
+	pub := &fakePublisher{}
+	c.SetPublisher(pub)
+	c.publishRetry = time.Millisecond
+	c.publishRetryMax = 4 * time.Millisecond
+	c.publishTimeout = time.Second
+	c.publishOnStop = time.Second
+	return c, pub
+}
+
+func wantStates(t *testing.T, pub *fakePublisher, want ...string) {
+	t.Helper()
+	waitFor(t, fmt.Sprintf("%d stored state changes", len(want)), func() bool { return len(pub.events()) >= len(want) })
+	if got := pub.states(t); !slices.Equal(got, want) {
+		t.Fatalf("stored state changes:\n got %q\nwant %q", got, want)
+	}
+}
+
+func TestEveryStateChangeIsPublishedOnceAndInOrder(t *testing.T) {
+	made := &clients{}
+	c, pub := publishingConn(linked(), made)
+	started := time.Now().Add(-time.Second)
+	cancel, done := runInBackground(t, c)
+	waitFor(t, "first client", func() bool { return made.count() == 1 })
+	cli := made.get(0)
+
+	cli.emit(&events.Connected{})
+	cli.emit(&events.Connected{})
+	cli.emit(&events.Disconnected{})
+	cli.emit(&events.Disconnected{})
+	cli.emit(&events.Connected{})
+	stop(t, cancel, done)
+
+	wantStates(t, pub,
+		"connecting",
+		"connected",
+		"disconnected: "+ReasonReconnecting,
+		"connected",
+		"disconnected: "+ReasonShuttingDown,
+	)
+	validator, err := contracts.NewValidator()
+	if err != nil {
+		t.Fatal(err)
+	}
+	last := started
+	for _, e := range pub.events() {
+		if _, err := validator.EncodeEvent(e); err != nil {
+			t.Fatalf("a published event does not fit the contract: %v", err)
+		}
+		var data contracts.ConnectionState
+		_ = json.Unmarshal(e.Data, &data)
+		if data.OwnJID != "919999999999@s.whatsapp.net" {
+			t.Fatalf("own_jid must be the account without its device part, got %q", data.OwnJID)
+		}
+		if e.OccurredAt.Before(last) || e.OccurredAt.After(time.Now()) {
+			t.Fatalf("occurred_at %s is out of order", e.OccurredAt)
+		}
+		last = e.OccurredAt.Time
+	}
+	if got := c.Status(); got.Since.IsZero() || got.Since.Before(started) {
+		t.Fatalf("status must say when it last changed, got %+v", got)
+	}
+}
+
+func TestAnUnpairedGatewayPublishesOnlyThatItIsNotPaired(t *testing.T) {
+	c, pub := publishingConn(&fakeLoader{}, &clients{})
+	cancel, done := runInBackground(t, c)
+	wantStates(t, pub, "logged_out: "+ReasonNotPaired)
+	stop(t, cancel, done)
+	wantStates(t, pub, "logged_out: "+ReasonNotPaired)
+	var data contracts.ConnectionState
+	_ = json.Unmarshal(pub.events()[0].Data, &data)
+	if data.OwnJID != "" {
+		t.Fatalf("no account is linked, got own_jid %q", data.OwnJID)
+	}
+}
+
+func TestALongOutageIsOneStateChange(t *testing.T) {
+	down := errors.New("dial tcp: no route to host")
+	made := &clients{connectErrs: []error{down, down, down, down, down}}
+	c, pub := publishingConn(linked(), made)
+	cancel, done := runInBackground(t, c)
+
+	waitFor(t, "the attempt that works", func() bool { return made.count() == 6 })
+	made.get(5).emit(&events.Connected{})
+	wantStates(t, pub, "connecting", "disconnected: "+ReasonUnreachable, "connected")
+	stop(t, cancel, done)
+}
+
+func TestLogoutIsPublished(t *testing.T) {
+	made := &clients{}
+	c, pub := publishingConn(linked(), made)
+	cancel, done := runInBackground(t, c)
+	waitFor(t, "first client", func() bool { return made.count() == 1 })
+	made.get(0).emit(&events.Connected{})
+	made.get(0).emit(&events.LoggedOut{Reason: events.ConnectFailureLoggedOut})
+	wantStates(t, pub, "connecting", "connected", "logged_out: "+ReasonLoggedOut)
+	stop(t, cancel, done)
+	wantStates(t, pub, "connecting", "connected", "logged_out: "+ReasonLoggedOut)
+}
+
+func TestStateChangesWaitForTheDatabaseAndKeepTheirOrder(t *testing.T) {
+	made := &clients{}
+	c, pub := publishingConn(linked(), made)
+	pub.setErr(errors.New("connection refused"))
+	cancel, done := runInBackground(t, c)
+	waitFor(t, "first client", func() bool { return made.count() == 1 })
+	made.get(0).emit(&events.Connected{})
+	made.get(0).emit(&events.Disconnected{})
+
+	waitFor(t, "several attempts", func() bool { return len(pub.tried()) >= 3 })
+	tried := pub.tried()
+	if slices.ContainsFunc(tried, func(id string) bool { return id != tried[0] }) {
+		t.Fatal("a later change must not be tried before the first one is stored")
+	}
+	if len(pub.events()) != 0 {
+		t.Fatal("nothing can be stored while the database is away")
+	}
+
+	pub.setErr(nil)
+	wantStates(t, pub, "connecting", "connected", "disconnected: "+ReasonReconnecting)
+	if pub.events()[0].ID != tried[0] {
+		t.Fatal("a retry must reuse the event id, so a write that did go through is not stored twice")
+	}
+	stop(t, cancel, done)
+}
+
+func TestTheShutdownStateIsStoredEvenThoughTheContextIsDone(t *testing.T) {
+	made := &clients{}
+	c, pub := publishingConn(linked(), made)
+	cancel, done := runInBackground(t, c)
+	waitFor(t, "first client", func() bool { return made.count() == 1 })
+	made.get(0).emit(&events.Connected{})
+	wantStates(t, pub, "connecting", "connected")
+
+	stop(t, cancel, done)
+	if got := pub.states(t); len(got) != 3 || got[2] != "disconnected: "+ReasonShuttingDown {
+		t.Fatalf("Run must not return before the last state is stored, got %q", got)
+	}
+}
+
+func TestOnlyTheNewestStateChangesAreKeptWhileTheDatabaseIsAway(t *testing.T) {
+	c, pub := publishingConn(linked(), &clients{})
+	for i := range maxUnpublished + 10 {
+		c.set(contracts.StateDisconnected, fmt.Sprintf("reason %d", i))
+	}
+	if !c.publishQueued(context.Background()) {
+		t.Fatal("the queue must drain")
+	}
+	got := pub.states(t)
+	if len(got) != maxUnpublished || got[0] != "disconnected: reason 10" || got[len(got)-1] != fmt.Sprintf("disconnected: reason %d", maxUnpublished+9) {
+		t.Fatalf("want the newest %d changes, got %d from %q to %q", maxUnpublished, len(got), got[0], got[len(got)-1])
+	}
+}
+
+func TestAStateChangeThatBreaksTheContractIsDroppedNotRetried(t *testing.T) {
+	c, pub := publishingConn(linked(), &clients{})
+	c.set(contracts.StateDisconnected, "first")
+	c.set(contracts.StateConnected, "")
+	pub.setErr(fmt.Errorf("encode: %w", contracts.ErrInvalid))
+	if !c.publishQueued(context.Background()) {
+		t.Fatal("an event that can never be stored must not block the ones behind it")
+	}
+	if got := len(pub.tried()); got != 2 {
+		t.Fatalf("want each tried once, got %d attempts", got)
+	}
+}
