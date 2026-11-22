@@ -73,7 +73,9 @@ Folders appear when a phase needs them; empty placeholders are not committed.
   for send requests.
   - **Writing.** The writer inserts the validated payload as `jsonb` in the same transaction as
     the data it describes, then sends `NOTIFY` as a wake-up. Rows have a `bigint` identity `seq`
-    and a `state`.
+    and a `state`. A transaction that adds an event holds one advisory lock from that point until
+    it ends, so `seq` order is commit order; without it an event with a lower `seq` could become
+    visible after one with a higher `seq` had already been read.
   - **Reading.** Each table has exactly one consumer: core for events, the gateway for send
     requests. It `LISTEN`s, and on start (or a missed notify) drains pending rows in `seq` order.
     With one ordered consumer, `connection.state` changes apply in the order they happened.
@@ -96,16 +98,22 @@ Folders appear when a phase needs them; empty placeholders are not committed.
       `messages` itself. `send_requests.wa_id` tells a message Kaya sent from one DJ typed.
     - While WhatsApp is disconnected, requests wait; those that expire in the meantime are still
       answered with `expired`.
+    - A trigger allows only `pending → sending | failed` and `sending → sent | failed`, so an
+      outcome that was reported can never be rewritten, by any role.
   - **What core does with events.** One consumer takes pending events in `seq` order, one
     transaction each: the handler's writes and the `handled` mark commit together. It keeps the
     latest `connection.state` in its own one-row table, `connection_state`, which is where it
     learns DJ's own JID. `send()` on the chat channel inserts a request, then waits for the row to
     reach `sent` or `failed`; the `send.result` event only wakes that wait early. The same
-    idempotency key always maps to the same request id, so a retry never queues a second message.
+    idempotency key always maps to the same request id, so a retry never queues a second message,
+    and reusing a key for a different message is refused. A request the gateway never picked up
+    is given up on shortly after it expires, when it can no longer be sent; one the gateway is in
+    the middle of sending is waited for, and reported as `outcome_unknown` if no result ever comes.
   - **Poison rows.** A row that fails the reader's validation, or whose handler fails for a
     non-transient reason, moves to `dead` with an error code and is skipped, so draining never
     loops on it. Transient failures retry with backoff, without reordering later rows.
-  - **Retention.** Handled rows are deleted after 7 days; `dead` rows stay until someone looks at
+  - **Retention.** Each reader deletes what it finished more than 7 days ago: core its handled
+    events, the gateway its sent and failed requests. `dead` events stay until someone looks at
     them.
   - **Roles.** Each service has its own Postgres role (see "Data ownership"). The gateway can only
     insert into the events table; in the send-requests table it can record outcomes but cannot
