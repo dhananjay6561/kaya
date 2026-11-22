@@ -37,9 +37,9 @@ TEST_DATABASE_URL=postgres://kaya:kaya@localhost:5432/kaya make test
 
 ### Linking WhatsApp
 
-`make pair` links Kaya to your WhatsApp as a linked device. It stops the gateway, shows a QR code
-to scan under WhatsApp > Settings > Linked devices > Link a device, and starts the gateway again
-once the phone has linked. Without a camera handy, or on a headless box, use a pairing code:
+`make pair` links Kaya to your WhatsApp as a linked device. It rebuilds the gateway image, stops
+the gateway if it is running, shows a QR code to scan under WhatsApp > Settings > Linked devices >
+Link a device, and afterwards starts the gateway again if it was running before. Without a camera handy, or on a headless box, use a pairing code:
 `make pair PHONE=919876543210` (full international number). The device shows up as "Kaya".
 
 The session is stored in Postgres and survives restarts. The gateway's `/health` shows the
