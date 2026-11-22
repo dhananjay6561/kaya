@@ -10,10 +10,13 @@ import (
 	"time"
 
 	"go.mau.fi/whatsmeow"
+	"go.mau.fi/whatsmeow/appstate"
 	"go.mau.fi/whatsmeow/store"
+	"go.mau.fi/whatsmeow/types"
 	"go.mau.fi/whatsmeow/types/events"
 
 	"github.com/dhananjay6561/kaya/gateway/internal/contracts"
+	"github.com/dhananjay6561/kaya/gateway/internal/ingest"
 	"github.com/dhananjay6561/kaya/gateway/internal/logging"
 )
 
@@ -30,7 +33,22 @@ const (
 	ReasonReplaced         = "the session is in use elsewhere: stop the other gateway, then restart this one"
 	ReasonOutdated         = "WhatsApp rejected this client version: update whatsmeow"
 	ReasonShuttingDown     = "shutting down"
+	ReasonDatabaseDown     = "database unavailable, reconnecting when it is back"
 )
+
+const (
+	groupSyncEvery    = 12 * time.Hour
+	groupSyncDebounce = 30 * time.Second
+	groupSyncMinGap   = 10 * time.Minute
+)
+
+// Sink stores what the connection receives. Handle reports whether the event is safely stored;
+// false means WhatsApp must deliver it again, and the connection is dropped until the store works.
+type Sink interface {
+	Handle(ctx context.Context, own ingest.Own, evt any) bool
+	SyncGroups(ctx context.Context, groups []*types.GroupInfo) error
+	SyncContacts(ctx context.Context, contacts []ingest.ContactNames) error
+}
 
 // maxReconnectErrors caps whatsmeow's reconnect delay, which grows by 2 s per failed attempt.
 const maxReconnectErrors = 30
@@ -46,9 +64,10 @@ type sessionLoader interface {
 }
 
 type client interface {
-	AddEventHandler(handler whatsmeow.EventHandler) uint32
+	AddEventHandlerWithSuccessStatus(handler whatsmeow.EventHandlerWithSuccessStatus) uint32
 	ConnectContext(ctx context.Context) error
 	Disconnect()
+	GetJoinedGroups(ctx context.Context) ([]*types.GroupInfo, error)
 }
 
 // ending is what a connection that whatsmeow will not bring back asks Run to do next.
@@ -61,34 +80,54 @@ type ending struct {
 // Conn keeps Kaya connected to WhatsApp with the stored session.
 type Conn struct {
 	sessions  sessionLoader
+	sink      Sink
 	logger    *slog.Logger
 	newClient func(*store.Device) client
 
 	minBackoff time.Duration
 	maxBackoff time.Duration
+	storeRetry time.Duration
 
 	ended      chan ending
 	generation atomic.Uint64
+	failed     atomic.Uint64
 
-	mu     sync.RWMutex
-	status Status
+	groupSyncAsk      chan struct{}
+	groupSyncDebounce time.Duration
+	groupSyncMinGap   time.Duration
+	syncing           sync.Mutex
+
+	mu            sync.RWMutex
+	status        Status
+	current       client
+	device        *store.Device
+	lastGroupSync time.Time
+	contactsDone  bool
 }
 
-// NewConn returns a connection that uses the session in sessions.
-func NewConn(sessions *Sessions, logger *slog.Logger) *Conn {
+// NewConn returns a connection that uses the session in sessions and hands what it receives to
+// sink. A nil sink stores nothing and acknowledges everything.
+func NewConn(sessions *Sessions, sink Sink, logger *slog.Logger) *Conn {
 	waLogger := NewLogger(logger)
 	return &Conn{
 		sessions: sessions,
+		sink:     sink,
 		logger:   logger,
 		newClient: func(device *store.Device) client {
 			cli := whatsmeow.NewClient(device, waLogger)
 			cli.AutoReconnectHook = func(error) bool { return capReconnectErrors(cli) }
+			cli.SynchronousAck = true
+			cli.EnableDecryptedEventBuffer = true
 			return cli
 		},
-		minBackoff: time.Second,
-		maxBackoff: time.Minute,
-		ended:      make(chan ending, 1),
-		status:     Status{State: contracts.StateConnecting},
+		minBackoff:        time.Second,
+		maxBackoff:        time.Minute,
+		storeRetry:        time.Minute,
+		ended:             make(chan ending, 1),
+		groupSyncAsk:      make(chan struct{}, 1),
+		groupSyncDebounce: groupSyncDebounce,
+		groupSyncMinGap:   groupSyncMinGap,
+		status:            Status{State: contracts.StateConnecting},
 	}
 }
 
@@ -117,6 +156,7 @@ func (c *Conn) set(state, reason string) {
 // stops trying when the phone logged Kaya out, the session is in use elsewhere, or the client is
 // too old.
 func (c *Conn) Run(ctx context.Context) error {
+	go c.groupSyncLoop(ctx)
 	backoff := c.minBackoff
 	for {
 		cli, err := c.connect(ctx)
@@ -191,10 +231,11 @@ func (c *Conn) connect(ctx context.Context) (client, error) {
 	}
 	generation := c.generation.Add(1)
 	cli := c.newClient(device)
-	cli.AddEventHandler(func(evt any) {
-		if generation == c.generation.Load() {
-			c.handle(generation, evt)
-		}
+	c.mu.Lock()
+	c.current, c.device = cli, device
+	c.mu.Unlock()
+	cli.AddEventHandlerWithSuccessStatus(func(evt any) bool {
+		return c.receive(ctx, generation, evt)
 	})
 	c.set(contracts.StateConnecting, "")
 	if err := cli.ConnectContext(ctx); err != nil {
@@ -202,6 +243,169 @@ func (c *Conn) connect(ctx context.Context) (client, error) {
 		return nil, fmt.Errorf("connect to whatsapp: %w", err)
 	}
 	return cli, nil
+}
+
+// receive handles one event and reports whether whatsmeow may acknowledge it. An event from a
+// connection that was replaced, or that already failed to store something, is never acknowledged:
+// WhatsApp delivers it again on the next connection.
+func (c *Conn) receive(ctx context.Context, generation uint64, evt any) bool {
+	if generation != c.generation.Load() || generation == c.failed.Load() {
+		return false
+	}
+	c.handle(generation, evt)
+	if c.sink == nil {
+		return true
+	}
+	if !c.sink.Handle(ctx, c.own(), evt) {
+		if ctx.Err() == nil {
+			c.failed.Store(generation)
+			c.set(contracts.StateDisconnected, ReasonDatabaseDown)
+			c.end(generation, ending{retryAfter: c.storeRetry})
+		}
+		return false
+	}
+	switch e := evt.(type) {
+	case *events.Connected:
+		c.afterConnected(ctx)
+	case *events.AppStateSyncComplete:
+		if e.Name == appstate.WAPatchCriticalUnblockLow {
+			go c.syncContacts(ctx)
+		}
+	}
+	return true
+}
+
+func (c *Conn) own() ingest.Own {
+	c.mu.RLock()
+	device := c.device
+	c.mu.RUnlock()
+	if device == nil {
+		return ingest.Own{}
+	}
+	return ingest.AddressOf(device.GetJID(), device.GetLID())
+}
+
+func (c *Conn) afterConnected(ctx context.Context) {
+	c.mu.Lock()
+	contacts := !c.contactsDone
+	c.contactsDone = true
+	groups := c.lastGroupSync.IsZero() || time.Since(c.lastGroupSync) >= groupSyncEvery
+	c.mu.Unlock()
+	if contacts {
+		go c.syncContacts(ctx)
+	}
+	if groups {
+		go c.syncGroups(ctx)
+	}
+}
+
+// RequestGroupSync asks for the group names to be fetched again soon, for when a message arrives
+// from a group that is not stored yet. Requests are batched and spaced out, since each one is a
+// query to WhatsApp.
+func (c *Conn) RequestGroupSync() {
+	select {
+	case c.groupSyncAsk <- struct{}{}:
+	default:
+	}
+}
+
+func (c *Conn) groupSyncLoop(ctx context.Context) {
+	wait := func(d time.Duration) bool {
+		if d <= 0 {
+			return true
+		}
+		select {
+		case <-ctx.Done():
+			return false
+		case <-time.After(d):
+			return true
+		}
+	}
+	for {
+		select {
+		case <-ctx.Done():
+			return
+		case <-c.groupSyncAsk:
+		}
+		if !wait(c.groupSyncDebounce) {
+			return
+		}
+		c.mu.RLock()
+		last := c.lastGroupSync
+		c.mu.RUnlock()
+		if !last.IsZero() && !wait(c.groupSyncMinGap-time.Since(last)) {
+			return
+		}
+		select {
+		case <-c.groupSyncAsk:
+		default:
+		}
+		c.syncGroups(ctx)
+	}
+}
+
+// syncGroups fetches every joined group in one query and stores the names.
+func (c *Conn) syncGroups(ctx context.Context) {
+	c.syncing.Lock()
+	defer c.syncing.Unlock()
+	c.mu.Lock()
+	cli := c.current
+	c.lastGroupSync = time.Now()
+	c.mu.Unlock()
+	if cli == nil || c.sink == nil || ctx.Err() != nil {
+		return
+	}
+	groups, err := cli.GetJoinedGroups(ctx)
+	if err != nil {
+		c.logger.Warn("could not fetch group names", logging.Err(err))
+		return
+	}
+	if err := c.sink.SyncGroups(ctx, groups); err != nil {
+		c.logger.Warn("could not store group names", logging.Err(err))
+		return
+	}
+	c.logger.Info("group names synced", "groups", len(groups))
+}
+
+// syncContacts copies names from whatsmeow's own contact store, which it fills from the phone's
+// address book. It reads the local database only; nothing is asked of WhatsApp.
+func (c *Conn) syncContacts(ctx context.Context) {
+	c.mu.RLock()
+	device := c.device
+	c.mu.RUnlock()
+	if device == nil || device.Contacts == nil || c.sink == nil || ctx.Err() != nil {
+		return
+	}
+	all, err := device.Contacts.GetAllContacts(ctx)
+	if err != nil {
+		c.logger.Warn("could not read contacts", logging.Err(err))
+		return
+	}
+	var pns []types.JID
+	for jid := range all {
+		if jid.Server == types.DefaultUserServer {
+			pns = append(pns, jid)
+		}
+	}
+	lids := map[types.JID]types.JID{}
+	if device.LIDs != nil && len(pns) > 0 {
+		if lids, err = device.LIDs.GetManyLIDsForPNs(ctx, pns); err != nil {
+			c.logger.Warn("could not read the lid map", logging.Err(err))
+			lids = map[types.JID]types.JID{}
+		}
+	}
+	names := make([]ingest.ContactNames, 0, len(all))
+	for jid, info := range all {
+		names = append(names, ingest.ContactNames{
+			Address: ingest.AddressOf(jid, lids[jid]), Saved: info.FullName, First: info.FirstName,
+			Push: info.PushName, Business: info.BusinessName, AddressBook: true,
+		})
+	}
+	if err := c.sink.SyncContacts(ctx, names); err != nil {
+		c.logger.Warn("could not store contacts", logging.Err(err))
+		return
+	}
+	c.logger.Info("contacts synced", "contacts", len(names))
 }
 
 func (c *Conn) end(generation uint64, e ending) {

@@ -11,9 +11,11 @@ import (
 
 	"go.mau.fi/whatsmeow"
 	"go.mau.fi/whatsmeow/store"
+	"go.mau.fi/whatsmeow/types"
 	"go.mau.fi/whatsmeow/types/events"
 
 	"github.com/dhananjay6561/kaya/gateway/internal/contracts"
+	"github.com/dhananjay6561/kaya/gateway/internal/ingest"
 	"github.com/dhananjay6561/kaya/gateway/internal/logging"
 )
 
@@ -38,14 +40,28 @@ type fakeClient struct {
 	mu           sync.Mutex
 	connectErr   error
 	disconnected bool
-	handler      whatsmeow.EventHandler
+	handler      whatsmeow.EventHandlerWithSuccessStatus
+	groupQueries int
 }
 
-func (f *fakeClient) AddEventHandler(h whatsmeow.EventHandler) uint32 {
+func (f *fakeClient) AddEventHandlerWithSuccessStatus(h whatsmeow.EventHandlerWithSuccessStatus) uint32 {
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	f.handler = h
 	return 1
+}
+
+func (f *fakeClient) GetJoinedGroups(context.Context) ([]*types.GroupInfo, error) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	f.groupQueries++
+	return []*types.GroupInfo{{JID: types.NewJID("120363000000000000", types.GroupServer), GroupName: types.GroupName{Name: "Trip"}}}, nil
+}
+
+func (f *fakeClient) queries() int {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	return f.groupQueries
 }
 
 func (f *fakeClient) ConnectContext(context.Context) error {
@@ -60,11 +76,55 @@ func (f *fakeClient) Disconnect() {
 	f.disconnected = true
 }
 
-func (f *fakeClient) emit(evt any) {
+func (f *fakeClient) emit(evt any) bool {
 	f.mu.Lock()
 	h := f.handler
 	f.mu.Unlock()
-	h(evt)
+	return h(evt)
+}
+
+type fakeSink struct {
+	mu       sync.Mutex
+	refuse   bool
+	handled  []any
+	groups   int
+	contacts int
+}
+
+func (f *fakeSink) Handle(_ context.Context, _ ingest.Own, evt any) bool {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	if f.refuse {
+		return false
+	}
+	f.handled = append(f.handled, evt)
+	return true
+}
+
+func (f *fakeSink) SyncGroups(_ context.Context, groups []*types.GroupInfo) error {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	f.groups += len(groups)
+	return nil
+}
+
+func (f *fakeSink) SyncContacts(context.Context, []ingest.ContactNames) error {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	f.contacts++
+	return nil
+}
+
+func (f *fakeSink) setRefuse(v bool) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	f.refuse = v
+}
+
+func (f *fakeSink) seen() (handled, groups int) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	return len(f.handled), f.groups
 }
 
 func (f *fakeClient) isDisconnected() bool {
@@ -105,11 +165,14 @@ func (c *clients) get(i int) *fakeClient {
 
 func newTestConn(loader sessionLoader, made *clients) (*Conn, *bytes.Buffer) {
 	var buf bytes.Buffer
-	c := NewConn(nil, logging.New(&buf, "info"))
+	c := NewConn(nil, nil, logging.New(&buf, "info"))
 	c.sessions = loader
 	c.newClient = made.next
 	c.minBackoff = time.Millisecond
 	c.maxBackoff = 4 * time.Millisecond
+	c.storeRetry = 5 * time.Millisecond
+	c.groupSyncDebounce = 5 * time.Millisecond
+	c.groupSyncMinGap = 30 * time.Millisecond
 	return c, &buf
 }
 
@@ -296,4 +359,80 @@ func TestReconnectDelayIsCapped(t *testing.T) {
 	if cli.AutoReconnectErrors != 3 {
 		t.Fatal("small counts must be left alone")
 	}
+}
+
+func TestEventsAreAcknowledgedOnlyWhenTheSinkStoredThem(t *testing.T) {
+	made := &clients{}
+	c, _ := newTestConn(paired(), made)
+	sink := &fakeSink{}
+	c.sink = sink
+	cancel, done := runInBackground(t, c)
+	waitFor(t, "first client", func() bool { return made.count() == 1 })
+	first := made.get(0)
+
+	if !first.emit(&events.Message{}) {
+		t.Fatal("a stored message is acknowledged")
+	}
+	sink.setRefuse(true)
+	if first.emit(&events.Message{}) {
+		t.Fatal("a message the sink could not store must not be acknowledged")
+	}
+	if got := c.Status(); got.State != contracts.StateDisconnected || got.Reason != ReasonDatabaseDown {
+		t.Fatalf("got %+v", got)
+	}
+	sink.setRefuse(false)
+	if first.emit(&events.Message{}) {
+		t.Fatal("once a connection failed to store, nothing more on it is acknowledged")
+	}
+
+	waitFor(t, "a new connection", func() bool { return made.count() == 2 })
+	if !first.isDisconnected() {
+		t.Fatal("the failed connection must be dropped so WhatsApp delivers again")
+	}
+	if first.emit(&events.Message{}) {
+		t.Fatal("an event from a replaced connection is never acknowledged")
+	}
+	if !made.get(1).emit(&events.Message{}) {
+		t.Fatal("the new connection stores and acknowledges again")
+	}
+	if handled, _ := sink.seen(); handled != 2 {
+		t.Fatalf("want 2 stored events, got %d", handled)
+	}
+	stop(t, cancel, done)
+}
+
+func TestGroupNamesAreFetchedOnConnectAndBatchedAfterThat(t *testing.T) {
+	made := &clients{}
+	c, _ := newTestConn(paired(), made)
+	sink := &fakeSink{}
+	c.sink = sink
+	c.groupSyncMinGap = 200 * time.Millisecond
+	cancel, done := runInBackground(t, c)
+	waitFor(t, "first client", func() bool { return made.count() == 1 })
+	cli := made.get(0)
+
+	cli.emit(&events.Connected{})
+	waitFor(t, "the first sweep", func() bool { return cli.queries() == 1 })
+	cli.emit(&events.Connected{})
+	time.Sleep(15 * time.Millisecond)
+	if cli.queries() != 1 {
+		t.Fatalf("a reconnect within 12 h must not query again, got %d queries", cli.queries())
+	}
+
+	for range 5 {
+		c.RequestGroupSync()
+	}
+	time.Sleep(40 * time.Millisecond)
+	if cli.queries() != 1 {
+		t.Fatal("a requested sweep waits for the minimum gap")
+	}
+	waitFor(t, "one batched sweep", func() bool { return cli.queries() == 2 })
+	time.Sleep(60 * time.Millisecond)
+	if cli.queries() != 2 {
+		t.Fatalf("five requests make one sweep, got %d queries", cli.queries())
+	}
+	if _, groups := sink.seen(); groups != 2 {
+		t.Fatalf("each sweep stores its groups, got %d", groups)
+	}
+	stop(t, cancel, done)
 }
