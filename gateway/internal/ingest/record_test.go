@@ -1,6 +1,9 @@
 package ingest
 
 import (
+	"bytes"
+	"reflect"
+	"strings"
 	"testing"
 	"time"
 
@@ -356,5 +359,65 @@ func TestBroadcastListAndBotChats(t *testing.T) {
 	want := Address{Bot: "13135550002@bot"}
 	if rec := FromMessage(bot, own, SourceLive); rec.Chat.Contact != want || rec.Sender != want {
 		t.Fatalf("got %+v", rec)
+	}
+}
+
+func mediaFixture() (key, encHash, hash []byte) {
+	return bytes.Repeat([]byte{1}, 32), bytes.Repeat([]byte{2}, 32), bytes.Repeat([]byte{0xab}, 32)
+}
+
+func TestMediaIsCapturedForFilesOnly(t *testing.T) {
+	key, encHash, hash := mediaFixture()
+	hexHash := strings.Repeat("ab", 32)
+	voice := &waE2E.Message{AudioMessage: &waE2E.AudioMessage{
+		PTT: proto.Bool(true), Mimetype: proto.String("audio/ogg; codecs=opus"), FileLength: proto.Uint64(4096), Seconds: proto.Uint32(7),
+		MediaKey: key, FileEncSHA256: encHash, FileSHA256: hash, DirectPath: proto.String("/v/t62/voice"),
+	}}
+	rec := FromMessage(dmFrom(t, voice), own, SourceLive)
+	want := Media{
+		MimeType: "audio/ogg; codecs=opus", Size: 4096, DurationS: 7, SHA256: hexHash, Type: "audio",
+		Key: key, DirectPath: "/v/t62/voice", EncSHA256: encHash,
+	}
+	if rec.Kind != "voice" || rec.Media == nil || !reflect.DeepEqual(*rec.Media, want) || !rec.Media.Fetchable() {
+		t.Fatalf("got %+v", rec.Media)
+	}
+
+	doc := FromMessage(dmFrom(t, &waE2E.Message{DocumentMessage: &waE2E.DocumentMessage{
+		FileName: proto.String(" ../../deck.pdf "), Mimetype: proto.String("application/pdf"), FileSHA256: []byte{1, 2},
+	}}), own, SourceLive)
+	if doc.Media == nil || doc.Media.Type != "document" || doc.Media.FileName != "../../deck.pdf" || doc.Media.SHA256 != "" || doc.Media.Fetchable() {
+		t.Fatalf("a document keeps its name as data; a malformed hash is dropped and it is not fetchable: %+v", doc.Media)
+	}
+
+	video := FromMessage(dmFrom(t, &waE2E.Message{PtvMessage: &waE2E.VideoMessage{Width: proto.Uint32(640), Height: proto.Uint32(640), Seconds: proto.Uint32(12)}}), own, SourceLive)
+	if video.Media == nil || video.Media.Type != "video" || video.Media.Width != 640 || video.Media.DurationS != 12 {
+		t.Fatalf("got %+v", video.Media)
+	}
+
+	for name, msg := range map[string]*waE2E.Message{
+		"text":    textMsg("hi"),
+		"sticker": {StickerMessage: &waE2E.StickerMessage{MediaKey: key, DirectPath: proto.String("/v/t62/s")}},
+		"contact": {ContactMessage: &waE2E.ContactMessage{DisplayName: proto.String("Priya")}},
+	} {
+		if rec := FromMessage(dmFrom(t, msg), own, SourceLive); rec.Media != nil {
+			t.Fatalf("%s must have no media, got %+v", name, rec.Media)
+		}
+	}
+}
+
+func TestViewOnceNeverKeepsKeys(t *testing.T) {
+	key, encHash, hash := mediaFixture()
+	image := &waE2E.ImageMessage{MediaKey: key, FileEncSHA256: encHash, FileSHA256: hash, DirectPath: proto.String("/v/t62/i"), Caption: proto.String("secret")}
+
+	wrapped := dmFrom(t, &waE2E.Message{ImageMessage: image})
+	wrapped.IsViewOnce = true
+	if rec := FromMessage(wrapped, own, SourceLive); !rec.ViewOnce || rec.Media != nil || rec.Body != nil {
+		t.Fatalf("a view-once wrapper keeps no keys and no caption: %+v", rec)
+	}
+
+	flagged := proto.Clone(image).(*waE2E.ImageMessage)
+	flagged.ViewOnce = proto.Bool(true)
+	if rec := FromMessage(dmFrom(t, &waE2E.Message{ImageMessage: flagged}), own, SourceLive); !rec.ViewOnce || rec.Media != nil || rec.Body != nil {
+		t.Fatalf("the inner view-once flag counts too: %+v", rec)
 	}
 }

@@ -317,3 +317,66 @@ func TestDeadLetters(t *testing.T) {
 		t.Fatal("the dead letter must be stored")
 	}
 }
+
+func voiceNote(waID string, sha string) Record {
+	rec := message(dm, rahul, waID, "")
+	rec.Kind, rec.Body = "voice", nil
+	rec.Media = &Media{
+		MimeType: "audio/ogg", Size: 4096, DurationS: 7, SHA256: sha, Type: "audio",
+		Key: []byte{1}, DirectPath: "/v/t62/voice", EncSHA256: []byte{2},
+	}
+	return rec
+}
+
+func TestMediaRowsAndKeys(t *testing.T) {
+	f := newFixture(t)
+	sha := "abababababababababababababababababababababababababababababababab"
+	f.apply(voiceNote("V1", sha))
+	f.apply(voiceNote("V1", sha))
+
+	bare := message(dm, rahul, "DOC1", "the deck")
+	bare.Kind = "document"
+	bare.Media = &Media{MimeType: "application/pdf", FileName: "deck.pdf", Type: "document"}
+	f.apply(bare)
+
+	old := voiceNote("V2", sha)
+	old.Source = SourceHistory
+	f.apply(old)
+
+	if n := f.count(`SELECT count(*) FROM media m JOIN messages g ON g.id = m.message_id
+		WHERE g.wa_id = 'V1' AND m.mime_type = 'audio/ogg' AND m.size_bytes = 4096 AND m.duration_s = 7 AND m.sha256 = $1
+			AND m.state = 'remote' AND m.width IS NULL AND m.file_name IS NULL`, sha); n != 1 {
+		t.Fatal("the voice note must have one media row with its details")
+	}
+	if n := f.count("SELECT count(*) FROM media_keys WHERE media_type = 'audio' AND direct_path = '/v/t62/voice'"); n != 2 {
+		t.Fatalf("live and history messages both keep their keys, got %d", n)
+	}
+	if n := f.count(`SELECT count(*) FROM media m JOIN messages g ON g.id = m.message_id LEFT JOIN media_keys k USING (message_id)
+		WHERE g.wa_id = 'DOC1' AND m.file_name = 'deck.pdf' AND m.sha256 IS NULL AND k.message_id IS NULL`); n != 1 {
+		t.Fatal("a file that cannot be fetched has a media row and no keys")
+	}
+}
+
+func TestARevokeForgetsTheFile(t *testing.T) {
+	f := newFixture(t)
+	ctx := context.Background()
+	sha := "cdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcd"
+	f.apply(voiceNote("V1", sha))
+	f.apply(voiceNote("V2", sha))
+	if err := f.admin.Query(ctx, "WITH u AS (UPDATE media SET state = 'stored', stored_at = now() RETURNING 1) SELECT count(*) FROM u", nil, new(int)); err != nil {
+		t.Fatal(err)
+	}
+	revoke := func(waID string) Applied {
+		return f.apply(Record{Op: OpRevoke, Chat: dm, Sender: rahul, WAID: "REV" + waID, At: sentAt.Add(time.Minute), Source: SourceLive, Target: Target{WAID: waID, Sender: rahul}})
+	}
+
+	if got := revoke("V1"); !got.Changed || got.RemovedFile != "" {
+		t.Fatalf("the file stays while another stored message has it, got %+v", got)
+	}
+	if got := revoke("V2"); got.RemovedFile != sha {
+		t.Fatalf("the last message to go takes the file with it, got %+v", got)
+	}
+	if n := f.count("SELECT count(*) FROM media") + f.count("SELECT count(*) FROM media_keys"); n != 0 {
+		t.Fatal("a revoked message keeps no media rows or keys")
+	}
+}

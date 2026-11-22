@@ -3,6 +3,9 @@
 package ingest
 
 import (
+	"crypto/sha256"
+	"encoding/hex"
+	"math"
 	"strings"
 	"time"
 
@@ -86,11 +89,37 @@ type Record struct {
 	PushName     string
 	BusinessName string
 
+	// Media describes the message's file, for kinds that have one. Nil for view-once and stickers.
+	Media *Media
+
 	Target Target
 	Emoji  string
 
 	// raw is the message as WhatsApp sent it, kept only to make a dead letter if storing fails.
 	raw proto.Message
+}
+
+// Media is what WhatsApp says about a file, plus what it takes to fetch it.
+type Media struct {
+	MimeType  string
+	Size      int64
+	FileName  string
+	DurationS int
+	Width     int
+	Height    int
+	// SHA256 is the hash of the file itself, in hex; empty when WhatsApp sent none or a malformed one.
+	SHA256 string
+
+	// Type is image, video, audio or document: which of WhatsApp's key derivations the file uses.
+	Type       string
+	Key        []byte
+	DirectPath string
+	EncSHA256  []byte
+}
+
+// Fetchable reports whether everything needed to download the file is known.
+func (m *Media) Fetchable() bool {
+	return m != nil && len(m.Key) > 0 && m.DirectPath != "" && len(m.EncSHA256) > 0 && m.SHA256 != ""
 }
 
 func skip(reason string) Record { return Record{Op: OpSkip, SkipReason: reason} }
@@ -173,9 +202,11 @@ func FromMessage(evt *events.Message, own Own, source string) Record {
 
 	rec.Op = OpStore
 	rec.Kind, rec.Body = content(msg)
-	rec.ViewOnce = evt.IsViewOnce
+	rec.ViewOnce = evt.IsViewOnce || viewOnce(msg)
 	if rec.ViewOnce {
 		rec.Body = nil
+	} else {
+		rec.Media = media(msg)
 	}
 	if ctx := contextInfo(msg); ctx != nil {
 		if id := ctx.GetStanzaID(); id != "" {
@@ -355,6 +386,55 @@ func content(msg *waE2E.Message) (kind string, body *string) {
 		}
 	}
 	return "other", nil
+}
+
+func viewOnce(msg *waE2E.Message) bool {
+	return msg.GetImageMessage().GetViewOnce() || msg.GetVideoMessage().GetViewOnce() ||
+		msg.GetPtvMessage().GetViewOnce() || msg.GetAudioMessage().GetViewOnce()
+}
+
+type mediaFields interface {
+	GetMimetype() string
+	GetFileLength() uint64
+	GetFileSHA256() []byte
+	GetFileEncSHA256() []byte
+	GetMediaKey() []byte
+	GetDirectPath() string
+}
+
+// media describes the file of an image, video, audio, voice or document message. Stickers get
+// nothing: they are never fetched.
+func media(msg *waE2E.Message) *Media {
+	var m Media
+	var f mediaFields
+	switch {
+	case msg.GetImageMessage() != nil:
+		img := msg.GetImageMessage()
+		f, m.Type, m.Width, m.Height = img, "image", int(img.GetWidth()), int(img.GetHeight())
+	case msg.GetVideoMessage() != nil:
+		v := msg.GetVideoMessage()
+		f, m.Type, m.Width, m.Height, m.DurationS = v, "video", int(v.GetWidth()), int(v.GetHeight()), int(v.GetSeconds())
+	case msg.GetPtvMessage() != nil:
+		v := msg.GetPtvMessage()
+		f, m.Type, m.Width, m.Height, m.DurationS = v, "video", int(v.GetWidth()), int(v.GetHeight()), int(v.GetSeconds())
+	case msg.GetAudioMessage() != nil:
+		a := msg.GetAudioMessage()
+		f, m.Type, m.DurationS = a, "audio", int(a.GetSeconds())
+	case msg.GetDocumentMessage() != nil:
+		d := msg.GetDocumentMessage()
+		f, m.Type, m.FileName = d, "document", strings.TrimSpace(d.GetFileName())
+	default:
+		return nil
+	}
+	m.MimeType = strings.TrimSpace(f.GetMimetype())
+	if size := f.GetFileLength(); size <= math.MaxInt64 {
+		m.Size = int64(size)
+	}
+	if hash := f.GetFileSHA256(); len(hash) == sha256.Size {
+		m.SHA256 = hex.EncodeToString(hash)
+	}
+	m.Key, m.DirectPath, m.EncSHA256 = f.GetMediaKey(), f.GetDirectPath(), f.GetFileEncSHA256()
+	return &m
 }
 
 func nonEmpty(values ...string) []string {

@@ -36,6 +36,8 @@ type Ingester struct {
 	NewGroup func()
 	// HistoryQueued is called, if set, when a history chunk was announced and queued.
 	HistoryQueued func()
+	// RemoveFile is called, if set, with the SHA-256 of a downloaded file that a revoke left unused.
+	RemoveFile func(sha256 string)
 
 	attemptTimeout time.Duration
 	retryFirst     time.Duration
@@ -194,6 +196,9 @@ func (i *Ingester) message(ctx context.Context, info types.MessageInfo, raw prot
 			}
 			if applied.NewGroup && i.NewGroup != nil {
 				i.NewGroup()
+			}
+			if applied.RemovedFile != "" && i.RemoveFile != nil {
+				i.RemoveFile(applied.RemovedFile)
 			}
 			return true
 		case unavailable:

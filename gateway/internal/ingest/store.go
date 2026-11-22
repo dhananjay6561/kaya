@@ -21,6 +21,9 @@ type Applied struct {
 	NewChat bool
 	// Parked is true when an edit or revoke had no target yet and was kept for later.
 	Parked bool
+	// RemovedFile is the SHA-256 of a downloaded file that no stored message refers to any more,
+	// after a revoke. The caller deletes the file once the transaction has committed.
+	RemovedFile string
 	// NewGroup is true when the record created a group chat row, whose name is not known yet.
 	NewGroup bool
 	// NoTarget is true when an edit, revoke or reaction pointed at a message that is not stored.
@@ -199,6 +202,9 @@ func (s *Store) storeMessage(ctx context.Context, tx pgx.Tx, rec Record, senderI
 		if err != nil {
 			return Applied{}, fmt.Errorf("update chat: %w", err)
 		}
+		if err := s.storeMedia(ctx, tx, messageID, rec.Media); err != nil {
+			return Applied{}, err
+		}
 	}
 	if rec.Source == SourceHistory {
 		return out, nil
@@ -207,6 +213,54 @@ func (s *Store) storeMessage(ctx context.Context, tx pgx.Tx, rec Record, senderI
 		MessageID: messageID, ChatID: chatID, SenderID: senderID, WAID: rec.WAID, FromMe: rec.FromMe,
 		Kind: rec.Kind, Source: SourceLive, Change: "new", SentAt: contracts.At(rec.At),
 	})
+}
+
+// storeMedia records a message's file. The keys go in their own table, which only the gateway can
+// read, and only when everything needed to fetch the file is there.
+func (s *Store) storeMedia(ctx context.Context, tx pgx.Tx, messageID int64, m *Media) error {
+	if m == nil {
+		return nil
+	}
+	_, err := tx.Exec(ctx, `
+		INSERT INTO media (message_id, mime_type, size_bytes, file_name, duration_s, width, height, sha256)
+		VALUES ($1, NULLIF($2, ''), $3, NULLIF($4, ''), NULLIF($5, 0), NULLIF($6, 0), NULLIF($7, 0), NULLIF($8, ''))`,
+		messageID, m.MimeType, m.Size, m.FileName, m.DurationS, m.Width, m.Height, m.SHA256)
+	if err != nil {
+		return fmt.Errorf("store media: %w", err)
+	}
+	if !m.Fetchable() {
+		return nil
+	}
+	_, err = tx.Exec(ctx, `
+		INSERT INTO media_keys (message_id, media_key, direct_path, file_enc_sha256, media_type)
+		VALUES ($1, $2, $3, $4, $5)`, messageID, m.Key, m.DirectPath, m.EncSHA256, m.Type)
+	if err != nil {
+		return fmt.Errorf("store media keys: %w", err)
+	}
+	return nil
+}
+
+// removeMedia forgets a revoked message's file: its rows go, and if no other stored message has
+// the same file, the file's hash is returned so the caller can delete it.
+func (s *Store) removeMedia(ctx context.Context, tx pgx.Tx, messageID int64) (string, error) {
+	var sha *string
+	var state string
+	err := tx.QueryRow(ctx, "DELETE FROM media WHERE message_id = $1 RETURNING sha256, state", messageID).Scan(&sha, &state)
+	if errors.Is(err, pgx.ErrNoRows) {
+		return "", nil
+	}
+	if err != nil {
+		return "", fmt.Errorf("remove media: %w", err)
+	}
+	if state != "stored" || sha == nil {
+		return "", nil
+	}
+	var shared bool
+	err = tx.QueryRow(ctx, "SELECT EXISTS (SELECT FROM media WHERE sha256 = $1 AND state = 'stored')", *sha).Scan(&shared)
+	if err != nil || shared {
+		return "", err
+	}
+	return *sha, nil
 }
 
 func (s *Store) park(ctx context.Context, tx pgx.Tx, rec Record) error {
@@ -309,7 +363,13 @@ func (s *Store) changeMessage(ctx context.Context, tx pgx.Tx, rec Record) (Appli
 		return Applied{}, fmt.Errorf("change message: %w", err)
 	}
 	stored.SentAt = contracts.At(sentAt)
-	return Applied{Changed: true}, s.emit(ctx, tx, stored)
+	out := Applied{Changed: true}
+	if rec.Op == OpRevoke {
+		if out.RemovedFile, err = s.removeMedia(ctx, tx, stored.MessageID); err != nil {
+			return Applied{}, err
+		}
+	}
+	return out, s.emit(ctx, tx, stored)
 }
 
 func (s *Store) react(ctx context.Context, tx pgx.Tx, rec Record, senderID int64) (Applied, error) {
