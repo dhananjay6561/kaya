@@ -34,7 +34,7 @@ const schema = z.object({
   GROQ_API_KEY: z.preprocess(optional, z.string().optional()),
   GROQ_MODEL_HEAVY: z.preprocess(optional, z.string().default("openai/gpt-oss-120b")),
   GROQ_MODEL_ROUTINE: z.preprocess(optional, z.string().default("openai/gpt-oss-20b")),
-  CHAT_CHANNEL: z.preprocess(optional, z.enum(["stub"]).default("stub")),
+  CHAT_CHANNEL: z.preprocess(optional, z.enum(["gateway", "stub"]).default("gateway")),
   TELEPHONY_PROVIDER: z.preprocess(optional, z.enum(["stub"]).default("stub")),
 });
 

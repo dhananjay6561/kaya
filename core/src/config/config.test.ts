@@ -32,7 +32,7 @@ describe("loadConfig", () => {
     assert.equal(config.dataDir, "/base/data");
     assert.equal(groqOf(config).heavyModel, "openai/gpt-oss-120b");
     assert.equal(groqOf(config).routineModel, "openai/gpt-oss-20b");
-    assert.equal(config.channel.provider, "stub");
+    assert.equal(config.channel.provider, "gateway");
     assert.equal(config.telephony.provider, "stub");
   });
 
