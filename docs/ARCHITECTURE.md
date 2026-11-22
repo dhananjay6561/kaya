@@ -152,7 +152,9 @@ Folders appear when a phase needs them; empty placeholders are not committed.
   `{"status":"ok|unhealthy","service","version","checks":{"db":{"status":"ok|down","duration_ms"}}}`,
   with 200 when every check passes and 503 otherwise. Each check has a 2-second limit, and failure
   details go to the logs, not the response. A service starts even if a dependency is down and
-  reports it through `/health` until it recovers.
+  reports it through `/health` until it recovers. State that must not fail health goes under an
+  optional `info` object, such as the gateway's `"info":{"whatsapp":{"state","reason"}}`, which uses
+  the `connection.state` contract's states and fixed reason strings.
 - **Errors:** typed errors at boundaries, never swallowed. Retries with backoff only for network
   calls.
 - **Tests:** every phase ships tests for its logic. Anything touching the database is tested
