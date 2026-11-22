@@ -1,1 +1,1 @@
-export { type CommandsOptions, replyTo, startCommands } from "./commands.js";
+export { type CommandsOptions, clip, startCommands } from "./commands.js";
