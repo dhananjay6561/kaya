@@ -27,6 +27,8 @@ type Options struct {
 	Version      string
 	Checks       map[string]Checker
 	CheckTimeout time.Duration
+	// Info adds state that /health reports without failing on, such as the WhatsApp connection.
+	Info map[string]func() any
 }
 
 type checkResult struct {
@@ -39,6 +41,7 @@ type healthBody struct {
 	Service string                 `json:"service"`
 	Version string                 `json:"version"`
 	Checks  map[string]checkResult `json:"checks"`
+	Info    map[string]any         `json:"info,omitempty"`
 }
 
 // NewHandler returns the gateway's routes, wrapped with request ids, logging and panic recovery.
@@ -80,6 +83,12 @@ func health(o Options) http.HandlerFunc {
 			})
 		}
 		wg.Wait()
+		for name, info := range o.Info {
+			if body.Info == nil {
+				body.Info = map[string]any{}
+			}
+			body.Info[name] = info()
+		}
 
 		status := http.StatusOK
 		if body.Status != "ok" {

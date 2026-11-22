@@ -83,6 +83,31 @@ func TestHealthReportsDownDependency(t *testing.T) {
 	}
 }
 
+func TestHealthReportsInfoWithoutFailing(t *testing.T) {
+	h := NewHandler(Options{
+		Checks: map[string]Checker{"db": healthy},
+		Info: map[string]func() any{
+			"whatsapp": func() any { return map[string]string{"state": "logged_out", "reason": "not paired"} },
+		},
+	})
+	rec := get(t, h, "/health", nil)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status %d, want 200: info never fails health", rec.Code)
+	}
+	var body struct {
+		Info map[string]map[string]string `json:"info"`
+	}
+	if err := json.Unmarshal(rec.Body.Bytes(), &body); err != nil {
+		t.Fatal(err)
+	}
+	if body.Info["whatsapp"]["state"] != "logged_out" || body.Info["whatsapp"]["reason"] != "not paired" {
+		t.Fatalf("unexpected info %+v", body.Info)
+	}
+	if strings.Contains(get(t, NewHandler(Options{}), "/health", nil).Body.String(), `"info"`) {
+		t.Fatal("info is left out when nothing reports it")
+	}
+}
+
 func TestHealthTimesOutSlowChecks(t *testing.T) {
 	slow := checkFunc(func(ctx context.Context) error {
 		<-ctx.Done()
