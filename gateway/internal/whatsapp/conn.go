@@ -63,10 +63,12 @@ type Sink interface {
 // maxReconnectErrors caps whatsmeow's reconnect delay, which grows by 2 s per failed attempt.
 const maxReconnectErrors = 30
 
-// Status is the connection state, using the states of the connection.state contract.
+// Status is the connection state, using the states of the connection.state contract, and when it
+// last changed.
 type Status struct {
-	State  string `json:"state"`
-	Reason string `json:"reason,omitempty"`
+	State  string    `json:"state"`
+	Reason string    `json:"reason,omitempty"`
+	Since  time.Time `json:"since"`
 }
 
 type sessionLoader interface {
@@ -108,6 +110,14 @@ type Conn struct {
 	maxBackoff time.Duration
 	storeRetry time.Duration
 
+	publisher       Publisher
+	publishAsk      chan struct{}
+	publishRetry    time.Duration
+	publishRetryMax time.Duration
+	publishTimeout  time.Duration
+	publishOnStop   time.Duration
+	publishFailing  atomic.Bool
+
 	ended      chan ending
 	generation atomic.Uint64
 	failed     atomic.Uint64
@@ -125,6 +135,8 @@ type Conn struct {
 
 	mu            sync.RWMutex
 	status        Status
+	announced     bool
+	unpublished   []contracts.Event
 	current       client
 	device        *store.Device
 	historyWaits  map[int64]historyWait
@@ -152,6 +164,11 @@ func NewConn(sessions *Sessions, sink Sink, logger *slog.Logger) *Conn {
 		minBackoff:        time.Second,
 		maxBackoff:        time.Minute,
 		storeRetry:        time.Minute,
+		publishAsk:        make(chan struct{}, 1),
+		publishRetry:      time.Second,
+		publishRetryMax:   30 * time.Second,
+		publishTimeout:    5 * time.Second,
+		publishOnStop:     3 * time.Second,
 		ended:             make(chan ending, 1),
 		historyAsk:        make(chan struct{}, 1),
 		historyPoll:       time.Minute,
@@ -161,7 +178,7 @@ func NewConn(sessions *Sessions, sink Sink, logger *slog.Logger) *Conn {
 		groupSyncAsk:      make(chan struct{}, 1),
 		groupSyncDebounce: groupSyncDebounce,
 		groupSyncMinGap:   groupSyncMinGap,
-		status:            Status{State: contracts.StateConnecting},
+		status:            Status{State: contracts.StateConnecting, Since: time.Now().UTC()},
 	}
 }
 
@@ -177,12 +194,6 @@ func (c *Conn) Status() Status {
 	return c.status
 }
 
-func (c *Conn) set(state, reason string) {
-	c.mu.Lock()
-	defer c.mu.Unlock()
-	c.status = Status{State: state, Reason: reason}
-}
-
 // Run connects with the stored session and keeps it connected until ctx is done. Without a session
 // it waits, since pairing happens in a separate `gateway pair` run that restarts the service.
 // whatsmeow reconnects by itself after ordinary drops; Run starts a new connection, with backoff,
@@ -190,6 +201,14 @@ func (c *Conn) set(state, reason string) {
 // stops trying when the phone logged Kaya out, the session is in use elsewhere, or the client is
 // too old.
 func (c *Conn) Run(ctx context.Context) error {
+	if c.publisher != nil {
+		stop, done := make(chan struct{}), make(chan struct{})
+		go c.publishLoop(ctx, stop, done)
+		defer func() {
+			close(stop)
+			<-done
+		}()
+	}
 	go c.groupSyncLoop(ctx)
 	go c.historyLoop(ctx)
 	go c.mediaLoop(ctx)
@@ -273,7 +292,11 @@ func (c *Conn) connect(ctx context.Context) (client, error) {
 	cli.AddEventHandlerWithSuccessStatus(func(evt any) bool {
 		return c.receive(ctx, generation, evt)
 	})
-	c.set(contracts.StateConnecting, "")
+	// A retry keeps saying why the last attempt failed until it connects, so a long outage is one
+	// state change and not two a minute.
+	if c.Status().State != contracts.StateDisconnected {
+		c.set(contracts.StateConnecting, "")
+	}
 	if err := cli.ConnectContext(ctx); err != nil {
 		c.set(contracts.StateDisconnected, ReasonUnreachable)
 		return nil, fmt.Errorf("connect to whatsapp: %w", err)
