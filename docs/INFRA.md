@@ -81,7 +81,9 @@ HP Victus laptop, used only for this (once hosted).
 | 7 | voice | Pipecat: live calls (cloud STT, Claude, ElevenLabs) | CPU | ~0.5–1 GB |
 | 8 | searxng | Self-hosted web search | CPU | ~0.3 GB |
 | 9 | cloudflared | Public entry, only for the phone provider's `/voice/*` routes | CPU | ~50 MB |
-| | **Total** | | | **~8–11 of 24 GB RAM, ~3.5 of 4 GB VRAM, under 20 GB disk** |
+| 10 | prometheus | Collects metrics from the gateway and core, evaluates alert rules (stage 15) | CPU | ~0.2–0.3 GB |
+| 11 | grafana | Dashboards over those metrics (stage 15) | CPU | ~0.2 GB |
+| | **Total** | | | **~8.5–11.5 of 24 GB RAM, ~3.5 of 4 GB VRAM, under 20 GB disk** |
 
 Whisper stays on the CPU so the GPU is free for the LLM. Services are added phase by phase. Phase 1
 needs only gateway, core and db.
@@ -120,7 +122,8 @@ set a proper device name, back off slowly on reconnects.
 ## Networking and security
 
 - **Incoming:** UFW denies all. No router port forwards.
-- **DJ's access:** Tailscale only, for SSH (keys only) and the noVNC browser screen.
+- **DJ's access:** Tailscale only, for SSH (keys only), the noVNC browser screen and the Grafana
+  dashboards.
 - **Public entry:** the Cloudflare Tunnel exposes only the voice service's webhook and audio routes,
   and every request is checked against the provider's signature.
 - **Containers:** talk over a private Docker network. Only cloudflared faces the internet.
@@ -145,6 +148,8 @@ set a proper device name, back off slowly on reconnects.
 ├── core/             core's /data
 ├── browser/          logged-in browser profile (most sensitive folder; stage 11)
 ├── docs/             generated decks/PDFs before Drive upload (stage 9)
+├── prometheus/       metrics, 30 days (stage 15)
+├── grafana/          dashboard state (stage 15)
 ├── models/           ollama + whisper models (~5 GB)
 ├── compose.yml
 └── .env              keys (chmod 600)
@@ -174,7 +179,10 @@ includes the WhatsApp session) and `browser/`. Keep 7 daily and 4 weekly. Models
 - Alerts on WhatsApp for logouts, API failures, disk over 80%. If WhatsApp itself is down, fall back
   to a Telegram bot or email.
 - If the internet drops, WhatsApp messages sync on reconnect and scheduled jobs retry.
-- Optional Uptime Kuma dashboard over Tailscale.
+- Metrics and dashboards from stage 15: Prometheus scrapes `/metrics` on the gateway and core, Grafana
+  shows them, and alert rules go out through the fallback channel. Both are published on `127.0.0.1`
+  only and reached over Tailscale on the Victus; neither is exposed through the tunnel. Prometheus
+  keeps 30 days of data under `DATA_DIR/prometheus`.
 
 ## Accounts and keys
 
