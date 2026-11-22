@@ -2,6 +2,7 @@ package whatsapp
 
 import (
 	"bytes"
+	"os"
 	"strings"
 	"testing"
 
@@ -39,5 +40,27 @@ func TestRenderQRDrawsEveryModule(t *testing.T) {
 				t.Fatalf("row %d cell %d: want %q, got %q", i, x, want, cell)
 			}
 		}
+	}
+}
+
+const qrGolden = "testdata/qr.golden"
+
+// testdata/qr.golden was checked once by decoding it with a QR reader; it catches any change to the output.
+func TestRenderQRMatchesTheDecodedGolden(t *testing.T) {
+	var buf bytes.Buffer
+	if err := renderQR(&buf, "2@kaya-golden,key,identity,adv"); err != nil {
+		t.Fatal(err)
+	}
+	if os.Getenv("UPDATE_GOLDEN") == "1" {
+		if err := os.WriteFile(qrGolden, buf.Bytes(), 0o600); err != nil {
+			t.Fatal(err)
+		}
+	}
+	want, err := os.ReadFile(qrGolden)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !bytes.Equal(buf.Bytes(), want) {
+		t.Fatal("QR output changed; decode it with a QR reader before running with UPDATE_GOLDEN=1")
 	}
 }
