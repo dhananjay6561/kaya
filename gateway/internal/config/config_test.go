@@ -98,3 +98,20 @@ func TestErrorNeverIncludesValues(t *testing.T) {
 		t.Fatalf("error must exist and must not include the value: %v", err)
 	}
 }
+
+func TestGatewayDatabaseURLWinsOverTheSharedOne(t *testing.T) {
+	cfg, err := Load(env(map[string]string{
+		"DATABASE_URL":         "postgres://db:5432/shared",
+		"GATEWAY_DATABASE_URL": "postgres://db:5432/gateway",
+	}), "/base")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if cfg.DatabaseURL != "postgres://db:5432/gateway" {
+		t.Fatalf("got %q", cfg.DatabaseURL)
+	}
+	_, err = Load(env(map[string]string{"DATABASE_URL": validURL, "GATEWAY_DATABASE_URL": "http://x/y"}), "/base")
+	if err == nil || !strings.Contains(err.Error(), "GATEWAY_DATABASE_URL: must be a postgres:// URL") {
+		t.Fatalf("got %v", err)
+	}
+}

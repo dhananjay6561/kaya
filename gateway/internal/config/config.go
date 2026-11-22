@@ -63,12 +63,16 @@ func Load(getenv func(string) string, baseDir string) (Config, error) {
 		}
 	}
 
-	cfg.DatabaseURL = getenv("DATABASE_URL")
+	dbKey := "GATEWAY_DATABASE_URL"
+	if getenv(dbKey) == "" {
+		dbKey = "DATABASE_URL"
+	}
+	cfg.DatabaseURL = getenv(dbKey)
 	switch u, err := url.Parse(cfg.DatabaseURL); {
 	case cfg.DatabaseURL == "":
 		fail("DATABASE_URL", "required")
 	case err != nil || (u.Scheme != "postgres" && u.Scheme != "postgresql") || u.Host == "":
-		fail("DATABASE_URL", "must be a postgres:// URL")
+		fail(dbKey, "must be a postgres:// URL")
 	}
 
 	if len(problems) > 0 {
