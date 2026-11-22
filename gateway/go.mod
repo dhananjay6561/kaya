@@ -10,6 +10,7 @@ require (
 require (
 	github.com/santhosh-tekuri/jsonschema/v6 v6.0.3
 	go.mau.fi/whatsmeow v0.0.0-20261116172437-19d61352436f
+	google.golang.org/protobuf v1.36.12
 	rsc.io/qr v0.2.0
 )
 
@@ -30,7 +31,6 @@ require (
 	golang.org/x/exp v0.0.0-20261113113407-e3970619a1a4 // indirect
 	golang.org/x/net v0.62.0 // indirect
 	golang.org/x/sys v0.50.0 // indirect
-	google.golang.org/protobuf v1.36.12 // indirect
 )
 
 require (
