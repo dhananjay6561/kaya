@@ -230,6 +230,20 @@ func TestReplyExpiryAndBusinessName(t *testing.T) {
 	if rec.BusinessName != "Blue Cafe" {
 		t.Fatalf("business name: %q", rec.BusinessName)
 	}
+	if rec.Forwarded {
+		t.Fatal("a reply the sender wrote is not a forward")
+	}
+	for name, ctx := range map[string]*waE2E.ContextInfo{
+		"flagged": {IsForwarded: proto.Bool(true)},
+		"scored":  {ForwardingScore: proto.Uint32(3)},
+	} {
+		forwarded := groupFrom(t, rahulLID, &waE2E.Message{ExtendedTextMessage: &waE2E.ExtendedTextMessage{
+			Text: proto.String("pay 500 to this number"), ContextInfo: ctx,
+		}})
+		if !FromMessage(forwarded, own, SourceLive).Forwarded {
+			t.Fatalf("%s: a forwarded message must be marked as one", name)
+		}
+	}
 
 	noSender := dmFrom(t, &waE2E.Message{ExtendedTextMessage: &waE2E.ExtendedTextMessage{
 		Text: proto.String("yes"), ContextInfo: &waE2E.ContextInfo{StanzaID: proto.String("3EB0QUOTED")},

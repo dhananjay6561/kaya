@@ -380,3 +380,15 @@ func TestARevokeForgetsTheFile(t *testing.T) {
 		t.Fatal("a revoked message keeps no media rows or keys")
 	}
 }
+
+func TestAForwardedMessageIsStoredAsOne(t *testing.T) {
+	f := newFixture(t)
+	written := message(dm, rahul, "3EB0WRITTEN", "my own words")
+	passedOn := message(dm, rahul, "3EB0PASSEDON", "someone else's words")
+	passedOn.Forwarded = true
+	f.apply(written)
+	f.apply(passedOn)
+	if got := f.text("SELECT string_agg(wa_id, ',' ORDER BY wa_id) FROM messages WHERE forwarded"); got != "3EB0PASSEDON" {
+		t.Fatalf("got %q", got)
+	}
+}
