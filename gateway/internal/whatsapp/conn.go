@@ -33,6 +33,7 @@ const (
 	ReasonSeveralSessions  = "more than one session is stored"
 	ReasonUnreachable      = "cannot reach WhatsApp"
 	ReasonReconnecting     = "connection lost, reconnecting"
+	ReasonNotAnswering     = "WhatsApp stopped answering, reconnecting if it stays silent"
 	ReasonConnectFailed    = "WhatsApp refused the connection, retrying"
 	ReasonTemporaryBan     = "temporarily banned by WhatsApp, retrying when the ban ends"
 	ReasonLoggedOut        = "logged out from the phone: run make pair"
@@ -43,6 +44,9 @@ const (
 )
 
 const (
+	// keepAliveMaxFail is how long WhatsApp may leave pings unanswered before the connection is
+	// replaced. whatsmeow's own default is three minutes.
+	keepAliveMaxFail  = time.Minute
 	groupSyncEvery    = 12 * time.Hour
 	groupSyncDebounce = 30 * time.Second
 	groupSyncMinGap   = 10 * time.Minute
@@ -69,6 +73,10 @@ type Status struct {
 	State  string    `json:"state"`
 	Reason string    `json:"reason,omitempty"`
 	Since  time.Time `json:"since"`
+}
+
+func init() {
+	whatsmeow.KeepAliveMaxFailTime = keepAliveMaxFail
 }
 
 type sessionLoader interface {
@@ -750,6 +758,20 @@ func (c *Conn) handle(generation uint64, evt any) {
 	case *events.Disconnected:
 		c.set(contracts.StateDisconnected, ReasonReconnecting)
 		c.logger.Warn("whatsapp disconnected, reconnecting")
+	case *events.KeepAliveTimeout:
+		if c.Status().State == contracts.StateConnected {
+			c.set(contracts.StateDisconnected, ReasonNotAnswering)
+			c.logger.Warn("whatsapp stopped answering", "missed_pings", e.ErrorCount)
+		}
+	case *events.KeepAliveRestored:
+		if c.Status().Reason == ReasonNotAnswering {
+			c.set(contracts.StateConnected, "")
+			c.logger.Info("whatsapp is answering again")
+			c.RequestHistory()
+			c.RequestMedia()
+		}
+	case *events.StreamError:
+		c.logger.Warn("whatsapp closed the connection with an error", "code", e.Code)
 	case *events.LoggedOut:
 		c.set(contracts.StateLoggedOut, ReasonLoggedOut)
 		c.logger.Error("whatsapp logged out; pair again with make pair", "reason", e.Reason.String())
