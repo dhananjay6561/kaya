@@ -121,6 +121,8 @@ var newPairClient = func(device *store.Device, log waLog.Logger) pairClient {
 	cli := whatsmeow.NewClient(device, log)
 	cli.SynchronousAck = true
 	cli.EnableDecryptedEventBuffer = true
+	cli.ManualHistorySyncDownload = true
+	cli.DisableManualHistorySyncReceipt = true
 	cli.AddEventHandlerWithSuccessStatus(holdMessages)
 	return cli
 }

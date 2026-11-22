@@ -110,6 +110,7 @@ func run(cfg config.Config, logger *slog.Logger) error {
 	ingester := ingest.NewIngester(db, ingest.NewStore(events.NewOutbox(validator)), logger)
 	conn := whatsapp.NewConn(whatsapp.NewSessions(sqlDB, whatsapp.NewLogger(logger)), ingester, logger)
 	ingester.NewGroup = conn.RequestGroupSync
+	ingester.HistoryQueued = conn.RequestHistory
 	connDone := make(chan error, 1)
 	go func() { connDone <- conn.Run(ctx) }()
 

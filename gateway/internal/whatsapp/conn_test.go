@@ -4,15 +4,20 @@ import (
 	"bytes"
 	"context"
 	"errors"
+	"fmt"
 	"strings"
 	"sync"
 	"testing"
 	"time"
 
 	"go.mau.fi/whatsmeow"
+	"go.mau.fi/whatsmeow/proto/waE2E"
+	"go.mau.fi/whatsmeow/proto/waHistorySync"
+	"go.mau.fi/whatsmeow/proto/waWeb"
 	"go.mau.fi/whatsmeow/store"
 	"go.mau.fi/whatsmeow/types"
 	"go.mau.fi/whatsmeow/types/events"
+	"google.golang.org/protobuf/proto"
 
 	"github.com/dhananjay6561/kaya/gateway/internal/contracts"
 	"github.com/dhananjay6561/kaya/gateway/internal/ingest"
@@ -42,6 +47,38 @@ type fakeClient struct {
 	disconnected bool
 	handler      whatsmeow.EventHandlerWithSuccessStatus
 	groupQueries int
+	downloadErrs []error
+	downloads    int
+	receipts     []string
+}
+
+func (f *fakeClient) DownloadHistorySync(context.Context, *waE2E.HistorySyncNotification, bool) (*waHistorySync.HistorySync, error) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	f.downloads++
+	if len(f.downloadErrs) > 0 {
+		err := f.downloadErrs[0]
+		f.downloadErrs = f.downloadErrs[1:]
+		return nil, err
+	}
+	return &waHistorySync.HistorySync{}, nil
+}
+
+func (f *fakeClient) ParseWebMessage(types.JID, *waWeb.WebMessageInfo) (*events.Message, error) {
+	return nil, errors.New("not used")
+}
+
+func (f *fakeClient) SendProtocolMessageReceipt(_ context.Context, id types.MessageID, kind types.ReceiptType) error {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	f.receipts = append(f.receipts, id+":"+string(kind))
+	return nil
+}
+
+func (f *fakeClient) history() (downloads int, receipts []string) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	return f.downloads, append([]string(nil), f.receipts...)
 }
 
 func (f *fakeClient) AddEventHandlerWithSuccessStatus(h whatsmeow.EventHandlerWithSuccessStatus) uint32 {
@@ -89,6 +126,69 @@ type fakeSink struct {
 	handled  []any
 	groups   int
 	contacts int
+	jobs     []*ingest.HistoryJob
+	storeErr error
+	log      []string
+}
+
+func (f *fakeSink) NextHistoryJob(context.Context) (*ingest.HistoryJob, error) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	for _, job := range f.jobs {
+		if job.State == ingest.JobPending || job.State == ingest.JobStored {
+			copied := *job
+			return &copied, nil
+		}
+	}
+	return nil, nil
+}
+
+func (f *fakeSink) job(id int64) *ingest.HistoryJob {
+	for _, job := range f.jobs {
+		if job.ID == id {
+			return job
+		}
+	}
+	return nil
+}
+
+func (f *fakeSink) StoreHistory(_ context.Context, job *ingest.HistoryJob, _ *waHistorySync.HistorySync, _ ingest.Parser, _ ingest.Own) error {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	if f.storeErr != nil {
+		err := f.storeErr
+		f.storeErr = nil
+		return err
+	}
+	f.job(job.ID).State = ingest.JobStored
+	f.log = append(f.log, job.WAID+" stored")
+	return nil
+}
+
+func (f *fakeSink) FailHistory(_ context.Context, job *ingest.HistoryJob, code string, final bool) (bool, error) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	f.log = append(f.log, job.WAID+" failed "+code)
+	if final {
+		f.job(job.ID).State = ingest.JobDead
+	}
+	return final, nil
+}
+
+func (f *fakeSink) FinishHistory(_ context.Context, job *ingest.HistoryJob) error {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	if j := f.job(job.ID); j.State == ingest.JobStored {
+		j.State = ingest.JobDone
+		f.log = append(f.log, job.WAID+" done")
+	}
+	return nil
+}
+
+func (f *fakeSink) history() []string {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	return append([]string(nil), f.log...)
 }
 
 func (f *fakeSink) Handle(_ context.Context, _ ingest.Own, evt any) bool {
@@ -171,6 +271,7 @@ func newTestConn(loader sessionLoader, made *clients) (*Conn, *bytes.Buffer) {
 	c.minBackoff = time.Millisecond
 	c.maxBackoff = 4 * time.Millisecond
 	c.storeRetry = 5 * time.Millisecond
+	c.historyPoll = 10 * time.Millisecond
 	c.groupSyncDebounce = 5 * time.Millisecond
 	c.groupSyncMinGap = 30 * time.Millisecond
 	return c, &buf
@@ -435,4 +536,67 @@ func TestGroupNamesAreFetchedOnConnectAndBatchedAfterThat(t *testing.T) {
 		t.Fatalf("each sweep stores its groups, got %d", groups)
 	}
 	stop(t, cancel, done)
+}
+
+func TestHistoryIsConfirmedOnlyAfterItIsStored(t *testing.T) {
+	notification, _ := proto.Marshal(&waE2E.HistorySyncNotification{DirectPath: proto.String("/v/t62/x")})
+	made := &clients{}
+	c, _ := newTestConn(paired(), made)
+	sink := &fakeSink{
+		storeErr: ingest.ErrUnavailable,
+		jobs: []*ingest.HistoryJob{
+			{ID: 1, WAID: "GONE", State: ingest.JobPending, Notification: notification},
+			{ID: 2, WAID: "BROKEN", State: ingest.JobPending, Notification: []byte{0xff, 0xff}},
+			{ID: 3, WAID: "CHUNK", State: ingest.JobPending, Notification: notification},
+			{ID: 4, WAID: "RESUMED", State: ingest.JobStored},
+		},
+	}
+	c.sink = sink
+	cancel, done := runInBackground(t, c)
+	waitFor(t, "first client", func() bool { return made.count() == 1 })
+	cli := made.get(0)
+	cli.mu.Lock()
+	cli.downloadErrs = []error{whatsmeow.ErrMediaDownloadFailedWith410, errors.New("dial tcp: i/o timeout")}
+	cli.mu.Unlock()
+
+	time.Sleep(30 * time.Millisecond)
+	if downloads, _ := cli.history(); downloads != 0 {
+		t.Fatal("history must wait until WhatsApp is connected")
+	}
+	cli.emit(&events.Connected{})
+
+	waitFor(t, "every job handled", func() bool { return len(sink.history()) == 5 })
+	log := strings.Join(sink.history(), ", ")
+	for _, step := range []string{"GONE failed http_410", "BROKEN failed unreadable", "CHUNK stored, CHUNK done", "RESUMED done"} {
+		if !strings.Contains(log, step) {
+			t.Fatalf("missing %q in %s", step, log)
+		}
+	}
+	downloads, receipts := cli.history()
+	if downloads != 4 {
+		t.Fatalf("want 4 downloads (gone, timed out, store failed, stored), got %d", downloads)
+	}
+	if strings.Join(receipts, ",") != "GONE:hist_sync,BROKEN:hist_sync,CHUNK:hist_sync,RESUMED:hist_sync" {
+		t.Fatalf("each chunk is confirmed once, after it is stored or given up on: %v", receipts)
+	}
+	stop(t, cancel, done)
+}
+
+func TestClassifyHistoryDownload(t *testing.T) {
+	for _, tc := range []struct {
+		err              error
+		code             string
+		final, countable bool
+	}{
+		{whatsmeow.ErrMediaDownloadFailedWith404, "http_404", true, true},
+		{fmt.Errorf("failed to download: %w", whatsmeow.ErrMediaDownloadFailedWith403), "http_403", true, true},
+		{errors.New("failed to decompress: zlib: invalid header"), "bad_blob", false, true},
+		{errors.New("failed to unmarshal: proto: cannot parse"), "bad_blob", false, true},
+		{errors.New("websocket not connected"), "download_failed", false, false},
+	} {
+		code, final, countable := classifyHistoryDownload(tc.err)
+		if code != tc.code || final != tc.final || countable != tc.countable {
+			t.Errorf("%v: got %s %v %v", tc.err, code, final, countable)
+		}
+	}
 }

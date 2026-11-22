@@ -5,15 +5,20 @@ import (
 	"errors"
 	"fmt"
 	"log/slog"
+	"strings"
 	"sync"
 	"sync/atomic"
 	"time"
 
 	"go.mau.fi/whatsmeow"
 	"go.mau.fi/whatsmeow/appstate"
+	"go.mau.fi/whatsmeow/proto/waE2E"
+	"go.mau.fi/whatsmeow/proto/waHistorySync"
+	"go.mau.fi/whatsmeow/proto/waWeb"
 	"go.mau.fi/whatsmeow/store"
 	"go.mau.fi/whatsmeow/types"
 	"go.mau.fi/whatsmeow/types/events"
+	"google.golang.org/protobuf/proto"
 
 	"github.com/dhananjay6561/kaya/gateway/internal/contracts"
 	"github.com/dhananjay6561/kaya/gateway/internal/ingest"
@@ -48,6 +53,10 @@ type Sink interface {
 	Handle(ctx context.Context, own ingest.Own, evt any) bool
 	SyncGroups(ctx context.Context, groups []*types.GroupInfo) error
 	SyncContacts(ctx context.Context, contacts []ingest.ContactNames) error
+	NextHistoryJob(ctx context.Context) (*ingest.HistoryJob, error)
+	StoreHistory(ctx context.Context, job *ingest.HistoryJob, data *waHistorySync.HistorySync, parser ingest.Parser, own ingest.Own) error
+	FailHistory(ctx context.Context, job *ingest.HistoryJob, code string, final bool) (dead bool, err error)
+	FinishHistory(ctx context.Context, job *ingest.HistoryJob) error
 }
 
 // maxReconnectErrors caps whatsmeow's reconnect delay, which grows by 2 s per failed attempt.
@@ -68,6 +77,9 @@ type client interface {
 	ConnectContext(ctx context.Context) error
 	Disconnect()
 	GetJoinedGroups(ctx context.Context) ([]*types.GroupInfo, error)
+	DownloadHistorySync(ctx context.Context, notification *waE2E.HistorySyncNotification, synchronousStorage bool) (*waHistorySync.HistorySync, error)
+	ParseWebMessage(chatJID types.JID, webMsg *waWeb.WebMessageInfo) (*events.Message, error)
+	SendProtocolMessageReceipt(ctx context.Context, id types.MessageID, msgType types.ReceiptType) error
 }
 
 // ending is what a connection that whatsmeow will not bring back asks Run to do next.
@@ -92,6 +104,8 @@ type Conn struct {
 	generation atomic.Uint64
 	failed     atomic.Uint64
 
+	historyAsk        chan struct{}
+	historyPoll       time.Duration
 	groupSyncAsk      chan struct{}
 	groupSyncDebounce time.Duration
 	groupSyncMinGap   time.Duration
@@ -118,12 +132,16 @@ func NewConn(sessions *Sessions, sink Sink, logger *slog.Logger) *Conn {
 			cli.AutoReconnectHook = func(error) bool { return capReconnectErrors(cli) }
 			cli.SynchronousAck = true
 			cli.EnableDecryptedEventBuffer = true
+			cli.ManualHistorySyncDownload = true
+			cli.DisableManualHistorySyncReceipt = true
 			return cli
 		},
 		minBackoff:        time.Second,
 		maxBackoff:        time.Minute,
 		storeRetry:        time.Minute,
 		ended:             make(chan ending, 1),
+		historyAsk:        make(chan struct{}, 1),
+		historyPoll:       time.Minute,
 		groupSyncAsk:      make(chan struct{}, 1),
 		groupSyncDebounce: groupSyncDebounce,
 		groupSyncMinGap:   groupSyncMinGap,
@@ -157,6 +175,7 @@ func (c *Conn) set(state, reason string) {
 // too old.
 func (c *Conn) Run(ctx context.Context) error {
 	go c.groupSyncLoop(ctx)
+	go c.historyLoop(ctx)
 	backoff := c.minBackoff
 	for {
 		cli, err := c.connect(ctx)
@@ -297,6 +316,113 @@ func (c *Conn) afterConnected(ctx context.Context) {
 	if groups {
 		go c.syncGroups(ctx)
 	}
+	c.RequestHistory()
+}
+
+// RequestHistory wakes the history worker, for when a chunk was just queued.
+func (c *Conn) RequestHistory() {
+	select {
+	case c.historyAsk <- struct{}{}:
+	default:
+	}
+}
+
+// historyLoop works through queued history chunks one at a time while connected. Each chunk is
+// downloaded, stored, and only then confirmed to WhatsApp, so a crash at any point repeats the
+// chunk instead of losing it.
+func (c *Conn) historyLoop(ctx context.Context) {
+	ticker := time.NewTicker(c.historyPoll)
+	defer ticker.Stop()
+	for {
+		select {
+		case <-ctx.Done():
+			return
+		case <-c.historyAsk:
+		case <-ticker.C:
+		}
+		for ctx.Err() == nil && c.historyStep(ctx) {
+		}
+	}
+}
+
+// historyStep handles one job and reports whether to go straight on to the next.
+func (c *Conn) historyStep(ctx context.Context) bool {
+	c.mu.RLock()
+	cli := c.current
+	c.mu.RUnlock()
+	if c.sink == nil || cli == nil || c.Status().State != contracts.StateConnected {
+		return false
+	}
+	job, err := c.sink.NextHistoryJob(ctx)
+	if err != nil {
+		c.logger.Warn("could not read the history queue", logging.Err(err))
+		return false
+	}
+	if job == nil {
+		return false
+	}
+	if job.State == ingest.JobPending {
+		var notification waE2E.HistorySyncNotification
+		if err := proto.Unmarshal(job.Notification, &notification); err != nil {
+			return c.failHistory(ctx, cli, job, "unreadable", true)
+		}
+		data, err := cli.DownloadHistorySync(ctx, &notification, true)
+		if err != nil {
+			code, final, countable := classifyHistoryDownload(err)
+			if !countable {
+				c.logger.Warn("could not download a history chunk, trying again later", "sync_type", job.SyncType, "error_code", code)
+				return false
+			}
+			return c.failHistory(ctx, cli, job, code, final)
+		}
+		if err := c.sink.StoreHistory(ctx, job, data, cli, c.own()); err != nil {
+			c.logger.Warn("could not store a history chunk, trying again later", "sync_type", job.SyncType, logging.Err(err))
+			return false
+		}
+	}
+	if err := cli.SendProtocolMessageReceipt(ctx, job.WAID, types.ReceiptTypeHistorySync); err != nil {
+		c.logger.Warn("could not confirm a history chunk, trying again later", logging.Err(err))
+		return false
+	}
+	if err := c.sink.FinishHistory(ctx, job); err != nil {
+		c.logger.Warn("could not finish a history job", logging.Err(err))
+		return false
+	}
+	go c.syncContacts(ctx)
+	return true
+}
+
+func (c *Conn) failHistory(ctx context.Context, cli client, job *ingest.HistoryJob, code string, final bool) bool {
+	dead, err := c.sink.FailHistory(ctx, job, code, final)
+	if err != nil {
+		c.logger.Warn("could not record a failed history job", logging.Err(err))
+		return false
+	}
+	if dead {
+		if err := cli.SendProtocolMessageReceipt(ctx, job.WAID, types.ReceiptTypeHistorySync); err != nil {
+			c.logger.Warn("could not confirm a history chunk that was given up on", logging.Err(err))
+		}
+	}
+	return dead
+}
+
+// classifyHistoryDownload sorts download failures: gone from WhatsApp's servers (final), a payload
+// that does not decode (counted, given up on after a few tries), or anything else, which is the
+// network and worth retrying for as long as it takes.
+func classifyHistoryDownload(err error) (code string, final, countable bool) {
+	switch {
+	case errors.Is(err, whatsmeow.ErrMediaDownloadFailedWith403):
+		return "http_403", true, true
+	case errors.Is(err, whatsmeow.ErrMediaDownloadFailedWith404):
+		return "http_404", true, true
+	case errors.Is(err, whatsmeow.ErrMediaDownloadFailedWith410):
+		return "http_410", true, true
+	}
+	msg := err.Error()
+	if strings.Contains(msg, "decompress") || strings.Contains(msg, "unmarshal") {
+		return "bad_blob", false, true
+	}
+	return "download_failed", false, false
 }
 
 // RequestGroupSync asks for the group names to be fetched again soon, for when a message arrives
