@@ -119,6 +119,19 @@ Folders appear when a phase needs them; empty placeholders are not committed.
     insert into the events table; in the send-requests table it can record outcomes but cannot
     add a request or change what one says. Core is the reverse: it adds requests, with no say
     over their state, and consumes events.
+- **Commands.** The chat channel is also how DJ talks to Kaya. A message is a command only when
+  all of these hold: DJ typed it (`from_me`), it is live text, it is in his own chat, the sender
+  is the account the gateway reports as linked, and its WhatsApp id is not one the gateway sent.
+  Everything else, in every other chat, is data.
+  - Core records a command in its `commands` table inside the transaction that marks the
+    `message.stored` event handled, once per message, so a redelivered event never runs it twice.
+  - A separate worker then takes pending commands oldest first, one at a time, outside that
+    transaction, so slow work never holds up the event queue and a failure there never marks an
+    event dead. A command interrupted by a restart runs again; replies carry an idempotency key
+    made from the command, so a rerun does not answer twice. One that keeps being interrupted
+    is given up on.
+  - A command that is only reached more than 10 minutes after it was sent is not acted on: Kaya
+    says so instead. After a day it says nothing.
 - **Contracts:** every payload has a JSON Schema (draft 2020-12) in `contracts/schemas/v1/` and
   carries `"version": 1`. Both sides validate at the boundary: the writer before inserting, the
   reader before handling.
