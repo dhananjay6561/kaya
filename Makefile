@@ -1,7 +1,7 @@
 .DEFAULT_GOAL := help
 .PHONY: help install dev dev-core dev-gateway lint lint-core lint-gateway format format-core \
 	format-gateway typecheck test test-core test-gateway build build-core build-gateway check clean \
-	up down db logs ps pair pair-dev data-dirs migrate rollback migration test-db contracts
+	up down db logs ps pair pair-dev media data-dirs migrate rollback migration test-db contracts
 
 GOLANGCI_LINT_VERSION := v2.15.0
 GOLANGCI_LINT := go run github.com/golangci/golangci-lint/v2/cmd/golangci-lint@$(GOLANGCI_LINT_VERSION)
@@ -101,6 +101,10 @@ pair: data-dirs ## link Kaya to WhatsApp: shows a QR code, or a pairing code wit
 
 pair-dev: ## pair from source against the db from make db (PHONE= as for pair)
 	cd gateway && go run ./cmd/gateway pair $(PAIR_ARGS)
+
+media: ## download the file of one message: make media id=<messages.id> (the gateway must be running and connected)
+	@test -n "$(id)" || { echo "usage: make media id=<messages.id>"; exit 1; }
+	$(COMPOSE) exec gateway /gateway media fetch '$(id)'
 
 migrate: ## apply pending migrations
 	$(COMPOSE) run --rm migrate

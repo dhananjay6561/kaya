@@ -89,6 +89,8 @@ services:
       DATABASE_URL: postgres://kaya_gateway:${GATEWAY_DB_PASSWORD:?set GATEWAY_DB_PASSWORD in .env}@db:5432/${POSTGRES_DB:-kaya}
       DATA_DIR: /data
       LISTEN_HOST: 0.0.0.0
+      MEDIA_MAX_BYTES: ${MEDIA_MAX_BYTES:-}
+      MEDIA_MAX_PER_HOUR: ${MEDIA_MAX_PER_HOUR:-}
     volumes:
       - ${DATA_DIR:-./data}/gateway:/data
     healthcheck:
