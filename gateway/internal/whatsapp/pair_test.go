@@ -11,6 +11,7 @@ import (
 	"go.mau.fi/whatsmeow"
 	"go.mau.fi/whatsmeow/store"
 	"go.mau.fi/whatsmeow/types"
+	"go.mau.fi/whatsmeow/types/events"
 	waLog "go.mau.fi/whatsmeow/util/log"
 
 	"github.com/dhananjay6561/kaya/gateway/internal/logging"
@@ -162,5 +163,18 @@ func TestPairRefusesWhenASessionIsStored(t *testing.T) {
 	if err := Pair(ctx, sessions, logging.New(&bytes.Buffer{}, "info"), PairOptions{Phone: "12", Out: &bytes.Buffer{}}); err == nil ||
 		errors.Is(err, ErrAlreadyPaired) {
 		t.Fatalf("a bad phone number must be refused before anything else, got %v", err)
+	}
+}
+
+func TestPairingHoldsMessagesForTheGateway(t *testing.T) {
+	for _, evt := range []any{&events.Message{}, &events.UndecryptableMessage{}} {
+		if holdMessages(evt) {
+			t.Fatalf("%T must not be acknowledged while pairing", evt)
+		}
+	}
+	for _, evt := range []any{&events.PairSuccess{}, &events.Connected{}, &events.QR{}, &events.HistorySync{}} {
+		if !holdMessages(evt) {
+			t.Fatalf("%T must pass", evt)
+		}
 	}
 }

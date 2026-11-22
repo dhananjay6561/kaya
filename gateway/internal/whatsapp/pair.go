@@ -118,7 +118,22 @@ type pairClient interface {
 }
 
 var newPairClient = func(device *store.Device, log waLog.Logger) pairClient {
-	return whatsmeow.NewClient(device, log)
+	cli := whatsmeow.NewClient(device, log)
+	cli.SynchronousAck = true
+	cli.EnableDecryptedEventBuffer = true
+	cli.AddEventHandlerWithSuccessStatus(holdMessages)
+	return cli
+}
+
+// holdMessages keeps the pairing run from acknowledging messages: it cannot store them, so they
+// must stay with WhatsApp until the gateway connects. Everything else passes, including the events
+// pairing itself waits for.
+func holdMessages(evt any) bool {
+	switch evt.(type) {
+	case *events.Message, *events.UndecryptableMessage:
+		return false
+	}
+	return true
 }
 
 type pairing struct {
