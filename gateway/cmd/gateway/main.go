@@ -22,6 +22,7 @@ import (
 	"github.com/dhananjay6561/kaya/gateway/internal/ingest"
 	"github.com/dhananjay6561/kaya/gateway/internal/logging"
 	"github.com/dhananjay6561/kaya/gateway/internal/media"
+	"github.com/dhananjay6561/kaya/gateway/internal/send"
 	"github.com/dhananjay6561/kaya/gateway/internal/store"
 	"github.com/dhananjay6561/kaya/gateway/internal/whatsapp"
 )
@@ -112,7 +113,8 @@ func run(cfg config.Config, logger *slog.Logger) error {
 	}
 
 	outbox := events.NewOutbox(validator)
-	ingester := ingest.NewIngester(db, ingest.NewStore(outbox), logger)
+	messages := ingest.NewStore(outbox)
+	ingester := ingest.NewIngester(db, messages, logger)
 	conn := whatsapp.NewConn(whatsapp.NewSessions(sqlDB, whatsapp.NewLogger(logger)), ingester, logger)
 	conn.SetPublisher(events.NewPublisher(db, outbox))
 	ingester.NewGroup = conn.RequestGroupSync
@@ -128,6 +130,8 @@ func run(cfg config.Config, logger *slog.Logger) error {
 	conn.SetMedia(worker)
 	go worker.Sweep(ctx)
 	go db.Listen(ctx, "media_requests", conn.RequestMedia)
+	conn.SetSender(send.NewWorker(db, validator, outbox, messages, logger))
+	go db.Listen(ctx, "send_requests", conn.RequestSend)
 	connDone := make(chan error, 1)
 	go func() { connDone <- conn.Run(ctx) }()
 
