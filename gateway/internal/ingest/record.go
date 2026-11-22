@@ -161,9 +161,7 @@ func FromMessage(evt *events.Message, own Own, source string) Record {
 		rec.Op = OpReact
 		rec.Emoji = reaction.GetText()
 		rec.Target = Target{WAID: reaction.GetKey().GetID(), Sender: keySender(reaction.GetKey(), rec, own)}
-		if ms := reaction.GetSenderTimestampMS(); ms > 0 {
-			rec.At = time.UnixMilli(ms)
-		}
+		rec.At = saneTime(reaction.GetSenderTimestampMS(), rec.At)
 		return checkTarget(rec)
 	}
 	if protocol := msg.GetProtocolMessage(); protocol != nil {
@@ -179,9 +177,7 @@ func FromMessage(evt *events.Message, own Own, source string) Record {
 			rec.Op = OpEdit
 			rec.Target = Target{WAID: protocol.GetKey().GetID(), Sender: rec.Sender}
 			_, rec.Body = content(protocol.GetEditedMessage())
-			if ms := protocol.GetTimestampMS(); ms > 0 {
-				rec.At = time.UnixMilli(ms)
-			}
+			rec.At = saneTime(protocol.GetTimestampMS(), rec.At)
 			return checkTarget(rec)
 		default:
 			return skip("protocol")
@@ -249,6 +245,31 @@ func FromUndecryptable(evt *events.UndecryptableMessage, own Own) Record {
 	return rec
 }
 
+var (
+	earliest = time.Date(2009, 1, 1, 0, 0, 0, 0, time.UTC)
+	latest   = time.Date(2200, 1, 1, 0, 0, 0, 0, time.UTC)
+)
+
+// saneTime turns a sender's millisecond timestamp into a time, falling back when it is missing or
+// absurd. The sender chooses this number, so it is never trusted to be a real date.
+func saneTime(ms int64, fallback time.Time) time.Time {
+	if ms <= 0 || ms > latest.UnixMilli() {
+		return fallback
+	}
+	if t := time.UnixMilli(ms); t.After(earliest) {
+		return t
+	}
+	return fallback
+}
+
+// dimension keeps a sender's number only if it fits the database column.
+func dimension(v uint32) int {
+	if v > math.MaxInt32 {
+		return 0
+	}
+	return int(v)
+}
+
 func checkTarget(rec Record) Record {
 	if rec.Target.WAID == "" || rec.Target.Sender.IsZero() {
 		return skip("no target")
@@ -307,6 +328,9 @@ func address(jid, alt types.JID, own Own) Address {
 		case types.HiddenUserServer, types.HostedLIDServer:
 			a.LID = j.String()
 		case types.DefaultUserServer, types.HostedServer:
+			a.PN = j.String()
+		case types.LegacyUserServer:
+			j.Server = types.DefaultUserServer
 			a.PN = j.String()
 		case types.BotServer:
 			a.Bot = j.String()
@@ -410,16 +434,16 @@ func media(msg *waE2E.Message) *Media {
 	switch {
 	case msg.GetImageMessage() != nil:
 		img := msg.GetImageMessage()
-		f, m.Type, m.Width, m.Height = img, "image", int(img.GetWidth()), int(img.GetHeight())
+		f, m.Type, m.Width, m.Height = img, "image", dimension(img.GetWidth()), dimension(img.GetHeight())
 	case msg.GetVideoMessage() != nil:
 		v := msg.GetVideoMessage()
-		f, m.Type, m.Width, m.Height, m.DurationS = v, "video", int(v.GetWidth()), int(v.GetHeight()), int(v.GetSeconds())
+		f, m.Type, m.Width, m.Height, m.DurationS = v, "video", dimension(v.GetWidth()), dimension(v.GetHeight()), dimension(v.GetSeconds())
 	case msg.GetPtvMessage() != nil:
 		v := msg.GetPtvMessage()
-		f, m.Type, m.Width, m.Height, m.DurationS = v, "video", int(v.GetWidth()), int(v.GetHeight()), int(v.GetSeconds())
+		f, m.Type, m.Width, m.Height, m.DurationS = v, "video", dimension(v.GetWidth()), dimension(v.GetHeight()), dimension(v.GetSeconds())
 	case msg.GetAudioMessage() != nil:
 		a := msg.GetAudioMessage()
-		f, m.Type, m.DurationS = a, "audio", int(a.GetSeconds())
+		f, m.Type, m.DurationS = a, "audio", dimension(a.GetSeconds())
 	case msg.GetDocumentMessage() != nil:
 		d := msg.GetDocumentMessage()
 		f, m.Type, m.FileName = d, "document", strings.TrimSpace(d.GetFileName())

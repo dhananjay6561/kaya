@@ -4,6 +4,8 @@ import (
 	"bytes"
 	"context"
 	"errors"
+	"io"
+	"net"
 	"strings"
 	"sync/atomic"
 	"testing"
@@ -122,7 +124,7 @@ func (d *downDB) InTx(context.Context, func(pgx.Tx) error) error {
 
 func TestNothingIsAcknowledgedWhileTheDatabaseIsAway(t *testing.T) {
 	f := newFixture(t)
-	down := &downDB{err: errors.New("dial tcp 10.0.0.5:5432: connection refused")}
+	down := &downDB{err: &net.OpError{Op: "dial", Net: "tcp", Err: errors.New("connection refused")}}
 	i, logs := newIngester(f, down)
 	ctx := context.Background()
 
@@ -186,8 +188,13 @@ func TestClassify(t *testing.T) {
 		code      string
 		permanent bool
 	}{
-		{errors.New("connection refused"), "", false},
+		{&net.OpError{Op: "dial", Net: "tcp", Err: errors.New("connection refused")}, "", false},
+		{&pgconn.ConnectError{}, "", false},
 		{context.DeadlineExceeded, "", false},
+		{io.ErrUnexpectedEOF, "", false},
+		{errors.New("conn closed"), "", false},
+		{errors.New("unable to encode 4294967295 into binary format for int4"), "client_error", true},
+		{errors.New("json: unsupported value"), "client_error", true},
 		{pgErr("08006"), "", false},
 		{pgErr("57P01"), "", false},
 		{pgErr("53300"), "", false},
@@ -209,5 +216,76 @@ func pgErr(code string) error {
 func TestScrubDropsRowDetails(t *testing.T) {
 	if got := scrub(pgErr("23514")).Error(); strings.Contains(got, "secret") || !strings.Contains(got, "23514") {
 		t.Fatalf("got %q", got)
+	}
+}
+
+func TestACraftedMessageCannotBlockIngest(t *testing.T) {
+	huge := uint32(4294967295)
+	for name, evt := range map[string]*events.Message{
+		"image with impossible dimensions": dmFrom(t, &waE2E.Message{ImageMessage: &waE2E.ImageMessage{Width: &huge, Height: &huge}}),
+		"video with impossible duration":   dmFrom(t, &waE2E.Message{VideoMessage: &waE2E.VideoMessage{Seconds: &huge}}),
+		"edit from the year 10000": dmFrom(t, &waE2E.Message{ProtocolMessage: &waE2E.ProtocolMessage{
+			Type: waE2E.ProtocolMessage_MESSAGE_EDIT.Enum(), Key: &waCommon.MessageKey{ID: proto.String("NOTSTORED")},
+			EditedMessage: textMsg("x"), TimestampMS: proto.Int64(253402300800000),
+		}}),
+		"reaction from the year 10000": dmFrom(t, &waE2E.Message{ReactionMessage: &waE2E.ReactionMessage{
+			Key: &waCommon.MessageKey{ID: proto.String("NOTSTORED"), FromMe: proto.Bool(true)}, Text: proto.String("👍"),
+			SenderTimestampMS: proto.Int64(253402300800000),
+		}}),
+	} {
+		t.Run(name, func(t *testing.T) {
+			f := newFixture(t)
+			i, logs := newIngester(f, f.gateway)
+			if !i.Handle(context.Background(), own, evt) {
+				t.Fatalf("the message must be stored or set aside, then acknowledged: %s", logs)
+			}
+			next := dmFrom(t, textMsg("the next message"))
+			next.Info.ID = "3EB0NEXT"
+			if !i.Handle(context.Background(), own, next) || f.count("SELECT count(*) FROM messages WHERE body = 'the next message'") != 1 {
+				t.Fatal("the message after it must still be stored")
+			}
+		})
+	}
+}
+
+func TestAnErrorThatIsNotTheDatabaseBeingAwayIsSetAside(t *testing.T) {
+	f := newFixture(t)
+	i, _ := newIngester(f, &downDB{err: errors.New("unable to encode 4294967295 into binary format for int4")})
+	started := time.Now()
+	evt := dmFrom(t, textMsg("x"))
+	// The fake database refuses everything the same way, so the dead letter is refused too; the
+	// point is that the handler gives up at once instead of treating it as an outage.
+	if !i.Handle(context.Background(), own, evt) || time.Since(started) > 40*time.Millisecond {
+		t.Fatalf("a client-side error must not be retried like an outage (took %s)", time.Since(started))
+	}
+}
+
+func TestADeadLetterTheDatabaseRefusesIsStillKept(t *testing.T) {
+	f := newFixture(t)
+	i, logs := newIngester(f, f.gateway)
+	evt := dmFrom(t, textMsg("x"))
+	evt.Info.ID = "has\x00nul"
+	if !i.Handle(context.Background(), own, evt) {
+		t.Fatalf("must be acknowledged: %s", logs)
+	}
+	if n := f.count("SELECT count(*) FROM ingest_dead WHERE wa_id IS NULL AND info ->> 'wa_id_hex' = '686173006e756c'"); n != 1 {
+		t.Fatalf("the copy is kept with its id hex-encoded, got %d rows (%s)", n, logs)
+	}
+}
+
+func TestAPanicAnywhereInTheHandlerIsNotAcknowledgedAsStored(t *testing.T) {
+	f := newFixture(t)
+	i, _ := newIngester(f, f.gateway)
+	i.NewGroup = func() { panic("a bug after the message was stored") }
+	if !i.Handle(context.Background(), own, groupFrom(t, rahulLID, textMsg("hi"))) {
+		t.Fatal("the message was stored before the panic, so it is acknowledged")
+	}
+	if n := f.count("SELECT count(*) FROM messages"); n != 1 {
+		t.Fatal("the message must be stored")
+	}
+
+	broken := NewIngester(nil, f.store, logging.New(&bytes.Buffer{}, "info"))
+	if broken.Handle(context.Background(), own, &events.GroupInfo{JID: types.NewJID("120363000000000000", types.GroupServer), Name: &types.GroupName{Name: "x"}}) {
+		t.Fatal("a panic while handling an event that is not a message is not acknowledged")
 	}
 }

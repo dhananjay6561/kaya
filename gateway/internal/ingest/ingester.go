@@ -2,10 +2,13 @@ package ingest
 
 import (
 	"context"
+	"encoding/hex"
 	"encoding/json"
 	"errors"
 	"fmt"
+	"io"
 	"log/slog"
+	"net"
 	"strings"
 	"time"
 
@@ -57,11 +60,31 @@ func NewIngester(db DB, store *Store, logger *slog.Logger) *Ingester {
 }
 
 // Handle stores one whatsmeow event. Events it does not store are acknowledged.
-func (i *Ingester) Handle(ctx context.Context, own Own, evt any) bool {
+func (i *Ingester) Handle(ctx context.Context, own Own, evt any) (ok bool) {
+	// whatsmeow treats a handler that panics as one that succeeded, and would acknowledge the event.
+	// A message whose handling panics is set aside instead; anything else is simply not acknowledged.
+	defer func() {
+		if r := recover(); r != nil {
+			i.logger.Error("the ingest handler panicked", "event", fmt.Sprintf("%T", evt))
+			ok = false
+			switch e := evt.(type) {
+			case *events.Message:
+				ok = i.settledMessage(ctx, e.Info, e.RawMessage)
+			case *events.UndecryptableMessage:
+				ok = i.settledMessage(ctx, e.Info, nil)
+			}
+		}
+	}()
 	switch e := evt.(type) {
+	case *events.Connected:
+		i.settled(ctx, "parked changes", func(tx pgx.Tx) error {
+			_, err := i.store.ReplayParked(ctx, tx)
+			return err
+		})
+		return true
 	case *events.Message:
 		if notification := e.Message.GetProtocolMessage().GetHistorySyncNotification(); notification != nil && e.Info.IsFromMe {
-			return i.historyAnnounced(ctx, e.Info.ID, notification)
+			return i.historyAnnounced(ctx, e.Info, notification)
 		}
 		return i.message(ctx, e.Info, e.RawMessage, func() Record { return FromMessage(e, own, SourceLive) })
 	case *events.UndecryptableMessage:
@@ -131,11 +154,12 @@ func (i *Ingester) SyncContacts(ctx context.Context, contacts []ContactNames) er
 
 // historyAnnounced queues the chunk WhatsApp just announced. The announcement is acknowledged once
 // the job row is stored; downloading and storing the chunk happens afterwards.
-func (i *Ingester) historyAnnounced(ctx context.Context, waID string, notification *waE2E.HistorySyncNotification) bool {
+func (i *Ingester) historyAnnounced(ctx context.Context, info types.MessageInfo, notification *waE2E.HistorySyncNotification) bool {
+	waID := info.ID
 	raw, err := proto.Marshal(notification)
 	if err != nil || waID == "" {
 		i.logger.Error("a history announcement could not be queued", "error_code", "unreadable")
-		return true
+		return i.deadLetter(ctx, info, notification, "history_unreadable")
 	}
 	job := HistoryJob{
 		WAID: waID, Notification: raw, SyncType: notification.GetSyncType().String(),
@@ -145,11 +169,14 @@ func (i *Ingester) historyAnnounced(ctx context.Context, waID string, notificati
 		progress := int(min(notification.GetProgress(), 100))
 		job.Progress = &progress
 	}
-	result, _ := i.run(ctx, "history job", func(tx pgx.Tx) error { return i.store.AddHistoryJob(ctx, tx, job) })
-	if result == unavailable {
+	result, code := i.run(ctx, "history job", func(tx pgx.Tx) error { return i.store.AddHistoryJob(ctx, tx, job) })
+	switch result {
+	case unavailable:
 		return false
+	case rejected:
+		return i.deadLetter(ctx, info, notification, "history_"+code)
 	}
-	if result == stored && i.HistoryQueued != nil {
+	if i.HistoryQueued != nil {
 		i.HistoryQueued()
 	}
 	return true
@@ -191,15 +218,7 @@ func (i *Ingester) message(ctx context.Context, info types.MessageInfo, raw prot
 		})
 		switch result {
 		case stored:
-			if applied.Parked {
-				i.logger.Info("kept an edit or revoke for a message that is not stored yet")
-			}
-			if applied.NewGroup && i.NewGroup != nil {
-				i.NewGroup()
-			}
-			if applied.RemovedFile != "" && i.RemoveFile != nil {
-				i.RemoveFile(applied.RemovedFile)
-			}
+			i.afterStored(applied)
 			return true
 		case unavailable:
 			return false
@@ -220,24 +239,79 @@ func safely(mapper func() Record) (rec Record, code string) {
 	return mapper(), ""
 }
 
+// afterStored runs the follow-ups of a stored record. They happen after the commit, so a panic in
+// one of them must not undo the acknowledgement.
+func (i *Ingester) afterStored(applied Applied) {
+	defer func() {
+		if r := recover(); r != nil {
+			i.logger.Error("a follow-up to a stored message panicked")
+		}
+	}()
+	if applied.Parked {
+		i.logger.Info("kept an edit or revoke for a message that is not stored yet")
+	}
+	if applied.NewGroup && i.NewGroup != nil {
+		i.NewGroup()
+	}
+	if applied.RemovedFile != "" && i.RemoveFile != nil {
+		i.RemoveFile(applied.RemovedFile)
+	}
+}
+
+// settledMessage is the last stop for a message whose handling panicked: keep a copy and
+// acknowledge it, unless the database is away.
+func (i *Ingester) settledMessage(ctx context.Context, info types.MessageInfo, raw proto.Message) (ok bool) {
+	defer func() {
+		if r := recover(); r != nil {
+			ok = false
+		}
+	}()
+	return i.deadLetter(ctx, info, raw, "handler_panic")
+}
+
+// deadLetter keeps a copy of a message that could not be stored and reports whether it may now be
+// acknowledged. If the database refuses the copy as written (an id it cannot store, say), the ids
+// are moved into the metadata in hex and it is tried once more. If even that is refused, the
+// message is acknowledged anyway: refusing it for ever would block every message behind it.
 func (i *Ingester) deadLetter(ctx context.Context, info types.MessageInfo, raw proto.Message, code string) bool {
 	d := DeadLetter{
 		WAID: info.ID, ChatJID: info.Chat.ToNonAD().String(), SenderJID: info.Sender.ToNonAD().String(), ErrorCode: code,
 	}
-	d.Info, _ = json.Marshal(map[string]any{
-		"sent_at": info.Timestamp.UTC(), "from_me": info.IsFromMe, "is_group": info.IsGroup,
-		"type": info.Type, "media_type": info.MediaType, "edit": string(info.Edit), "category": info.Category,
-	})
+	meta := map[string]any{
+		"from_me": info.IsFromMe, "is_group": info.IsGroup, "type": info.Type, "media_type": info.MediaType,
+		"edit": string(info.Edit), "category": info.Category,
+	}
+	if year := info.Timestamp.UTC().Year(); year > 0 && year < 10000 {
+		meta["sent_at"] = info.Timestamp.UTC()
+	}
+	d.Info, _ = json.Marshal(meta)
 	if raw != nil && !isNil(raw) {
 		d.Raw, _ = proto.Marshal(raw)
 	}
+	return i.keepDeadLetter(ctx, d, meta)
+}
+
+func (i *Ingester) keepDeadLetter(ctx context.Context, d DeadLetter, meta map[string]any) bool {
 	result, _ := i.run(ctx, "dead letter", func(tx pgx.Tx) error { return i.store.AddDeadLetter(ctx, tx, d) })
-	if result != stored {
-		i.logger.Error("could not keep a copy of a message that failed to store; it will be delivered again", "error_code", code)
-		return false
+	if result == rejected {
+		meta["wa_id_hex"] = hex.EncodeToString([]byte(d.WAID))
+		meta["chat_jid_hex"] = hex.EncodeToString([]byte(d.ChatJID))
+		meta["sender_jid_hex"] = hex.EncodeToString([]byte(d.SenderJID))
+		plain := DeadLetter{ErrorCode: d.ErrorCode, Raw: d.Raw}
+		plain.Info, _ = json.Marshal(meta)
+		result, _ = i.run(ctx, "dead letter", func(tx pgx.Tx) error { return i.store.AddDeadLetter(ctx, tx, plain) })
 	}
-	i.logger.Error("a message could not be stored and was set aside in ingest_dead", "error_code", code)
-	return true
+	switch result {
+	case stored:
+		i.logger.Error("a message could not be stored and was set aside in ingest_dead", "error_code", d.ErrorCode)
+		return true
+	case unavailable:
+		i.logger.Error("could not keep a copy of a message that failed to store; it will be delivered again", "error_code", d.ErrorCode)
+		return false
+	default:
+		i.logger.Error("a message could not be stored and no copy could be kept; acknowledging it so ingest can go on", "error_code", d.ErrorCode)
+		return true
+	}
 }
 
 func isNil(m proto.Message) bool {
@@ -284,28 +358,42 @@ func (i *Ingester) run(ctx context.Context, what string, op func(pgx.Tx) error) 
 }
 
 // settled runs op for an event that is not worth a dead letter (a name change): it reports false
-// only while the database is away, so the event comes back, and true once it is stored or refused.
+// only while the database is away, and true once it is stored or refused. WhatsApp sends a group
+// change again after a false; a contact change is not sent again, and the contact sync on the next
+// connect picks the name up instead.
 func (i *Ingester) settled(ctx context.Context, what string, op func(pgx.Tx) error) bool {
 	result, _ := i.run(ctx, what, op)
 	return result != unavailable
 }
 
-// classify tells failures that retrying can fix (the database is away, a deadlock) from ones it
-// cannot (a constraint, a payload that breaks the contract), and names the latter with a short code.
+// classify tells the database being away (worth waiting for) from everything else. Only failures
+// of the connection itself count as away: a refused value, a broken constraint or an error raised
+// before the query was even sent would fail the same way every time, so they are permanent and get
+// a short code.
 func classify(err error) (code string, permanent bool) {
 	if errors.Is(err, contracts.ErrInvalid) {
 		return "contract_invalid", true
 	}
 	var pg *pgconn.PgError
-	if !errors.As(err, &pg) {
-		return "", false
+	if errors.As(err, &pg) {
+		switch {
+		case strings.HasPrefix(pg.Code, "08"), strings.HasPrefix(pg.Code, "53"), strings.HasPrefix(pg.Code, "57"),
+			pg.Code == "40001", pg.Code == "40P01":
+			return "", false
+		}
+		return pg.Code, true
 	}
+	var connect *pgconn.ConnectError
+	var network net.Error
 	switch {
-	case strings.HasPrefix(pg.Code, "08"), strings.HasPrefix(pg.Code, "53"), strings.HasPrefix(pg.Code, "57"),
-		pg.Code == "40001", pg.Code == "40P01":
+	case errors.Is(err, context.DeadlineExceeded), errors.Is(err, context.Canceled),
+		errors.Is(err, io.EOF), errors.Is(err, io.ErrUnexpectedEOF),
+		errors.Is(err, pgx.ErrTxClosed), errors.Is(err, pgx.ErrTxCommitRollback),
+		errors.As(err, &connect), errors.As(err, &network),
+		pgconn.SafeToRetry(err), strings.Contains(err.Error(), "conn closed"), strings.Contains(err.Error(), "closed pool"):
 		return "", false
 	}
-	return pg.Code, true
+	return "client_error", true
 }
 
 // scrub keeps a database error's code and field names and drops its detail, which can quote the
