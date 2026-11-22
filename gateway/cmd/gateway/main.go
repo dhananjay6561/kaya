@@ -206,8 +206,13 @@ func pair(args []string) error {
 	sqlDB := db.SQL()
 	defer func() { _ = sqlDB.Close() }()
 
+	validator, err := contracts.NewValidator()
+	if err != nil {
+		return err
+	}
+	ingester := ingest.NewIngester(db, ingest.NewStore(events.NewOutbox(validator)), logger)
 	sessions := whatsapp.NewSessions(sqlDB, whatsapp.NewLogger(logger))
-	err = whatsapp.Pair(ctx, sessions, logger, whatsapp.PairOptions{Phone: *phone, Out: os.Stdout})
+	err = whatsapp.Pair(ctx, sessions, ingester, logger, whatsapp.PairOptions{Phone: *phone, Out: os.Stdout})
 	if errors.Is(err, context.Canceled) {
 		return errors.New("pairing cancelled; nothing was linked")
 	}

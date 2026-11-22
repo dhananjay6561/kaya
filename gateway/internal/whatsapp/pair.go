@@ -14,6 +14,8 @@ import (
 	"go.mau.fi/whatsmeow/store"
 	"go.mau.fi/whatsmeow/types/events"
 	waLog "go.mau.fi/whatsmeow/util/log"
+
+	"github.com/dhananjay6561/kaya/gateway/internal/ingest"
 )
 
 // ErrLinkedNotConnected means the phone linked and the session is stored, but pairing stopped
@@ -61,7 +63,8 @@ func NormalizePhone(raw string) (string, error) {
 
 // Pair links a new device to WhatsApp and stores its session. It prints a QR code (or a pairing code
 // when opts.Phone is set) to opts.Out and returns once the phone has linked and the first connection is up.
-func Pair(ctx context.Context, sessions *Sessions, logger *slog.Logger, opts PairOptions) error {
+// History announcements that arrive meanwhile are queued through sink.
+func Pair(ctx context.Context, sessions *Sessions, sink Announcements, logger *slog.Logger, opts PairOptions) error {
 	if opts.Phone != "" {
 		phone, err := NormalizePhone(opts.Phone)
 		if err != nil {
@@ -77,7 +80,7 @@ func Pair(ctx context.Context, sessions *Sessions, logger *slog.Logger, opts Pai
 		return ErrAlreadyPaired
 	}
 
-	cli := newPairClient(sessions.New(), NewLogger(logger))
+	cli := newPairClient(sessions.New(), NewLogger(logger), holdMessages(ctx, sink))
 	connected := make(chan struct{}, 1)
 	cli.AddEventHandler(func(evt any) {
 		if _, ok := evt.(*events.Connected); ok {
@@ -117,25 +120,40 @@ type pairClient interface {
 		clientDisplayName string) (string, error)
 }
 
-var newPairClient = func(device *store.Device, log waLog.Logger) pairClient {
+var newPairClient = func(device *store.Device, log waLog.Logger, hold whatsmeow.EventHandlerWithSuccessStatus) pairClient {
 	cli := whatsmeow.NewClient(device, log)
 	cli.SynchronousAck = true
 	cli.EnableDecryptedEventBuffer = true
 	cli.ManualHistorySyncDownload = true
 	cli.DisableManualHistorySyncReceipt = true
-	cli.AddEventHandlerWithSuccessStatus(holdMessages)
+	cli.AddEventHandlerWithSuccessStatus(hold)
 	return cli
 }
 
-// holdMessages keeps the pairing run from acknowledging messages: it cannot store them, so they
-// must stay with WhatsApp until the gateway connects. Everything else passes, including the events
-// pairing itself waits for.
-func holdMessages(evt any) bool {
-	switch evt.(type) {
-	case *events.Message, *events.UndecryptableMessage:
-		return false
+// Announcements stores what WhatsApp sends while pairing that must not be lost. The ingester
+// implements it.
+type Announcements interface {
+	Handle(ctx context.Context, own ingest.Own, evt any) bool
+}
+
+// holdMessages is the pairing run's handler for incoming events. Ordinary messages are not
+// acknowledged: the run cannot store them, so they stay with WhatsApp until the gateway connects.
+// History announcements are stored right away through sink, because WhatsApp starts sending them
+// the moment the phone links and whatsmeow confirms them before any handler runs; waiting for the
+// gateway could lose them. Everything else passes, including the events pairing itself waits for.
+func holdMessages(ctx context.Context, sink Announcements) whatsmeow.EventHandlerWithSuccessStatus {
+	return func(evt any) bool {
+		switch e := evt.(type) {
+		case *events.Message:
+			if sink != nil && e.Info.IsFromMe && e.Message.GetProtocolMessage().GetHistorySyncNotification() != nil {
+				return sink.Handle(ctx, ingest.Own{}, e)
+			}
+			return false
+		case *events.UndecryptableMessage:
+			return false
+		}
+		return true
 	}
-	return true
 }
 
 type pairing struct {

@@ -9,6 +9,7 @@ import (
 	"time"
 
 	"go.mau.fi/whatsmeow"
+	"go.mau.fi/whatsmeow/proto/waE2E"
 	"go.mau.fi/whatsmeow/store"
 	"go.mau.fi/whatsmeow/types"
 	"go.mau.fi/whatsmeow/types/events"
@@ -150,31 +151,53 @@ func TestPairRefusesWhenASessionIsStored(t *testing.T) {
 	}
 	savePaired(t, sessions, types.NewADJID("19995550100", 0, 7))
 	original := newPairClient
-	newPairClient = func(*store.Device, waLog.Logger) pairClient {
+	newPairClient = func(*store.Device, waLog.Logger, whatsmeow.EventHandlerWithSuccessStatus) pairClient {
 		t.Fatal("pairing must stop before it creates a client")
 		return nil
 	}
 	t.Cleanup(func() { newPairClient = original })
 
-	err := Pair(ctx, sessions, logging.New(&bytes.Buffer{}, "info"), PairOptions{Out: &bytes.Buffer{}})
+	err := Pair(ctx, sessions, nil, logging.New(&bytes.Buffer{}, "info"), PairOptions{Out: &bytes.Buffer{}})
 	if !errors.Is(err, ErrAlreadyPaired) {
 		t.Fatalf("want ErrAlreadyPaired, got %v", err)
 	}
-	if err := Pair(ctx, sessions, logging.New(&bytes.Buffer{}, "info"), PairOptions{Phone: "12", Out: &bytes.Buffer{}}); err == nil ||
+	if err := Pair(ctx, sessions, nil, logging.New(&bytes.Buffer{}, "info"), PairOptions{Phone: "12", Out: &bytes.Buffer{}}); err == nil ||
 		errors.Is(err, ErrAlreadyPaired) {
 		t.Fatalf("a bad phone number must be refused before anything else, got %v", err)
 	}
 }
 
-func TestPairingHoldsMessagesForTheGateway(t *testing.T) {
+func TestPairingHoldsMessagesAndQueuesHistory(t *testing.T) {
+	sink := &fakeSink{}
+	hold := holdMessages(context.Background(), sink)
 	for _, evt := range []any{&events.Message{}, &events.UndecryptableMessage{}} {
-		if holdMessages(evt) {
+		if hold(evt) {
 			t.Fatalf("%T must not be acknowledged while pairing", evt)
 		}
 	}
-	for _, evt := range []any{&events.PairSuccess{}, &events.Connected{}, &events.QR{}, &events.HistorySync{}} {
-		if !holdMessages(evt) {
+	for _, evt := range []any{&events.PairSuccess{}, &events.Connected{}, &events.QR{}} {
+		if !hold(evt) {
 			t.Fatalf("%T must pass", evt)
 		}
+	}
+
+	announcement := &events.Message{
+		Info: types.MessageInfo{MessageSource: types.MessageSource{IsFromMe: true}, ID: "HIST1"},
+		Message: &waE2E.Message{ProtocolMessage: &waE2E.ProtocolMessage{
+			HistorySyncNotification: &waE2E.HistorySyncNotification{},
+		}},
+	}
+	if !hold(announcement) {
+		t.Fatal("a history announcement is acknowledged once the sink has queued it")
+	}
+	if handled, _ := sink.seen(); handled != 1 {
+		t.Fatalf("the announcement must reach the sink, got %d", handled)
+	}
+	sink.setRefuse(true)
+	if hold(announcement) {
+		t.Fatal("an announcement the sink could not queue is not acknowledged")
+	}
+	if holdMessages(context.Background(), nil)(announcement) {
+		t.Fatal("without a sink nothing is acknowledged")
 	}
 }
