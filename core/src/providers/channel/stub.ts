@@ -4,6 +4,7 @@ import type {
   IncomingMessage,
   MessageHandler,
   OutgoingMessage,
+  SendOptions,
   SentMessage,
 } from "./types.js";
 
@@ -43,7 +44,7 @@ export function createStubChannel(): StubChannel {
       signal.throwIfAborted();
       assertStarted();
     },
-    async send(message: OutgoingMessage, options: Readonly<{ signal?: AbortSignal }> = {}) {
+    async send(message: OutgoingMessage, options: SendOptions = {}) {
       options.signal?.throwIfAborted();
       assertStarted();
       if (message.idempotencyKey.trim() === "") throw new Error("idempotency key is empty");

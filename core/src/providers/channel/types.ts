@@ -8,6 +8,12 @@ export type OutgoingMessage = Readonly<{
   replyTo?: string;
 }>;
 
+export type SendOptions = Readonly<{
+  signal?: AbortSignal;
+  /** How long the message stays worth sending. After that it is dropped, not sent late. */
+  ttlMs?: number;
+}>;
+
 export type SentMessage = Readonly<{ id: string; sentAt: Date }>;
 
 export type MessageHandler = (message: IncomingMessage) => Promise<void> | void;
@@ -16,9 +22,6 @@ export interface ChatChannel extends Checker {
   readonly name: string;
   start(): Promise<void>;
   stop(): Promise<void>;
-  send(
-    message: OutgoingMessage,
-    options?: Readonly<{ signal?: AbortSignal }>,
-  ): Promise<SentMessage>;
+  send(message: OutgoingMessage, options?: SendOptions): Promise<SentMessage>;
   onMessage(handler: MessageHandler): () => void;
 }
