@@ -38,6 +38,9 @@ func Open(dsn string) (*DB, error) {
 	if !set["connect_timeout"] {
 		cfg.ConnConfig.ConnectTimeout = 5 * time.Second
 	}
+	if !set["search_path"] {
+		cfg.ConnConfig.RuntimeParams["search_path"] = "whatsmeow,public"
+	}
 	if !set["application_name"] {
 		cfg.ConnConfig.RuntimeParams["application_name"] = "kaya-gateway"
 	}
