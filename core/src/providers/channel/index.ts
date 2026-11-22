@@ -7,6 +7,7 @@ export {
   createGatewayChannel,
   type GatewayChannelDeps,
   GatewayNotLinkedError,
+  IdempotencyKeyReusedError,
   requestIdFor,
   SendFailedError,
   type SendResults,

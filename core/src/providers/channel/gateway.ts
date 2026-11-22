@@ -13,8 +13,10 @@ export type GatewayChannelDeps = Readonly<{
   pool: pg.Pool;
   contracts: Contracts;
   results?: SendResults;
+  ttlMs?: number;
   pollMs?: number;
   graceMs?: number;
+  sendingGraceMs?: number;
 }>;
 
 export class GatewayNotLinkedError extends Error {
@@ -34,6 +36,13 @@ export class SendFailedError extends Error {
   }
 }
 
+export class IdempotencyKeyReusedError extends Error {
+  constructor(readonly requestId: string) {
+    super("this idempotency key was already used for a different message");
+    this.name = "IdempotencyKeyReusedError";
+  }
+}
+
 export function requestIdFor(idempotencyKey: string): string {
   const hash = createHash("sha256").update(`kaya:channel:${idempotencyKey}`).digest();
   hash[6] = ((hash[6] ?? 0) & 0x0f) | 0x50;
@@ -48,12 +57,22 @@ export function requestIdFor(idempotencyKey: string): string {
   ].join("-");
 }
 
-type Row = { state: string; wa_id: string | null; error: string | null; finished_at: Date | null };
+type Row = {
+  state: string;
+  wa_id: string | null;
+  error: string | null;
+  finished_at: Date | null;
+  text: string | null;
+  reply_to: string | null;
+  overdue: boolean;
+  abandoned: boolean;
+};
 
 export function createGatewayChannel(deps: GatewayChannelDeps): ChatChannel {
   const { pool, contracts } = deps;
   const pollMs = deps.pollMs ?? 2_000;
   const graceMs = deps.graceMs ?? 30_000;
+  const sendingGraceMs = deps.sendingGraceMs ?? 5 * 60_000;
   const handlers = new Set<MessageHandler>();
   let started = false;
 
@@ -61,21 +80,36 @@ export function createGatewayChannel(deps: GatewayChannelDeps): ChatChannel {
     if (!started) throw new ChannelNotStartedError("gateway");
   };
 
-  async function outcome(id: string): Promise<SentMessage | undefined> {
+  async function outcome(id: string, message: OutgoingMessage): Promise<SentMessage | undefined> {
     const { rows } = await pool.query<Row>(
-      "SELECT state, wa_id, error, finished_at FROM send_requests WHERE id = $1",
-      [id],
+      `SELECT state, wa_id, error, finished_at,
+              payload -> 'content' ->> 'text' AS text,
+              payload -> 'reply_to' ->> 'wa_id' AS reply_to,
+              now() > expires_at + make_interval(secs => $2) AS overdue,
+              now() > expires_at + make_interval(secs => $3) AS abandoned
+       FROM send_requests WHERE id = $1`,
+      [id, graceMs / 1_000, (graceMs + sendingGraceMs) / 1_000],
     );
     const row = rows[0];
-    if (row?.state === "sent" && row.wa_id && row.finished_at) {
+    if (!row) return undefined;
+    if (row.text !== message.text.trim() || row.reply_to !== (message.replyTo ?? null)) {
+      throw new IdempotencyKeyReusedError(id);
+    }
+    if (row.state === "sent" && row.wa_id && row.finished_at) {
       return { id: row.wa_id, sentAt: row.finished_at };
     }
-    if (row?.state === "failed") throw new SendFailedError(id, row.error ?? "failed");
+    if (row.state === "failed") throw new SendFailedError(id, row.error ?? "failed");
+    if (row.state === "pending" && row.overdue) throw new SendFailedError(id, "no_answer");
+    if (row.state === "sending" && row.abandoned) throw new SendFailedError(id, "outcome_unknown");
     return undefined;
   }
 
   function nudge(id: string, ms: number, signal: AbortSignal | undefined): Promise<void> {
     return new Promise((resolve, reject) => {
+      if (signal?.aborted) {
+        reject(signal.reason);
+        return;
+      }
       const timer = setTimeout(done, ms);
       const forget = deps.results?.onSendResult(id, done);
       const aborted = () => {
@@ -114,7 +148,7 @@ export function createGatewayChannel(deps: GatewayChannelDeps): ChatChannel {
       if (message.text.trim() === "") throw new Error("message text is empty");
 
       const id = requestIdFor(message.idempotencyKey);
-      const earlier = await outcome(id);
+      const earlier = await outcome(id, message);
       if (earlier) return earlier;
 
       const own = (await readConnection(pool))?.ownJid;
@@ -126,6 +160,7 @@ export function createGatewayChannel(deps: GatewayChannelDeps): ChatChannel {
           { kind: "self_chat" },
           {
             ...(message.replyTo ? { replyTo: { wa_id: message.replyTo, sender_jid: own } } : {}),
+            ...(deps.ttlMs === undefined ? {} : { ttlMs: deps.ttlMs }),
           },
         ),
         id,
@@ -135,11 +170,10 @@ export function createGatewayChannel(deps: GatewayChannelDeps): ChatChannel {
         [id, contracts.encodeSendRequest(request), request.expires_at],
       );
 
-      const deadline = Date.parse(request.expires_at) + graceMs;
       for (;;) {
-        const sent = await outcome(id);
+        options.signal?.throwIfAborted();
+        const sent = await outcome(id, message);
         if (sent) return sent;
-        if (Date.now() > deadline) throw new SendFailedError(id, "no_answer");
         await nudge(id, pollMs, options.signal);
       }
     },
