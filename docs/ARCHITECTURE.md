@@ -47,7 +47,9 @@ Folders appear when a phase needs them; empty placeholders are not committed.
 ## How services talk
 
 - **gateway → core:** events (`contracts/schemas/v1/event.schema.json`):
-  - `connection.state`: connecting, pairing, connected, disconnected, logged out
+  - `connection.state`: connecting, pairing, connected, disconnected, logged out. The gateway
+    writes one each time the state or its reason changes, stamped with when it changed. Changes
+    made while the database is away are kept in memory and written in order once it answers.
   - `message.stored`: a message row was inserted or changed (new, edited or deleted). It carries
     row ids (`message_id`, `chat_id`, `sender_id`), never the body. The gateway emits it only when
     the upsert actually inserted or changed the row, so a redelivered or overlapping copy of a
@@ -189,8 +191,13 @@ Folders appear when a phase needs them; empty placeholders are not committed.
   with 200 when every check passes and 503 otherwise. Each check has a 2-second limit, and failure
   details go to the logs, not the response. A service starts even if a dependency is down and
   reports it through `/health` until it recovers. State that must not fail health goes under an
-  optional `info` object, such as the gateway's `"info":{"whatsapp":{"state","reason"}}`, which uses
-  the `connection.state` contract's states and fixed reason strings.
+  optional `info` object, such as the gateway's `"info":{"whatsapp":{"state","reason","since"}}`,
+  which uses the `connection.state` contract's states and fixed reason strings.
+- **Connection.** whatsmeow reconnects by itself after an ordinary drop. The gateway starts a new
+  connection when the first attempt fails or whatsmeow gives up, waiting twice as long after each
+  failure, up to a minute, and starting over once a connection has held for a minute. A connection
+  that stops answering pings is reported as `disconnected` and replaced after a minute of silence.
+  After a logout, a session opened elsewhere or an outdated client it stops trying and says so.
 - **Errors:** typed errors at boundaries, never swallowed. Retries with backoff only for network
   calls.
 - **Tests:** every phase ships tests for its logic. Anything touching the database is tested
