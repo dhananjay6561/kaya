@@ -111,8 +111,10 @@ func run(cfg config.Config, logger *slog.Logger) error {
 		return fmt.Errorf("listen on %s: %w", addr, err)
 	}
 
-	ingester := ingest.NewIngester(db, ingest.NewStore(events.NewOutbox(validator)), logger)
+	outbox := events.NewOutbox(validator)
+	ingester := ingest.NewIngester(db, ingest.NewStore(outbox), logger)
 	conn := whatsapp.NewConn(whatsapp.NewSessions(sqlDB, whatsapp.NewLogger(logger)), ingester, logger)
+	conn.SetPublisher(events.NewPublisher(db, outbox))
 	ingester.NewGroup = conn.RequestGroupSync
 	ingester.HistoryQueued = conn.RequestHistory
 
