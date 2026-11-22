@@ -1,9 +1,22 @@
 import { createHash } from "node:crypto";
 import type pg from "pg";
 import { type Contracts, newSendRequest } from "../../contracts/index.js";
-import { readConnection } from "../../modules/gateway/index.js";
+import type { Logger } from "../../lib/logger.js";
+import { type MessageListener, readConnection } from "../../modules/gateway/index.js";
+import { createInbox, type Inbox } from "./inbox.js";
 import { ChannelNotStartedError } from "./stub.js";
-import type { ChatChannel, MessageHandler, OutgoingMessage, SentMessage } from "./types.js";
+import type {
+  ChatChannel,
+  IncomingMessage,
+  MessageHandler,
+  OutgoingMessage,
+  SendOptions,
+  SentMessage,
+} from "./types.js";
+
+export type IncomingEvents = Readonly<{
+  onMessage(listener: MessageListener): () => void;
+}>;
 
 export type SendResults = Readonly<{
   onSendResult(requestId: string, listener: () => void): () => void;
@@ -13,6 +26,9 @@ export type GatewayChannelDeps = Readonly<{
   pool: pg.Pool;
   contracts: Contracts;
   results?: SendResults;
+  incoming?: IncomingEvents;
+  logger?: Logger;
+  inboxPollMs?: number;
   ttlMs?: number;
   pollMs?: number;
   graceMs?: number;
@@ -75,6 +91,25 @@ export function createGatewayChannel(deps: GatewayChannelDeps): ChatChannel {
   const sendingGraceMs = deps.sendingGraceMs ?? 5 * 60_000;
   const handlers = new Set<MessageHandler>();
   let started = false;
+  let stopping = new AbortController();
+  let unsubscribe: (() => void) | undefined;
+  const inbox: Inbox | undefined =
+    deps.incoming && deps.logger
+      ? createInbox({
+          pool,
+          logger: deps.logger,
+          ...(deps.inboxPollMs === undefined ? {} : { pollMs: deps.inboxPollMs }),
+        })
+      : undefined;
+
+  async function deliver(message: IncomingMessage): Promise<void> {
+    const results = await Promise.allSettled([...handlers].map(async (handle) => handle(message)));
+    const failures = results.flatMap((r) => (r.status === "rejected" ? [r.reason] : []));
+    if (failures.length === 1) throw failures[0];
+    if (failures.length > 1) {
+      throw new AggregateError(failures, `${failures.length} message handler(s) failed`);
+    }
+  }
 
   const assertStarted = () => {
     if (!started) throw new ChannelNotStartedError("gateway");
@@ -132,18 +167,36 @@ export function createGatewayChannel(deps: GatewayChannelDeps): ChatChannel {
   return Object.freeze({
     name: "gateway",
     async start() {
+      if (started) return;
       started = true;
+      stopping = new AbortController();
+      if (inbox && deps.incoming) {
+        unsubscribe = deps.incoming.onMessage(async (message, tx) =>
+          (await inbox.record(message, tx)) ? inbox.wake : undefined,
+        );
+        inbox.start(deliver);
+      }
     },
     async stop() {
+      if (!started) return;
       started = false;
+      unsubscribe?.();
+      unsubscribe = undefined;
+      const inboxStopped = inbox?.stop();
+      stopping.abort(new ChannelNotStartedError("gateway"));
+      await inboxStopped;
     },
     async check(signal: AbortSignal) {
       signal.throwIfAborted();
       assertStarted();
     },
-    async send(message: OutgoingMessage, options: Readonly<{ signal?: AbortSignal }> = {}) {
+    async send(message: OutgoingMessage, options: SendOptions = {}) {
       options.signal?.throwIfAborted();
       assertStarted();
+      const signal = options.signal
+        ? AbortSignal.any([options.signal, stopping.signal])
+        : stopping.signal;
+      const ttlMs = options.ttlMs ?? deps.ttlMs;
       if (message.idempotencyKey.trim() === "") throw new Error("idempotency key is empty");
       if (message.text.trim() === "") throw new Error("message text is empty");
 
@@ -160,7 +213,7 @@ export function createGatewayChannel(deps: GatewayChannelDeps): ChatChannel {
           { kind: "self_chat" },
           {
             ...(message.replyTo ? { replyTo: { wa_id: message.replyTo, sender_jid: own } } : {}),
-            ...(deps.ttlMs === undefined ? {} : { ttlMs: deps.ttlMs }),
+            ...(ttlMs === undefined ? {} : { ttlMs }),
           },
         ),
         id,
@@ -171,10 +224,10 @@ export function createGatewayChannel(deps: GatewayChannelDeps): ChatChannel {
       );
 
       for (;;) {
-        options.signal?.throwIfAborted();
+        signal.throwIfAborted();
         const sent = await outcome(id, message);
         if (sent) return sent;
-        await nudge(id, pollMs, options.signal);
+        await nudge(id, pollMs, signal);
       }
     },
     onMessage(handler: MessageHandler) {

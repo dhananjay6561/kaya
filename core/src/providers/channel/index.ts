@@ -8,6 +8,7 @@ export {
   type GatewayChannelDeps,
   GatewayNotLinkedError,
   IdempotencyKeyReusedError,
+  type IncomingEvents,
   requestIdFor,
   SendFailedError,
   type SendResults,
