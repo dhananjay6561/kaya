@@ -288,6 +288,22 @@ BEGIN
       AND NOT has_table_privilege('kaya_core', t, 'DELETE'), 'core cannot touch ' || t;
   END LOOP;
 
+  ASSERT has_table_privilege('kaya_core', 'send_requests', 'SELECT'), 'core reads what became of its requests';
+  ASSERT has_column_privilege('kaya_core', 'send_requests', 'payload', 'INSERT')
+    AND NOT has_column_privilege('kaya_core', 'send_requests', 'state', 'INSERT')
+    AND NOT has_column_privilege('kaya_core', 'send_requests', 'wa_id', 'INSERT'), 'core adds requests but cannot choose their state';
+  ASSERT NOT has_any_column_privilege('kaya_core', 'send_requests', 'UPDATE')
+    AND NOT has_table_privilege('kaya_core', 'send_requests', 'DELETE'), 'core never changes a request once made';
+  ASSERT has_table_privilege('kaya_gateway', 'send_requests', 'SELECT, DELETE'), 'the gateway consumes requests';
+  ASSERT has_column_privilege('kaya_gateway', 'send_requests', 'state', 'UPDATE')
+    AND NOT has_column_privilege('kaya_gateway', 'send_requests', 'payload', 'UPDATE')
+    AND NOT has_column_privilege('kaya_gateway', 'send_requests', 'expires_at', 'UPDATE'), 'the gateway records outcomes but cannot rewrite a request';
+  ASSERT NOT has_any_column_privilege('kaya_gateway', 'send_requests', 'INSERT'), 'the gateway never makes requests';
+  ASSERT has_table_privilege('kaya_core', 'connection_state', 'SELECT, INSERT, UPDATE'), 'core keeps the connection state';
+  ASSERT NOT has_table_privilege('kaya_gateway', 'connection_state', 'SELECT')
+    AND NOT has_table_privilege('kaya_gateway', 'connection_state', 'INSERT')
+    AND NOT has_table_privilege('kaya_gateway', 'connection_state', 'UPDATE'), 'the gateway cannot touch core''s copy of the state';
+
   ASSERT has_table_privilege('kaya_gateway', 'media', 'SELECT, INSERT, UPDATE, DELETE'), 'the gateway writes media';
   ASSERT has_table_privilege('kaya_core', 'media', 'SELECT'), 'core reads media';
   ASSERT NOT has_table_privilege('kaya_core', 'media', 'INSERT')
@@ -392,6 +408,64 @@ BEGIN
   ASSERT NOT FOUND;
 END
 $$;
+
+SET LOCAL ROLE kaya_core;
+DO $$
+DECLARE
+  req uuid := 'b3bb189e-8bf9-4888-9912-ace4e6543001';
+  due timestamptz := '2026-11-23T10:00:00Z';
+BEGIN
+  INSERT INTO send_requests (id, payload, expires_at)
+  VALUES (req, jsonb_build_object('id', req, 'expires_at', '2026-11-23T10:00:00Z'), due);
+  PERFORM 1 FROM send_requests WHERE id = req AND state = 'pending' AND wa_id IS NULL AND finished_at IS NULL;
+  ASSERT FOUND, 'core adds a request, and it is pending';
+
+  PERFORM pg_temp.expect_error(format($q$INSERT INTO send_requests (id, payload, expires_at) VALUES (%L, %L, %L)$q$,
+    req, jsonb_build_object('id', req, 'expires_at', '2026-11-23T10:00:00Z'), due), '23505');
+  PERFORM pg_temp.expect_error($q$INSERT INTO send_requests (id, payload, expires_at) VALUES
+    ('b3bb189e-8bf9-4888-9912-ace4e6543002', '{"id": "b3bb189e-8bf9-4888-9912-ace4e6543003", "expires_at": "2026-11-23T10:00:00Z"}', '2026-11-23T10:00:00Z')$q$, '23514');
+  PERFORM pg_temp.expect_error($q$INSERT INTO send_requests (id, payload, expires_at) VALUES
+    ('b3bb189e-8bf9-4888-9912-ace4e6543002', '{"expires_at": "2026-11-23T10:00:00Z"}', '2026-11-23T10:00:00Z')$q$, '23514');
+  PERFORM pg_temp.expect_error($q$INSERT INTO send_requests (id, payload, expires_at) VALUES
+    ('b3bb189e-8bf9-4888-9912-ace4e6543002', '{"id": "b3bb189e-8bf9-4888-9912-ace4e6543002", "expires_at": "2026-11-23T10:00:00Z"}', '2030-01-01T00:00:00Z')$q$, '23514');
+  PERFORM pg_temp.expect_error($q$INSERT INTO send_requests (id, payload, expires_at) VALUES
+    ('b3bb189e-8bf9-4888-9912-ace4e6543002', '{"id": "b3bb189e-8bf9-4888-9912-ace4e6543002"}', '2026-11-23T10:00:00Z')$q$, '23514');
+  PERFORM pg_temp.expect_error($q$INSERT INTO send_requests (id, payload, expires_at, state, wa_id) VALUES
+    ('b3bb189e-8bf9-4888-9912-ace4e6543002', '{"id": "b3bb189e-8bf9-4888-9912-ace4e6543002", "expires_at": "2026-11-23T10:00:00Z"}', '2026-11-23T10:00:00Z', 'sent', 'FORGED')$q$, '42501');
+  PERFORM pg_temp.expect_error(format($q$UPDATE send_requests SET state = 'sending', wa_id = 'FORGED' WHERE id = %L$q$, req), '42501');
+  PERFORM pg_temp.expect_error(format($q$DELETE FROM send_requests WHERE id = %L$q$, req), '42501');
+
+  INSERT INTO connection_state (state, own_jid, occurred_at) VALUES ('connected', '919000000000@s.whatsapp.net', now());
+  UPDATE connection_state SET state = 'disconnected', reason = 'connection lost, reconnecting', occurred_at = now();
+  PERFORM pg_temp.expect_error($q$INSERT INTO connection_state (state, occurred_at) VALUES ('connected', now())$q$, '23505');
+  PERFORM pg_temp.expect_error($q$INSERT INTO connection_state (only_row, state, occurred_at) VALUES (false, 'connected', now())$q$, '23514');
+  PERFORM pg_temp.expect_error($q$UPDATE connection_state SET state = 'sleeping'$q$, '23514');
+END
+$$;
+
+SET LOCAL ROLE kaya_gateway;
+DO $$
+DECLARE
+  req uuid := 'b3bb189e-8bf9-4888-9912-ace4e6543001';
+BEGIN
+  PERFORM pg_temp.expect_error(format($q$UPDATE send_requests SET state = 'sending' WHERE id = %L$q$, req), '23514');
+  PERFORM pg_temp.expect_error(format($q$UPDATE send_requests SET state = 'sent', wa_id = '3EB0TEST' WHERE id = %L$q$, req), '23514');
+  PERFORM pg_temp.expect_error(format($q$UPDATE send_requests SET state = 'failed', finished_at = now() WHERE id = %L$q$, req), '23514');
+  PERFORM pg_temp.expect_error(format($q$UPDATE send_requests SET state = 'queued' WHERE id = %L$q$, req), '23514');
+  PERFORM pg_temp.expect_error(format($q$UPDATE send_requests SET payload = '{}' WHERE id = %L$q$, req), '42501');
+  PERFORM pg_temp.expect_error(format($q$UPDATE send_requests SET expires_at = now() + interval '1 year' WHERE id = %L$q$, req), '42501');
+  PERFORM pg_temp.expect_error($q$INSERT INTO send_requests (id, payload, expires_at) VALUES
+    ('b3bb189e-8bf9-4888-9912-ace4e6543009', '{"id": "b3bb189e-8bf9-4888-9912-ace4e6543009", "expires_at": "2026-11-23T10:00:00Z"}', '2026-11-23T10:00:00Z')$q$, '42501');
+  PERFORM pg_temp.expect_error('SELECT count(*) FROM connection_state', '42501');
+
+  UPDATE send_requests SET state = 'sending', wa_id = '3EB0TEST' WHERE id = req;
+  UPDATE send_requests SET state = 'sent', finished_at = now() WHERE id = req;
+  UPDATE send_requests SET state = 'failed', error = 'outcome_unknown' WHERE id = req;
+  DELETE FROM send_requests WHERE id = req;
+  ASSERT FOUND, 'the gateway removes finished requests';
+END
+$$;
+RESET ROLE;
 
 ROLLBACK;
 \echo schema tests passed
