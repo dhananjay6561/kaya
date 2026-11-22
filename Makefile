@@ -80,7 +80,7 @@ down: ## stop the stack (data stays in DATA_DIR)
 
 db: data-dirs ## start only Postgres and apply migrations, for running services from source
 	$(COMPOSE) up --detach --wait db
-	$(COMPOSE) run --rm migrate
+	$(COMPOSE) run --rm db-roles
 
 logs: ## follow logs from every service
 	$(COMPOSE) logs --follow
