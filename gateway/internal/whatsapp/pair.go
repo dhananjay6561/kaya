@@ -7,6 +7,7 @@ import (
 	"io"
 	"log/slog"
 	"regexp"
+	"strings"
 	"time"
 
 	"go.mau.fi/whatsmeow"
@@ -42,11 +43,11 @@ type PairOptions struct {
 // NormalizePhone strips spaces, dashes and a leading + and checks what remains is an international number.
 func NormalizePhone(raw string) (string, error) {
 	var digits []rune
-	for _, r := range raw {
+	for i, r := range strings.TrimSpace(raw) {
 		switch {
 		case r >= '0' && r <= '9':
 			digits = append(digits, r)
-		case r == ' ' || r == '-' || r == '+' || r == '(' || r == ')':
+		case r == ' ' || r == '-' || r == '(' || r == ')' || (r == '+' && i == 0):
 		default:
 			return "", errors.New("phone number may only contain digits, spaces, dashes and a leading +")
 		}

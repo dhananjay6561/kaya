@@ -27,7 +27,7 @@ func TestNormalizePhone(t *testing.T) {
 			t.Fatalf("%q: got %q, %v", raw, got, err)
 		}
 	}
-	for _, raw := range []string{"", "9876543", "09876543210", "91987654321098765", "91abc76543210", "919876543210;"} {
+	for _, raw := range []string{"", "9876543", "09876543210", "91987654321098765", "91abc76543210", "919876543210;", "91+9876543210"} {
 		if _, err := NormalizePhone(raw); err == nil {
 			t.Fatalf("%q: want an error", raw)
 		}
