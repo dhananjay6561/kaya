@@ -128,7 +128,7 @@ describe("a command, end to end", { skip: !testDatabaseUrl && "TEST_DATABASE_URL
     assert.deepEqual(payload.authorization, { kind: "self_chat" });
     assert.deepEqual(payload.content, { type: "text", text: "You said: hello kaya" });
     assert.deepEqual(payload.reply_to, { wa_id: "3EB0TYPEDBYDJ", sender_jid: ownPn });
-    assert.ok(Date.parse(payload.expires_at) - Date.parse(payload.created_at) <= 2 * 60_000);
+    assert.ok(Date.parse(payload.expires_at) - Date.parse(payload.created_at) <= 10 * 60_000);
 
     await testDb.admin.query(
       "UPDATE send_requests SET state = 'sending', wa_id = '3EB0KAYAREPLY' WHERE id = $1",

@@ -4,98 +4,120 @@ import { createLogger } from "../../lib/logger.js";
 import {
   type ChatChannel,
   createStubChannel,
-  IdempotencyKeyReusedError,
+  type OutgoingMessage,
+  SendFailedError,
+  type SendOptions,
 } from "../../providers/channel/index.js";
-import { startCommands } from "./commands.js";
+import { clip, startCommands } from "./commands.js";
 
 const logger = createLogger({ level: "silent", service: "core", version: "test" });
 const minute = 60_000;
+const ago = (ms: number) => new Date(Date.now() - ms);
+
+function watched(fail?: (message: OutgoingMessage) => Error | undefined) {
+  const channel = createStubChannel();
+  const calls: { message: OutgoingMessage; options: SendOptions | undefined }[] = [];
+  const wrapped: ChatChannel = {
+    ...channel,
+    send: async (message, options) => {
+      calls.push({ message, options });
+      const failure = fail?.(message);
+      if (failure) throw failure;
+      return channel.send(message, options);
+    },
+  };
+  return { channel, wrapped, calls };
+}
 
 describe("commands", () => {
-  it("answers what DJ typed, quoting it, with a reply that is not worth sending late", async () => {
-    const channel = createStubChannel();
-    const options: unknown[] = [];
-    const watched: ChatChannel = {
-      ...channel,
-      send: (message, sendOptions) => {
-        options.push(sendOptions);
-        return channel.send(message, sendOptions);
-      },
-    };
-    startCommands({ channel: watched, logger });
+  it("answers what DJ typed, quoting it, for as long as the answer is still worth having", async () => {
+    const { channel, wrapped, calls } = watched();
+    startCommands({ channel: wrapped, logger });
     await channel.start();
-    const message = await channel.receive("remind me to call mum");
+    const message = await channel.receive("remind me to call mum", { sentAt: ago(4 * minute) });
 
     assert.deepEqual(channel.sent, [
       {
         idempotencyKey: `command:${message.id}`,
-        text: "You said: remind me to call mum",
         replyTo: message.id,
+        text: "You said: remind me to call mum",
       },
     ]);
-    assert.deepEqual(options, [{ ttlMs: 2 * minute }]);
+    const ttl = calls[0]?.options?.ttlMs ?? 0;
+    assert.ok(
+      ttl > 5 * minute && ttl <= 6 * minute,
+      `the reply expires when the command turns 10 minutes old, got ${ttl}`,
+    );
+    assert.ok(
+      calls[0]?.options?.signal instanceof AbortSignal,
+      "the wait must end when core stops",
+    );
   });
 
-  it("does not act on a command it only gets to much later, and says so", async () => {
-    const channel = createStubChannel();
-    let now = Date.now();
-    startCommands({ channel, logger, now: () => now });
+  it("does not act on a command it took in more than 10 minutes late, and says so", async () => {
+    const { channel, wrapped, calls } = watched();
+    startCommands({ channel: wrapped, logger });
     await channel.start();
 
-    now += 9 * minute;
-    await channel.receive("fresh enough");
-    now += 2 * minute;
-    await channel.receive("typed before the clock moved");
-    assert.equal(channel.sent[0]?.text, "You said: fresh enough");
+    await channel.receive("just in time", { sentAt: ago(9 * minute) });
+    assert.equal(channel.sent[0]?.text, "You said: just in time");
 
-    const late = createStubChannel();
-    const sentAt = Date.now();
-    startCommands({ channel: late, logger, now: () => sentAt + 11 * minute });
-    await late.start();
-    await late.receive("order the usual");
-    assert.match(
-      late.sent[0]?.text ?? "",
-      /^I was away when you sent this, so I did not act on it\./,
-    );
-    assert.match(late.sent[0]?.text ?? "", /order the usual$/);
+    const late = await channel.receive("order the usual", { sentAt: ago(11 * minute) });
+    assert.deepEqual(channel.sent[1], {
+      idempotencyKey: `command:${late.id}`,
+      replyTo: late.id,
+      text: "I was away when you sent this, so I did not act on it. Send it again if you still want it:\norder the usual",
+    });
+    assert.equal(calls[1]?.options?.ttlMs, 60 * minute);
   });
 
   it("says nothing about a command more than a day old", async () => {
-    const channel = createStubChannel();
-    const sentAt = Date.now();
-    startCommands({ channel, logger, now: () => sentAt + 25 * 60 * minute });
+    const { channel, wrapped } = watched();
+    startCommands({ channel: wrapped, logger });
     await channel.start();
-    await channel.receive("yesterday's note");
+    await channel.receive("yesterday's note", { sentAt: ago(25 * 60 * minute) });
     assert.deepEqual(channel.sent, []);
   });
 
-  it("keeps a very long message's echo short", async () => {
-    const channel = createStubChannel();
-    startCommands({ channel, logger });
-    await channel.start();
-    await channel.receive("x".repeat(5_000));
-    assert.equal(channel.sent[0]?.text.length, "You said: ".length + 1_000 + 1);
+  it("tells DJ when the answer could not be sent in time, and reports the command as failed", async () => {
+    for (const code of ["expired", "no_answer"]) {
+      const { channel, wrapped } = watched((message) =>
+        message.text.startsWith("You said") ? new SendFailedError("request-id", code) : undefined,
+      );
+      startCommands({ channel: wrapped, logger });
+      await channel.start();
+      await assert.rejects(
+        channel.receive("turn the lights off"),
+        (err: unknown) =>
+          err instanceof AggregateError && (err.errors[0] as SendFailedError).code === code,
+      );
+      assert.equal(channel.sent.length, 1);
+      assert.match(channel.sent[0]?.idempotencyKey ?? "", /^command:.+:unanswered$/);
+      assert.match(
+        channel.sent[0]?.text ?? "",
+        /^I could not answer this in time, so nothing was done\./,
+      );
+      assert.match(channel.sent[0]?.text ?? "", /turn the lights off$/);
+    }
   });
 
-  it("treats a command it already answered as done, and passes other failures on", async () => {
-    const channel = createStubChannel();
-    let failure: Error = new IdempotencyKeyReusedError("3f0c1c2e-0000-5000-8000-000000000000");
-    const failing: ChatChannel = {
-      ...channel,
-      send: async () => {
-        throw failure;
-      },
-    };
-    startCommands({ channel: failing, logger });
-    await channel.start();
-    await channel.receive("already answered before a restart");
-
-    failure = new Error("the gateway never answered");
-    await assert.rejects(
-      channel.receive("this one fails"),
-      (err: unknown) =>
-        err instanceof AggregateError && /never answered/.test(String(err.errors[0])),
+  it("sends nothing more when the answer may have gone out after all", async () => {
+    const { channel, wrapped } = watched(
+      () => new SendFailedError("request-id", "outcome_unknown"),
     );
+    startCommands({ channel: wrapped, logger });
+    await channel.start();
+    await assert.rejects(channel.receive("hello"));
+    assert.deepEqual(channel.sent, []);
+  });
+
+  it("cuts a long message at a whole character", () => {
+    assert.equal(clip("short"), "short");
+    const long = clip(`${"x".repeat(999)}😀😀`);
+    assert.equal(long, `${"x".repeat(999)}😀…`);
+    assert.ok(long.isWellFormed());
+    assert.ok(clip(`broken \ud83d surrogate`).isWellFormed());
+    assert.equal(Array.from(clip("😀".repeat(5_000))).length, 1_001);
   });
 
   it("stops answering once it is switched off", async () => {
