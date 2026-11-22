@@ -68,3 +68,17 @@ export function createDb(url: string, logger: Logger): Db {
     close: () => pool.end(),
   });
 }
+
+const connectionErrorClasses = /^(08|53|57)/;
+const connectionErrorMessages =
+  /connection terminated|connection error|timeout exceeded when trying to connect|pool .*ended/i;
+
+export function isConnectionError(err: unknown): boolean {
+  if (!(err instanceof Error)) return false;
+  const code = (err as { code?: unknown }).code;
+  if (typeof code === "string") {
+    if (connectionErrorClasses.test(code) || code === "40001" || code === "40P01") return true;
+    if (/^E[A-Z]+$/.test(code)) return true;
+  }
+  return connectionErrorMessages.test(err.message);
+}
