@@ -7,3 +7,8 @@ browser-profile/
 dist/
 data/
 gateway/bin/
+
+# Kept on the owner's machine, not in the public repo
+docs/PHASES.md
+docs/SPEC.md
+docs/INFRA.md
