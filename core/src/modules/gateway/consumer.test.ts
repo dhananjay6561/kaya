@@ -271,29 +271,35 @@ describe("gateway event consumer", {
   it("does not sleep through an event that arrives while it is finishing a round", async () => {
     await run(record, { purgeEveryMs: 0 });
     await eventually("the listener", async () => (await listeners()).length > 0);
-    const old = connectionEvent("connecting");
-    await add(old);
-    await eventually("the first event", async () => (await seen()).length === 1);
-    await testDb.admin.query(
-      "UPDATE gateway_events SET finished_at = now() - interval '8 days' WHERE id = $1",
-      [old.id],
-    );
+    const arrived = connectionEvent("connected");
 
+    // Inserts stay silent here, so the only wake-up for the new event is the one sent by hand
+    // while the consumer is held up between finding nothing to do and going to sleep.
+    await testDb.admin.query("ALTER TABLE gateway_events DISABLE TRIGGER gateway_events_notify");
     const blocker = await testDb.admin.connect();
     try {
       await blocker.query("BEGIN");
-      await blocker.query("SELECT 1 FROM gateway_events WHERE id = $1 FOR UPDATE", [old.id]);
+      await blocker.query("LOCK TABLE gateway_events IN SHARE MODE");
       await testDb.admin.query("NOTIFY gateway_events");
-      await eventually("the round to be held up deleting the old event", async () => {
+      await eventually("the round to be held up at its clean-up", async () => {
         const { rows } = await testDb.admin.query(
           "SELECT 1 FROM pg_stat_activity WHERE wait_event_type = 'Lock' AND query LIKE 'DELETE FROM gateway_events%'",
         );
         return rows.length > 0;
       });
-      await add(connectionEvent("connected"));
+      await blocker.query("INSERT INTO gateway_events (id, type, payload) VALUES ($1, $2, $3)", [
+        arrived.id,
+        "connection.state",
+        JSON.stringify(arrived),
+      ]);
+      await testDb.admin.query("NOTIFY gateway_events");
+      await blocker.query("COMMIT");
+    } catch (err) {
+      await blocker.query("ROLLBACK").catch(() => {});
+      throw err;
     } finally {
-      await blocker.query("ROLLBACK");
       blocker.release();
+      await testDb.admin.query("ALTER TABLE gateway_events ENABLE TRIGGER gateway_events_notify");
     }
     await eventually("the event that arrived meanwhile", async () =>
       (await seen()).includes("connected"),
