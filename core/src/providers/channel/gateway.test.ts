@@ -1,0 +1,196 @@
+import assert from "node:assert/strict";
+import { after, before, beforeEach, describe, it } from "node:test";
+import pg from "pg";
+import { createContracts, type SendRequest } from "../../contracts/index.js";
+import { createTestDb, eventually, type TestDb, testDatabaseUrl } from "../../lib/test-db.js";
+import {
+  ChannelNotStartedError,
+  createGatewayChannel,
+  GatewayNotLinkedError,
+  requestIdFor,
+  SendFailedError,
+} from "./index.js";
+
+const contracts = createContracts();
+const own = "919999999999@s.whatsapp.net";
+
+describe("requestIdFor", () => {
+  it("gives the same lowercase UUID for the same key and another for another", () => {
+    const id = requestIdFor("reply-to-42");
+    assert.match(id, /^[0-9a-f]{8}-[0-9a-f]{4}-5[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/);
+    assert.equal(requestIdFor("reply-to-42"), id);
+    assert.notEqual(requestIdFor("reply-to-43"), id);
+  });
+});
+
+describe("gateway channel", { skip: !testDatabaseUrl && "TEST_DATABASE_URL not set" }, () => {
+  let testDb: TestDb;
+  let core: pg.Pool;
+
+  before(async () => {
+    testDb = await createTestDb(testDatabaseUrl ?? "");
+    core = new pg.Pool({ connectionString: testDb.url("kaya_core"), max: 4 });
+  });
+
+  after(async () => {
+    await core.end();
+    await testDb.drop();
+  });
+
+  beforeEach(async () => {
+    await testDb.admin.query("TRUNCATE send_requests, connection_state");
+  });
+
+  async function linked() {
+    await testDb.admin.query(
+      "INSERT INTO connection_state (state, own_jid, occurred_at) VALUES ('connected', $1, now())",
+      [own],
+    );
+  }
+
+  async function channel(options: { pollMs?: number; graceMs?: number } = {}) {
+    const c = createGatewayChannel({
+      pool: core,
+      contracts,
+      pollMs: options.pollMs ?? 5,
+      ...options,
+    });
+    await c.start();
+    return c;
+  }
+
+  async function queued(): Promise<{ id: string; payload: SendRequest; state: string }[]> {
+    const { rows } = await testDb.admin.query<{ id: string; payload: SendRequest; state: string }>(
+      "SELECT id::text, payload, state FROM send_requests ORDER BY seq",
+    );
+    return rows;
+  }
+
+  async function gatewaySends(id: string, waId: string) {
+    await testDb.admin.query(
+      "UPDATE send_requests SET state = 'sending', wa_id = $2 WHERE id = $1",
+      [id, waId],
+    );
+    await testDb.admin.query(
+      "UPDATE send_requests SET state = 'sent', finished_at = now() WHERE id = $1",
+      [id],
+    );
+  }
+
+  it("queues a self-chat request and answers once the gateway has sent it", async () => {
+    await linked();
+    const c = await channel();
+    const sending = c.send({ idempotencyKey: "k1", text: "  hello DJ  ", replyTo: "3EB0QUESTION" });
+
+    const [row] = await eventually("the queued request", async () => {
+      const rows = await queued();
+      return rows.length > 0 && rows;
+    });
+    assert.ok(row);
+    const request = contracts.parseSendRequest(row.payload);
+    assert.equal(row.id, requestIdFor("k1"));
+    assert.equal(row.state, "pending");
+    assert.equal(request.to, own);
+    assert.deepEqual(request.authorization, { kind: "self_chat" });
+    assert.deepEqual(request.content, { type: "text", text: "hello DJ" });
+    assert.deepEqual(request.reply_to, { wa_id: "3EB0QUESTION", sender_jid: own });
+
+    await gatewaySends(row.id, "3EB0ANSWER");
+    const sent = await sending;
+    assert.equal(sent.id, "3EB0ANSWER");
+    assert.ok(sent.sentAt instanceof Date);
+  });
+
+  it("sends a repeated idempotency key only once", async () => {
+    await linked();
+    const c = await channel();
+    const first = c.send({ idempotencyKey: "same", text: "hi" });
+    const second = c.send({ idempotencyKey: "same", text: "hi" });
+    const rows = await eventually("the queued request", async () => {
+      const found = await queued();
+      return found.length > 0 && found;
+    });
+    await gatewaySends(rows[0]?.id ?? "", "3EB0ONCE");
+    assert.deepEqual(await second, await first);
+    assert.deepEqual(await c.send({ idempotencyKey: "same", text: "hi" }), await first);
+    assert.equal((await queued()).length, 1);
+  });
+
+  it("wakes at once when told the result is in", async () => {
+    await linked();
+    const listeners = new Map<string, () => void>();
+    const c = createGatewayChannel({
+      pool: core,
+      contracts,
+      pollMs: 60_000,
+      results: {
+        onSendResult(id, listener) {
+          listeners.set(id, listener);
+          return () => listeners.delete(id);
+        },
+      },
+    });
+    await c.start();
+    const sending = c.send({ idempotencyKey: "fast", text: "hi" });
+    const id = requestIdFor("fast");
+    await eventually("the waiter", async () => listeners.has(id));
+    await gatewaySends(id, "3EB0FAST");
+    listeners.get(id)?.();
+    assert.equal((await sending).id, "3EB0FAST");
+    assert.equal(listeners.size, 0);
+  });
+
+  it("reports why the gateway did not send", async () => {
+    await linked();
+    const c = await channel();
+    const sending = c.send({ idempotencyKey: "refused", text: "hi" });
+    const id = requestIdFor("refused");
+    await eventually("the queued request", async () => (await queued()).length === 1);
+    await testDb.admin.query(
+      "UPDATE send_requests SET state = 'failed', error = 'outcome_unknown', finished_at = now() WHERE id = $1",
+      [id],
+    );
+    await assert.rejects(
+      sending,
+      (err: unknown) =>
+        err instanceof SendFailedError && err.code === "outcome_unknown" && err.requestId === id,
+    );
+  });
+
+  it("gives up waiting a while after the request has expired", async () => {
+    await linked();
+    const c = await channel({ graceMs: -24 * 60 * 60_000 });
+    await assert.rejects(
+      c.send({ idempotencyKey: "nobody home", text: "hi" }),
+      (err: unknown) => err instanceof SendFailedError && err.code === "no_answer",
+    );
+    assert.equal((await queued())[0]?.state, "pending");
+  });
+
+  it("stops waiting when the caller gives up, leaving the request queued", async () => {
+    await linked();
+    const c = await channel({ pollMs: 60_000 });
+    const giveUp = new AbortController();
+    const sending = c.send({ idempotencyKey: "impatient", text: "hi" }, { signal: giveUp.signal });
+    await eventually("the queued request", async () => (await queued()).length === 1);
+    giveUp.abort(new Error("gave up"));
+    await assert.rejects(sending, /gave up/);
+  });
+
+  it("refuses to send before an account is linked, before start and when empty", async () => {
+    const c = await channel();
+    await assert.rejects(c.send({ idempotencyKey: "k", text: "hi" }), GatewayNotLinkedError);
+    await testDb.admin.query(
+      "INSERT INTO connection_state (state, reason, occurred_at) VALUES ('logged_out', 'not paired: run make pair', now())",
+    );
+    await assert.rejects(c.send({ idempotencyKey: "k", text: "hi" }), GatewayNotLinkedError);
+    await assert.rejects(c.send({ idempotencyKey: "k", text: "   " }));
+    await assert.rejects(c.send({ idempotencyKey: " ", text: "hi" }));
+    assert.equal((await queued()).length, 0);
+
+    await c.check(AbortSignal.timeout(100));
+    await c.stop();
+    await assert.rejects(c.send({ idempotencyKey: "k", text: "hi" }), ChannelNotStartedError);
+    await assert.rejects(c.check(AbortSignal.timeout(100)), ChannelNotStartedError);
+  });
+});

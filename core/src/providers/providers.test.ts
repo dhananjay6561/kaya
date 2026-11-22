@@ -3,7 +3,7 @@ import { describe, it } from "node:test";
 import { loadConfig } from "../config/index.js";
 import { createProviders } from "./index.js";
 
-const base = { DATABASE_URL: "postgres://localhost:5432/kaya" };
+const base = { DATABASE_URL: "postgres://localhost:5432/kaya", CHAT_CHANNEL: "stub" };
 
 describe("createProviders", () => {
   it("picks every provider from config, so swapping one is a config change", async () => {
@@ -20,6 +20,11 @@ describe("createProviders", () => {
       messages: [{ role: "user", content: "ping" }],
     });
     assert.equal(reply.text, "stub reply: ping");
+  });
+
+  it("refuses the gateway channel without a database to queue sends in", () => {
+    const config = loadConfig({ ...base, LLM_PROVIDER: "stub", CHAT_CHANNEL: "gateway" }, "/");
+    assert.throws(() => createProviders(config), /needs a database/);
   });
 
   it("gives each call fresh instances", () => {
