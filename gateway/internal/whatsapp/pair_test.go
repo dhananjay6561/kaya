@@ -9,6 +9,7 @@ import (
 	"time"
 
 	"go.mau.fi/whatsmeow"
+	"go.mau.fi/whatsmeow/store"
 	"go.mau.fi/whatsmeow/types"
 	waLog "go.mau.fi/whatsmeow/util/log"
 
@@ -100,7 +101,7 @@ func TestFollowFailures(t *testing.T) {
 		"passkey":     {items: items(whatsmeow.QRChannelItem{Event: whatsmeow.QRChannelEventPasskeyRequest}), wantErr: "passkey"},
 		"outdated":    {items: items(whatsmeow.QRChannelClientOutdated), wantErr: "err-client-outdated"},
 		"closed":      {items: items(code("a")), wantErr: "ended before"},
-		"no connect":  {items: items(whatsmeow.QRChannelSuccess), wantErr: "did not come up"},
+		"no connect":  {items: items(whatsmeow.QRChannelSuccess), wantErr: "linked, but stopped"},
 		"code failed": {items: items(code("a")), phone: "919876543210", wantErr: "request pairing code", pair: func(context.Context, string) (string, error) { return "", errors.New("400") }},
 	} {
 		t.Run(name, func(t *testing.T) {
@@ -118,6 +119,20 @@ func TestFollowStopsWithTheContext(t *testing.T) {
 	cancel()
 	p := pairing{out: &bytes.Buffer{}}
 	if err := p.follow(ctx, make(chan whatsmeow.QRChannelItem)); !errors.Is(err, context.Canceled) {
+		t.Fatalf("before the phone links, cancelling is a plain cancel; got %v", err)
+	}
+}
+
+func TestCancellingAfterTheLinkSaysSo(t *testing.T) {
+	ctx, cancel := context.WithCancel(context.Background())
+	p := pairing{out: &bytes.Buffer{}, connected: make(chan struct{}), timeout: time.Hour}
+	ch := make(chan whatsmeow.QRChannelItem, 1)
+	ch <- whatsmeow.QRChannelSuccess
+	go func() {
+		time.Sleep(10 * time.Millisecond)
+		cancel()
+	}()
+	if err := p.follow(ctx, ch); !errors.Is(err, ErrLinkedNotConnected) || errors.Is(err, context.Canceled) {
 		t.Fatalf("got %v", err)
 	}
 }
@@ -132,6 +147,12 @@ func TestPairRefusesWhenASessionIsStored(t *testing.T) {
 		t.Fatal(err)
 	}
 	savePaired(t, sessions, types.NewADJID("19995550100", 0, 7))
+	original := newPairClient
+	newPairClient = func(*store.Device, waLog.Logger) pairClient {
+		t.Fatal("pairing must stop before it creates a client")
+		return nil
+	}
+	t.Cleanup(func() { newPairClient = original })
 
 	err := Pair(ctx, sessions, logging.New(&bytes.Buffer{}, "info"), PairOptions{Out: &bytes.Buffer{}})
 	if !errors.Is(err, ErrAlreadyPaired) {

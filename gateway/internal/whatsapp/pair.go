@@ -10,8 +10,15 @@ import (
 	"time"
 
 	"go.mau.fi/whatsmeow"
+	"go.mau.fi/whatsmeow/store"
 	"go.mau.fi/whatsmeow/types/events"
+	waLog "go.mau.fi/whatsmeow/util/log"
 )
+
+// ErrLinkedNotConnected means the phone linked and the session is stored, but pairing stopped
+// before the first connection finished; the gateway finishes setup when it starts.
+var ErrLinkedNotConnected = errors.New("linked, but stopped before the first connection finished; " +
+	"start the gateway to finish setup")
 
 // ErrAlreadyPaired means a session is stored, so pairing would create a second linked device.
 var ErrAlreadyPaired = errors.New("already paired: to link again, remove Kaya under Linked devices on your phone, " +
@@ -69,7 +76,7 @@ func Pair(ctx context.Context, sessions *Sessions, logger *slog.Logger, opts Pai
 		return ErrAlreadyPaired
 	}
 
-	cli := whatsmeow.NewClient(sessions.New(), NewLogger(logger))
+	cli := newPairClient(sessions.New(), NewLogger(logger))
 	connected := make(chan struct{}, 1)
 	cli.AddEventHandler(func(evt any) {
 		if _, ok := evt.(*events.Connected); ok {
@@ -98,6 +105,19 @@ func Pair(ctx context.Context, sessions *Sessions, logger *slog.Logger, opts Pai
 		},
 	}
 	return p.follow(ctx, items)
+}
+
+type pairClient interface {
+	AddEventHandler(handler whatsmeow.EventHandler) uint32
+	GetQRChannel(ctx context.Context) (<-chan whatsmeow.QRChannelItem, error)
+	ConnectContext(ctx context.Context) error
+	Disconnect()
+	PairPhone(ctx context.Context, phone string, showPushNotification bool, clientType whatsmeow.PairClientType,
+		clientDisplayName string) (string, error)
+}
+
+var newPairClient = func(device *store.Device, log waLog.Logger) pairClient {
+	return whatsmeow.NewClient(device, log)
 }
 
 type pairing struct {
@@ -134,9 +154,9 @@ func (p pairing) follow(ctx context.Context, items <-chan whatsmeow.QRChannelIte
 				_, _ = fmt.Fprintf(p.out, "Done. %s now shows under Linked devices on your phone.\n", DeviceName)
 				return nil
 			case <-time.After(p.timeout):
-				return errors.New("linked, but the first connection did not come up; start the gateway and check its logs")
+				return ErrLinkedNotConnected
 			case <-ctx.Done():
-				return ctx.Err()
+				return ErrLinkedNotConnected
 			}
 		case whatsmeow.QRChannelTimeout.Event:
 			return errors.New("pairing timed out before the phone linked; run it again")
