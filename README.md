@@ -70,6 +70,10 @@ contact, and it works with everything your WhatsApp account can see.
   a Postgres queue, one transaction per event. To send, it queues a request; the gateway checks
   that the request is allowed, sends it at most once, and reports the outcome. For now the only
   chat Kaya may write to is your own (`make send text="hello"`).
+- **A command channel in your own chat.** What you type in "Message yourself" is a command; every
+  other message in every other chat is only data. Kaya tells its own replies from your messages, so
+  it never answers itself, and it does not act on a command it only gets to minutes late. For now
+  the one command is an echo.
 - **Least-privilege database logins.** The gateway and core each have their own Postgres role.
   Core, the part that will talk to an LLM, can read chats but cannot see the WhatsApp session, its
   encryption keys, or the keys needed to fetch media.
@@ -513,7 +517,7 @@ Status key: ✅ done · 🟨 in progress · ⬜ not started
 |---|---|---|
 | 0. Foundation | Monorepo, config, Compose stack, migrations, logging, health, provider interfaces | ✅ |
 | 1. WhatsApp gateway | Contracts, pairing, live ingest, history sync, media, connection health, delivery to core and sending. Checked end to end against a real WhatsApp account. | ✅ |
-| 2. Talking to Kaya | Self-chat command channel, built-in commands | ⬜ |
+| 2. Talking to Kaya | Self-chat command channel (built), built-in commands | 🟨 |
 | 3. Brain | Groq replies, embeddings, meaning-based search, Q&A with sources, tagging, summaries | ⬜ |
 | 4. Agent loop and safety | Masking, context picking, tool calling, confirm-before-act, prompt-injection guard, usage tracking | ⬜ |
 | 5. Voice notes | Transcription, spoken commands | ⬜ |
