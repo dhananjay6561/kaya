@@ -52,26 +52,24 @@ contact, and it works with everything your WhatsApp account can see.
 - **One-command stack.** `make up` builds and starts Postgres 18 with pgvector, runs the database
   migrations, then starts the gateway and core, and waits until every service is healthy.
 - **WhatsApp pairing as a linked device.** `make pair` links Kaya by a QR code in the terminal or by
-  an 8-character pairing code. The session is stored in Postgres and survives restarts. Built and
-  tested; the final check on a real phone is pending.
+  an 8-character pairing code. The session is stored in Postgres and survives restarts.
 - **A connection that looks after itself.** The gateway reconnects after a drop with a growing wait,
   notices a connection that has gone silent and replaces it, detects a logout from the phone, and
   writes every change of state as an event for the agent. `/health` shows the state and since when.
 - **Live ingest.** Every new message is stored with its chat and contact, and a person's LID, phone
   number and device addresses are treated as one contact. Edits, "delete for everyone" and reactions
   are applied as they arrive. A message is acknowledged to WhatsApp only after it is stored, so a
-  crash or a database outage does not lose it. Built and tested; awaiting a phone check.
+  crash or a database outage does not lose it. While the database is away the gateway drops the
+  WhatsApp connection, so nothing arrives that it could not store.
 - **History sync.** The chat history WhatsApp sends when a device links goes through a durable
   queue: each chunk is stored before it is confirmed, so a crash repeats a chunk instead of losing
-  it. Built and tested; awaiting a phone check.
+  it.
 - **Media on request.** Photos, videos, voice notes and documents get a metadata row. A file is
-  downloaded only when asked for (`make media id=...`), with a size cap and an hourly cap. Built
-  and tested; awaiting a phone check.
+  downloaded only when asked for (`make media id=...`), with a size cap and an hourly cap.
 - **Events to the agent, sends through the gateway.** Core reads every gateway event in order from
   a Postgres queue, one transaction per event. To send, it queues a request; the gateway checks
   that the request is allowed, sends it at most once, and reports the outcome. For now the only
-  chat Kaya may write to is your own (`make send text="hello"`). Built and tested; awaiting a phone
-  check.
+  chat Kaya may write to is your own (`make send text="hello"`).
 - **Least-privilege database logins.** The gateway and core each have their own Postgres role.
   Core, the part that will talk to an LLM, can read chats but cannot see the WhatsApp session, its
   encryption keys, or the keys needed to fetch media.
@@ -514,7 +512,7 @@ Status key: ✅ done · 🟨 in progress · ⬜ not started
 | Stage | Delivers | Status |
 |---|---|---|
 | 0. Foundation | Monorepo, config, Compose stack, migrations, logging, health, provider interfaces | ✅ |
-| 1. WhatsApp gateway | Contracts (1.0 ✅); pairing, live ingest, history sync, media, connection health, delivery to core and sending (1.1 to 1.6, built, awaiting a phone check) | 🟨 |
+| 1. WhatsApp gateway | Contracts, pairing, live ingest, history sync, media, connection health, delivery to core and sending. Checked end to end against a real WhatsApp account. | ✅ |
 | 2. Talking to Kaya | Self-chat command channel, built-in commands | ⬜ |
 | 3. Brain | Groq replies, embeddings, meaning-based search, Q&A with sources, tagging, summaries | ⬜ |
 | 4. Agent loop and safety | Masking, context picking, tool calling, confirm-before-act, prompt-injection guard, usage tracking | ⬜ |
