@@ -141,7 +141,7 @@ set a proper device name, back off slowly on reconnects.
 ```
 /srv/kaya/
 ├── postgres/         chats, tasks, call transcripts, embeddings, WhatsApp session
-├── gateway/          the gateway's /data
+├── gateway/          the gateway's /data: media/ holds downloaded photos, voice notes and documents
 ├── core/             core's /data
 ├── browser/          logged-in browser profile (most sensitive folder; stage 11)
 ├── docs/             generated decks/PDFs before Drive upload (stage 9)
@@ -154,7 +154,7 @@ Each service gets its own folder under `DATA_DIR`, mounted at `/data` in its con
 that service writes to it. A service that needs storage adds its folder in the phase that adds it.
 
 **Backups:** restic nightly, encrypted, to Drive or Backblaze B2. Covers a `postgres` dump (which
-includes the WhatsApp session) and `browser/`. Keep 7 daily and 4 weekly. Models are not backed up.
+includes the WhatsApp session) and `browser/`. Keep 7 daily and 4 weekly. Models are not backed up. Downloaded media in `gateway/media/` is not backed up yet; that is decided with the backup phase (16.4).
 
 ## One-time host setup (Mint)
 

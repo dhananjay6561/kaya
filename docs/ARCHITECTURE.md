@@ -117,6 +117,13 @@ Folders appear when a phase needs them; empty placeholders are not committed.
 - `gateway` writes contacts, chats, messages and reactions. It resolves every person through
   `contact_id_for()`, never by inserting into `contacts` directly. `core` reads them and owns
   everything it creates (tasks, jobs, pending actions, usage).
+- **Media.** A media message gets a `media` row (what the file is, and whether it is `remote`,
+  `stored`, `expired` or `failed`) and, when it can be fetched, a `media_keys` row that only the
+  gateway can read. Nothing is downloaded unless a `media_requests` row asks for it; the gateway
+  then streams the file to `media/<sha256[0:2]>/<sha256>` under its data folder, with a size cap,
+  an hourly cap and a free-space floor, and records the outcome in `media.state`. Readers find a
+  stored file by the `sha256` in `media`. Paths are built from that hash only, never from a file
+  name.
 - **Roles.** Each service logs in as its own Postgres role, `kaya_gateway` or `kaya_core`, with
   exactly the grants it needs: the gateway writes the chat tables and can only insert into
   `gateway_events`; core reads the chat tables and consumes `gateway_events`. The roles and grants

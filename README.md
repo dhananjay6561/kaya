@@ -19,6 +19,7 @@ make dev-gateway   # run the WhatsApp gateway from source
 make db            # start only Postgres and apply migrations, for running services from source
 make up            # build and run the whole stack in Docker, wait until healthy
 make pair          # link Kaya to WhatsApp (QR code; PHONE=919876543210 for a pairing code)
+make media id=42   # download the file of message 42 (photo, voice note, document)
 make down          # stop the stack (data stays in DATA_DIR)
 make migration name=add_tasks   # new empty migration in db/migrations
 make test-db       # migrations and schema tests on a throwaway database
