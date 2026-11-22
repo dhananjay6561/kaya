@@ -10,7 +10,7 @@
     "build": "tsc -p tsconfig.json",
     "start": "node dist/index.js",
     "typecheck": "tsc -p tsconfig.json --noEmit",
-    "test": "tsx --test \"src/**/*.test.ts\"",
+    "test": "tsx --test --test-timeout=60000 \"src/**/*.test.ts\"",
     "contracts:types": "tsx src/contracts/generate-types.ts"
   },
   "dependencies": {
