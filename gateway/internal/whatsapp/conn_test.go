@@ -322,6 +322,8 @@ func newTestConn(loader sessionLoader, made *clients) (*Conn, *bytes.Buffer) {
 	c.maxBackoff = 4 * time.Millisecond
 	c.storeRetry = 5 * time.Millisecond
 	c.watchEvery = time.Hour
+	c.storeCheckEvery = 2 * time.Millisecond
+	c.storeCheckTimeout = time.Second
 	c.historyPoll = 10 * time.Millisecond
 	c.historyRetry = 2 * time.Millisecond
 	c.mediaPoll = 10 * time.Millisecond
@@ -850,4 +852,121 @@ func TestRunWaitsForASendThatIsUnderWay(t *testing.T) {
 	case <-time.After(2 * time.Second):
 		t.Fatal("Run did not stop once the send finished")
 	}
+}
+
+type fakeStore struct {
+	mu     sync.Mutex
+	down   bool
+	checks int
+}
+
+func (f *fakeStore) check(context.Context) error {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	f.checks++
+	if f.down {
+		return errors.New("failed to connect to `user=kaya_gateway database=kaya`")
+	}
+	return nil
+}
+
+func (f *fakeStore) set(down bool) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	f.down = down
+}
+
+func (f *fakeStore) count() int {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	return f.checks
+}
+
+func TestTheConnectionIsDroppedWhileTheDatabaseIsAwayAndComesBack(t *testing.T) {
+	made := &clients{}
+	c, _ := newTestConn(paired(), made)
+	db := &fakeStore{}
+	c.SetStoreCheck(db.check)
+	c.storeRetry = 20 * time.Millisecond
+	cancel, done := runInBackground(t, c)
+	waitFor(t, "first client", func() bool { return made.count() == 1 })
+	first := made.get(0)
+	first.emit(&events.Connected{})
+	waitFor(t, "a few checks", func() bool { return db.count() >= 3 })
+	if first.isDisconnected() || c.Status().State != contracts.StateConnected {
+		t.Fatal("a database that answers must leave the connection alone")
+	}
+
+	db.set(true)
+	waitFor(t, "the connection to be dropped", first.isDisconnected)
+	if first.emit(&events.Message{}) {
+		t.Fatal("nothing from the dropped connection may be acknowledged")
+	}
+	if got := c.Status(); got.Reason != ReasonDatabaseDown {
+		t.Fatalf("health must say why, in its fixed words: %+v", got)
+	}
+
+	waitFor(t, "a new connection", func() bool { return made.count() >= 2 })
+	second := made.get(1)
+	second.emit(&events.Connected{})
+	waitFor(t, "the new connection to be dropped too, while the database is still away", second.isDisconnected)
+	if got := c.Status(); got.State != contracts.StateDisconnected || got.Reason != ReasonDatabaseDown {
+		t.Fatalf("got %+v", got)
+	}
+
+	db.set(false)
+	waitFor(t, "a third connection", func() bool { return made.count() >= 3 })
+	third := made.get(made.count() - 1)
+	third.emit(&events.Connected{})
+	time.Sleep(30 * time.Millisecond)
+	if third.isDisconnected() || c.Status().State != contracts.StateConnected {
+		t.Fatalf("once the database answers the connection must stay up, got %+v", c.Status())
+	}
+	stop(t, cancel, done)
+}
+
+func TestOneMissedDatabaseCheckDoesNotDropTheConnection(t *testing.T) {
+	made := &clients{}
+	c, _ := newTestConn(paired(), made)
+	calls := 0
+	var mu sync.Mutex
+	c.SetStoreCheck(func(context.Context) error {
+		mu.Lock()
+		defer mu.Unlock()
+		if calls++; calls%2 == 0 {
+			return errors.New("timeout")
+		}
+		return nil
+	})
+	cancel, done := runInBackground(t, c)
+	waitFor(t, "first client", func() bool { return made.count() == 1 })
+	made.get(0).emit(&events.Connected{})
+	waitFor(t, "several checks", func() bool {
+		mu.Lock()
+		defer mu.Unlock()
+		return calls >= 10
+	})
+	if made.get(0).isDisconnected() || made.count() != 1 {
+		t.Fatal("a check that fails once and then passes is a blip, not an outage")
+	}
+	stop(t, cancel, done)
+}
+
+func TestTheDatabaseIsNotCheckedWhenNothingIsConnected(t *testing.T) {
+	made := &clients{}
+	c, _ := newTestConn(paired(), made)
+	db := &fakeStore{down: true}
+	c.SetStoreCheck(db.check)
+	c.minBackoff = time.Hour
+	cancel, done := runInBackground(t, c)
+	waitFor(t, "first client", func() bool { return made.count() == 1 })
+	made.get(0).emit(&events.Connected{})
+	made.get(0).emit(&events.LoggedOut{Reason: events.ConnectFailureLoggedOut})
+	time.Sleep(10 * time.Millisecond)
+	before := db.count()
+	time.Sleep(30 * time.Millisecond)
+	if got := c.Status(); got.State != contracts.StateLoggedOut || db.count() != before {
+		t.Fatalf("a logged-out gateway has no connection to drop: %+v, %d checks since", got, db.count()-before)
+	}
+	stop(t, cancel, done)
 }
