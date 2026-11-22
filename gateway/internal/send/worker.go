@@ -84,6 +84,9 @@ type Worker struct {
 	recovered   bool
 	recordRetry time.Duration
 	recordLast  time.Duration
+	keepFor     time.Duration
+	purgeEvery  time.Duration
+	nextPurge   time.Time
 }
 
 // NewWorker returns a worker that reports outcomes through outbox and stores what it sent in
@@ -92,6 +95,7 @@ func NewWorker(db DB, validator *contracts.Validator, outbox Outbox, messages Me
 	return &Worker{
 		db: db, validator: validator, outbox: outbox, messages: messages, logger: logger,
 		recordRetry: time.Second, recordLast: 3 * time.Second,
+		keepFor: 7 * 24 * time.Hour, purgeEvery: time.Hour,
 	}
 }
 
@@ -117,6 +121,7 @@ func (w *Worker) Step(ctx context.Context, cli Client, own ingest.Own) bool {
 		return false
 	}
 	if req == nil {
+		w.purge(ctx)
 		return false
 	}
 	parsed, to, code := w.check(req, own)
@@ -135,6 +140,9 @@ func (w *Worker) Step(ctx context.Context, cli Client, own ingest.Own) bool {
 	waID := cli.GenerateMessageID()
 	claimed, err := w.claim(ctx, req.id, waID)
 	if err != nil {
+		// The write may have gone through even though it reported an error. If it did, the request
+		// now says sending though nothing was sent, and only recover settles such a request.
+		w.recovered = false
 		w.logger.Warn("could not mark a request as sending", "request_id", req.id, logging.Err(err))
 		return false
 	}
@@ -148,23 +156,36 @@ func (w *Worker) Step(ctx context.Context, cli Client, own ingest.Own) bool {
 	if err != nil {
 		code := classify(err)
 		w.logger.Warn("a message was not sent", "request_id", req.id, "error_code", code, logging.Err(err))
-		return w.settle(ctx, func(tx pgx.Tx) error { return w.fail(ctx, tx, req.id, StateSending, code) })
+		return w.settle(ctx, func(ctx context.Context, tx pgx.Tx) error { return w.fail(ctx, tx, req.id, StateSending, code) })
 	}
 	w.logger.Info("message sent", "request_id", req.id)
 	at := resp.Timestamp
 	if at.IsZero() {
 		at = time.Now()
 	}
-	return w.settle(ctx, func(tx pgx.Tx) error {
-		done, err := w.finish(ctx, tx, req.id, StateSending, StateSent, "", contracts.SendResult{
-			RequestID: req.id, Status: contracts.SendSent, WAID: waID,
-		})
+	return w.settle(ctx, func(ctx context.Context, tx pgx.Tx) error {
+		done, err := w.mark(ctx, tx, req.id, StateSending, StateSent, "")
 		if err != nil || !done {
 			return err
 		}
 		w.keep(ctx, tx, to, waID, at, message, own)
-		return nil
+		return w.report(ctx, tx, contracts.SendResult{RequestID: req.id, Status: contracts.SendSent, WAID: waID})
 	})
+}
+
+// purge deletes requests that finished more than a week ago, at most once an hour.
+func (w *Worker) purge(ctx context.Context) {
+	if time.Now().Before(w.nextPurge) {
+		return
+	}
+	w.nextPurge = time.Now().Add(w.purgeEvery)
+	err := w.db.InTx(ctx, func(tx pgx.Tx) error {
+		_, err := tx.Exec(ctx, "DELETE FROM send_requests WHERE finished_at < now() - make_interval(secs => $1)", w.keepFor.Seconds())
+		return err
+	})
+	if err != nil {
+		w.logger.Warn("could not delete old send requests", logging.Err(err))
+	}
 }
 
 // recover settles requests that were being sent when the gateway last stopped. Whether WhatsApp
@@ -272,45 +293,53 @@ func (w *Worker) refuse(ctx context.Context, id, code string) bool {
 	return true
 }
 
+// fail moves a request from from to failed and tells core why. A request that is no longer in
+// from is left alone and core is told nothing.
 func (w *Worker) fail(ctx context.Context, tx pgx.Tx, id, from, code string) error {
-	_, err := w.finish(ctx, tx, id, from, StateFailed, code, contracts.SendResult{
+	done, err := w.mark(ctx, tx, id, from, StateFailed, code)
+	if err != nil || !done {
+		return err
+	}
+	return w.report(ctx, tx, contracts.SendResult{
 		RequestID: id, Status: contracts.SendFailed, Error: &contracts.Error{Code: code, Message: messages[code]},
 	})
-	return err
 }
 
-// finish moves a request to its final state and tells core, in one transaction. It reports false
-// when the request was no longer in from, and then tells core nothing.
-func (w *Worker) finish(ctx context.Context, tx pgx.Tx, id, from, to, code string, result contracts.SendResult) (bool, error) {
+// mark moves a request to its final state and reports whether it was still in from.
+func (w *Worker) mark(ctx context.Context, tx pgx.Tx, id, from, to, code string) (bool, error) {
 	tag, err := tx.Exec(ctx, `
 		UPDATE send_requests SET state = $3, error = nullif($4, ''), finished_at = now()
 		WHERE id = $1 AND state = $2`, id, from, to, code)
 	if err != nil {
 		return false, fmt.Errorf("finish send request: %w", err)
 	}
-	if tag.RowsAffected() == 0 {
-		return false, nil
-	}
+	return tag.RowsAffected() == 1, nil
+}
+
+func (w *Worker) report(ctx context.Context, tx pgx.Tx, result contracts.SendResult) error {
 	event, err := contracts.NewEvent(contracts.EventSendResult, result)
 	if err != nil {
-		return false, err
+		return err
 	}
-	return true, w.outbox.Add(ctx, tx, event)
+	return w.outbox.Add(ctx, tx, event)
 }
 
 // settle records an outcome that is already decided, trying until the database takes it. If the
 // gateway stops first it makes one last attempt; a request it could not record stays in sending
 // and is reported as outcome unknown by the next run.
-func (w *Worker) settle(ctx context.Context, record func(pgx.Tx) error) bool {
+func (w *Worker) settle(ctx context.Context, record func(context.Context, pgx.Tx) error) bool {
+	in := func(ctx context.Context) error {
+		return w.db.InTx(ctx, func(tx pgx.Tx) error { return record(ctx, tx) })
+	}
 	wait := w.recordRetry
 	for {
-		err := w.db.InTx(ctx, record)
+		err := in(ctx)
 		if err == nil {
 			return true
 		}
 		if ctx.Err() != nil {
 			last, cancel := context.WithTimeout(context.WithoutCancel(ctx), w.recordLast)
-			err = w.db.InTx(last, record)
+			err = in(last)
 			cancel()
 			if err != nil {
 				w.logger.Error("could not record what happened to a message before stopping", logging.Err(err))
