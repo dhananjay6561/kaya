@@ -3,6 +3,8 @@ package whatsapp
 import (
 	"bytes"
 	"encoding/json"
+	"errors"
+	"net/url"
 	"strings"
 	"testing"
 
@@ -76,6 +78,22 @@ func TestLoggerMasksJIDsAndRawNodes(t *testing.T) {
 	}
 	if got[2]["msg"] != "Unknown connect failure: <failure node>" || got[3]["msg"] != "value node <failure node>" {
 		t.Fatalf("nodes must be reduced to their tag: %v", got[2:])
+	}
+}
+
+func TestLoggerMasksDownloadAddresses(t *testing.T) {
+	var buf bytes.Buffer
+	log := NewLogger(logging.New(&buf, "info"))
+	err := &url.Error{Op: "Get", URL: "https://mmg.whatsapp.net/v/t62.7118-24/12345_678_n.enc?ccb=11-4&oh=01_abc&oe=6770&hash=Zm9vYmFy&mms-type=image", Err: errors.New("EOF")}
+	log.Warnf("Failed to download media: %v, trying with next host...", err)
+	out := buf.String()
+	for _, leaked := range []string{"mmg.whatsapp.net", "t62.7118", "Zm9vYmFy", "oh=01_abc"} {
+		if strings.Contains(out, leaked) {
+			t.Fatalf("%s reached the log: %s", leaked, out)
+		}
+	}
+	if !strings.Contains(out, "<url>") || !strings.Contains(out, "trying with next host") {
+		t.Fatalf("the rest of the line stays readable: %s", out)
 	}
 }
 

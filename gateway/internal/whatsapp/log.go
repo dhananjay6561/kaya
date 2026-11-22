@@ -13,6 +13,10 @@ import (
 
 var jid = regexp.MustCompile(`[0-9]+(?:[.:-][0-9]+)*@(?:s\.whatsapp\.net|c\.us|lid|g\.us|broadcast|newsletter|bot|hosted(?:\.lid)?)\b`)
 
+// link matches a URL. whatsmeow's network warnings carry the address of the file being fetched,
+// whose path and hash are two of the three things needed to download it.
+var link = regexp.MustCompile(`https?://\S+`)
+
 // whatsmeow logs at debug level can include message contents, so they are never passed on. Other
 // lines name people by JID and sometimes dump raw protocol messages; both are masked.
 type logAdapter struct {
@@ -36,7 +40,8 @@ func (l logAdapter) log(level slog.Level, msg string, args []any) {
 			args[i] = "<" + node.Tag + " node>"
 		}
 	}
-	l.logger.Log(context.Background(), level, jid.ReplaceAllString(fmt.Sprintf(msg, args...), "<jid>"))
+	text := link.ReplaceAllString(fmt.Sprintf(msg, args...), "<url>")
+	l.logger.Log(context.Background(), level, jid.ReplaceAllString(text, "<jid>"))
 }
 
 func (l logAdapter) Errorf(msg string, args ...any) { l.log(slog.LevelError, msg, args) }
