@@ -91,9 +91,12 @@ ps: ## show the status of every service
 PAIR_ARGS = $(if $(PHONE),--phone '$(PHONE)')
 
 pair: data-dirs ## link Kaya to WhatsApp: shows a QR code, or a pairing code with PHONE=<international number>
-	@$(COMPOSE) stop gateway; \
+	@$(COMPOSE) build gateway
+	@running=$$($(COMPOSE) ps --status running --quiet gateway); \
+	if [ -n "$$running" ]; then $(COMPOSE) stop gateway; fi; \
 	$(COMPOSE) run --rm gateway pair $(PAIR_ARGS); status=$$?; \
-	$(COMPOSE) up --detach --wait gateway; \
+	if [ -n "$$running" ]; then $(COMPOSE) up --detach --wait gateway; \
+	else echo "The gateway was not running; start it with make up or make dev-gateway."; fi; \
 	exit $$status
 
 pair-dev: ## pair from source against the db from make db (PHONE= as for pair)
