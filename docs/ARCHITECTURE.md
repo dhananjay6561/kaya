@@ -86,14 +86,31 @@ Folders appear when a phase needs them; empty placeholders are not committed.
     with `sending` before the network call. On restart it never resends a row left in `sending`;
     it reports `send.result` failed with `outcome_unknown` and lets DJ decide. A message is never
     sent twice and never silently lost.
+    - A send error counts as a plain failure only when it is certain WhatsApp did not take the
+      message (it refused it, or the recipient is not on WhatsApp). A timeout, a dropped
+      connection or anything unrecognised is `outcome_unknown`, because the message may have gone
+      out.
+    - Once the outcome is known the gateway keeps trying to record it until the database takes it.
+      The row state, the `send.result` event and the stored copy of the message commit together.
+    - WhatsApp does not send a device its own messages back, so the gateway stores what it sent in
+      `messages` itself. `send_requests.wa_id` tells a message Kaya sent from one DJ typed.
+    - While WhatsApp is disconnected, requests wait; those that expire in the meantime are still
+      answered with `expired`.
+  - **What core does with events.** One consumer takes pending events in `seq` order, one
+    transaction each: the handler's writes and the `handled` mark commit together. It keeps the
+    latest `connection.state` in its own one-row table, `connection_state`, which is where it
+    learns DJ's own JID. `send()` on the chat channel inserts a request, then waits for the row to
+    reach `sent` or `failed`; the `send.result` event only wakes that wait early. The same
+    idempotency key always maps to the same request id, so a retry never queues a second message.
   - **Poison rows.** A row that fails the reader's validation, or whose handler fails for a
     non-transient reason, moves to `dead` with an error code and is skipped, so draining never
     loops on it. Transient failures retry with backoff, without reordering later rows.
   - **Retention.** Handled rows are deleted after 7 days; `dead` rows stay until someone looks at
     them.
   - **Roles.** Each service has its own Postgres role (see "Data ownership"). The gateway can only
-    insert into the events table and, from 1.6, update the send-requests table; core the reverse.
-    Neither can write the other's queue.
+    insert into the events table; in the send-requests table it can record outcomes but cannot
+    add a request or change what one says. Core is the reverse: it adds requests, with no say
+    over their state, and consumes events.
 - **Contracts:** every payload has a JSON Schema (draft 2020-12) in `contracts/schemas/v1/` and
   carries `"version": 1`. Both sides validate at the boundary: the writer before inserting, the
   reader before handling.
@@ -129,7 +146,8 @@ Folders appear when a phase needs them; empty placeholders are not committed.
   name.
 - **Roles.** Each service logs in as its own Postgres role, `kaya_gateway` or `kaya_core`, with
   exactly the grants it needs: the gateway writes the chat tables and can only insert into
-  `gateway_events`; core reads the chat tables and consumes `gateway_events`. The roles and grants
+  `gateway_events`; core reads the chat tables, consumes `gateway_events` and adds rows to
+  `send_requests`. The roles and grants
   are in the migrations; the passwords come from `.env` and are set by the one-shot `db-roles`
   Compose step. The admin login (`POSTGRES_USER`) is used only by `migrate` and `db-roles`. A
   migration that adds a table also grants it, and `db/tests/schema.sql` asserts the whole matrix.
