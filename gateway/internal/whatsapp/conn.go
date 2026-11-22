@@ -243,7 +243,13 @@ func (c *Conn) Run(ctx context.Context) error {
 	go c.groupSyncLoop(ctx)
 	go c.historyLoop(ctx)
 	go c.mediaLoop(ctx)
-	go c.sendLoop(ctx)
+	sending := make(chan struct{})
+	go func() {
+		defer close(sending)
+		c.sendLoop(ctx)
+	}()
+	// A send that was under way when the gateway is told to stop must get to record its outcome.
+	defer func() { <-sending }()
 	backoff := c.minBackoff
 	for {
 		cli, err := c.connect(ctx)

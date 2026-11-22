@@ -759,12 +759,18 @@ type panickySink struct{ fakeSink }
 func (*panickySink) Handle(context.Context, ingest.Own, any) bool { panic("bug") }
 
 type fakeSender struct {
-	mu    sync.Mutex
-	steps []bool
-	owns  []ingest.Own
+	mu      sync.Mutex
+	steps   []bool
+	owns    []ingest.Own
+	entered chan struct{}
+	release chan struct{}
 }
 
 func (f *fakeSender) Step(_ context.Context, cli send.Client, own ingest.Own) bool {
+	if f.entered != nil {
+		f.entered <- struct{}{}
+		<-f.release
+	}
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	f.steps = append(f.steps, cli != nil)
@@ -816,4 +822,32 @@ func TestTheSendWorkerGetsAClientOnlyWhileConnected(t *testing.T) {
 		t.Fatal("nothing may be sent over a connection that stopped answering")
 	}
 	stop(t, cancel, done)
+}
+
+func TestRunWaitsForASendThatIsUnderWay(t *testing.T) {
+	made := &clients{}
+	c, _ := newTestConn(linked(), made)
+	sender := &fakeSender{entered: make(chan struct{}, 8), release: make(chan struct{})}
+	c.SetSender(sender)
+	c.sendPoll = time.Hour
+	cancel, done := runInBackground(t, c)
+	waitFor(t, "first client", func() bool { return made.count() == 1 })
+
+	c.RequestSend()
+	<-sender.entered
+	cancel()
+	select {
+	case err := <-done:
+		t.Fatalf("Run returned while a send was still recording its outcome (%v)", err)
+	case <-time.After(50 * time.Millisecond):
+	}
+	close(sender.release)
+	select {
+	case err := <-done:
+		if err != nil {
+			t.Fatal(err)
+		}
+	case <-time.After(2 * time.Second):
+		t.Fatal("Run did not stop once the send finished")
+	}
 }
