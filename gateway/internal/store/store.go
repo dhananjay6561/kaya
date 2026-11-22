@@ -91,6 +91,32 @@ func (db *DB) InTx(ctx context.Context, fn func(pgx.Tx) error) error {
 	return pgx.BeginFunc(ctx, db.pool, fn)
 }
 
+// Listen calls fn each time a notification arrives on channel, until ctx is done. It keeps one
+// connection for this and reconnects if it is lost, so treat fn as a wake-up, not as a count.
+func (db *DB) Listen(ctx context.Context, channel string, fn func()) {
+	for ctx.Err() == nil {
+		err := db.pool.AcquireFunc(ctx, func(conn *pgxpool.Conn) error {
+			if _, err := conn.Exec(ctx, "LISTEN "+pgx.Identifier{channel}.Sanitize()); err != nil {
+				return err
+			}
+			fn()
+			for {
+				if _, err := conn.Conn().WaitForNotification(ctx); err != nil {
+					return err
+				}
+				fn()
+			}
+		})
+		if err == nil || ctx.Err() != nil {
+			return
+		}
+		select {
+		case <-ctx.Done():
+		case <-time.After(5 * time.Second):
+		}
+	}
+}
+
 // SQL returns a database/sql handle that borrows connections from the same pool, for libraries that need one.
 func (db *DB) SQL() *sql.DB {
 	return stdlib.OpenDBFromPool(db.pool)
