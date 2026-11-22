@@ -39,6 +39,26 @@ func MigratedAs(t *testing.T, role string) *store.DB {
 	return openAs(t, true, role)
 }
 
+// MigratedPair returns two pools on one migrated database: service acts as role, admin as the
+// test login, for checking what the service wrote to tables it cannot read back.
+func MigratedPair(t *testing.T, role string) (service, admin *store.DB) {
+	t.Helper()
+	service = openAs(t, true, role)
+	u, err := url.Parse(service.URL())
+	if err != nil {
+		t.Fatal(err)
+	}
+	q := u.Query()
+	q.Del("role")
+	u.RawQuery = q.Encode()
+	admin, err = store.Open(u.String())
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(admin.Close)
+	return service, admin
+}
+
 func open(t *testing.T, migrate bool) *store.DB {
 	t.Helper()
 	return openAs(t, migrate, "")

@@ -17,6 +17,7 @@ import (
 // DB is a pool of Postgres connections.
 type DB struct {
 	pool *pgxpool.Pool
+	dsn  string
 }
 
 // Open builds a connection pool for url. It does not connect until the first query.
@@ -49,7 +50,7 @@ func Open(dsn string) (*DB, error) {
 	if err != nil {
 		return nil, fmt.Errorf("create db pool: %w", err)
 	}
-	return &DB{pool: pool}, nil
+	return &DB{pool: pool, dsn: dsn}, nil
 }
 
 func settingsIn(raw string) map[string]bool {
@@ -75,6 +76,14 @@ func (db *DB) Check(ctx context.Context) error {
 		return fmt.Errorf("query db: %w", err)
 	}
 	return nil
+}
+
+// URL returns the connection string the pool was opened with.
+func (db *DB) URL() string { return db.dsn }
+
+// Query runs a query that returns one row and scans it into dest.
+func (db *DB) Query(ctx context.Context, sql string, args []any, dest ...any) error {
+	return db.pool.QueryRow(ctx, sql, args...).Scan(dest...)
 }
 
 // InTx runs fn in a transaction, committing when it returns nil and rolling back otherwise.
