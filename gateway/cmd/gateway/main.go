@@ -4,6 +4,7 @@ package main
 import (
 	"context"
 	"errors"
+	"flag"
 	"fmt"
 	"log/slog"
 	"net"
@@ -19,6 +20,7 @@ import (
 	"github.com/dhananjay6561/kaya/gateway/internal/httpapi"
 	"github.com/dhananjay6561/kaya/gateway/internal/logging"
 	"github.com/dhananjay6561/kaya/gateway/internal/store"
+	"github.com/dhananjay6561/kaya/gateway/internal/whatsapp"
 )
 
 var version = "dev"
@@ -26,12 +28,17 @@ var version = "dev"
 const shutdownGrace = 10 * time.Second
 
 func main() {
-	if len(os.Args) > 1 && os.Args[1] == "healthcheck" {
-		if err := healthcheck(); err != nil {
-			fmt.Fprintln(os.Stderr, err)
-			os.Exit(1)
+	if len(os.Args) > 1 {
+		switch os.Args[1] {
+		case "healthcheck":
+			exitOnError(healthcheck())
+			return
+		case "pair":
+			exitOnError(pair(os.Args[2:]))
+			return
+		default:
+			exitOnError(fmt.Errorf("unknown command %q; the commands are healthcheck and pair", os.Args[1]))
 		}
-		return
 	}
 
 	cfg, err := loadConfig()
@@ -42,6 +49,13 @@ func main() {
 	logger := logging.New(os.Stdout, cfg.LogLevel, "service", "gateway", "version", version)
 	if err := run(cfg, logger); err != nil {
 		logger.Log(context.Background(), logging.LevelFatal, "gateway failed", logging.Err(err))
+		os.Exit(1)
+	}
+}
+
+func exitOnError(err error) {
+	if err != nil {
+		fmt.Fprintln(os.Stderr, err)
 		os.Exit(1)
 	}
 }
@@ -75,6 +89,8 @@ func run(cfg config.Config, logger *slog.Logger) error {
 		return err
 	}
 	defer db.Close()
+	sqlDB := db.SQL()
+	defer func() { _ = sqlDB.Close() }()
 
 	checkCtx, cancel := context.WithTimeout(ctx, 5*time.Second)
 	if err := db.Check(checkCtx); err != nil {
@@ -88,20 +104,64 @@ func run(cfg config.Config, logger *slog.Logger) error {
 		return fmt.Errorf("listen on %s: %w", addr, err)
 	}
 
+	conn := whatsapp.NewConn(whatsapp.NewSessions(sqlDB, whatsapp.NewLogger(logger)), logger)
+	connDone := make(chan error, 1)
+	go func() { connDone <- conn.Run(ctx) }()
+
 	handler := httpapi.NewHandler(httpapi.Options{
 		Logger:  logger,
 		Service: "gateway",
 		Version: version,
 		Checks:  map[string]httpapi.Checker{"db": db},
+		Info:    map[string]func() any{"whatsapp": func() any { return conn.Status() }},
 	})
 	logger.Info("gateway started", "addr", addr, "data_dir", cfg.DataDir)
 
 	err = httpapi.Serve(ctx, httpapi.NewServer(handler, logger), ln, shutdownGrace)
+	stop()
+	if connErr := <-connDone; connErr != nil && err == nil {
+		err = connErr
+	}
 	if err != nil && !errors.Is(err, context.Canceled) {
 		return err
 	}
 	logger.Info("gateway stopped")
 	return nil
+}
+
+func pair(args []string) error {
+	flags := flag.NewFlagSet("pair", flag.ContinueOnError)
+	phone := flags.String("phone", "", "pair with a code for this number (international, digits only) instead of a QR code")
+	if err := flags.Parse(args); err != nil {
+		return err
+	}
+	if flags.NArg() > 0 {
+		return fmt.Errorf("pair takes no arguments, got %q", flags.Args())
+	}
+
+	cfg, err := loadConfig()
+	if err != nil {
+		return err
+	}
+	logger := logging.New(os.Stderr, "warn", "service", "gateway", "version", version, "command", "pair")
+
+	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
+	defer stop()
+
+	db, err := store.Open(cfg.DatabaseURL)
+	if err != nil {
+		return err
+	}
+	defer db.Close()
+	sqlDB := db.SQL()
+	defer func() { _ = sqlDB.Close() }()
+
+	sessions := whatsapp.NewSessions(sqlDB, whatsapp.NewLogger(logger))
+	err = whatsapp.Pair(ctx, sessions, logger, whatsapp.PairOptions{Phone: *phone, Out: os.Stdout})
+	if errors.Is(err, context.Canceled) {
+		return errors.New("pairing cancelled; nothing was linked")
+	}
+	return err
 }
 
 func healthcheck() error {
