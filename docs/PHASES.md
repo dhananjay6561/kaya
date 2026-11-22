@@ -151,7 +151,9 @@ Status key: ⬜ not started · 🟨 in progress · ✅ done
 |---|---|---|---|
 | 15.1 | Alerts with a fallback channel (Telegram bot or email) when WhatsApp is down | Logout alert arrives on the fallback | ⬜ |
 | 15.2 | Test set for the router, masking and Q&A that runs before every change | One command runs it | ⬜ |
-| 15.3 | Optional: Uptime Kuma or a simple status page | Health of every service visible | ⬜ |
+| 15.3 | Metrics endpoints: `/metrics` in the gateway and core in Prometheus format (messages stored, ingest delay, events waiting, dead letters, history jobs, media downloads, WhatsApp connection state, LLM calls, tokens and cost) | Both endpoints answer, and the numbers move when a message arrives | ⬜ |
+| 15.4 | Prometheus and Grafana in Compose: pinned images, non-root, reachable only on the machine (later over Tailscale), data source and one dashboard provisioned from files in the repo | A fresh `make up` shows the dashboard with live data and no clicking | ⬜ |
+| 15.5 | Alert rules (WhatsApp disconnected, events piling up, dead letters appearing, disk over 80%) delivered through the fallback channel from 15.1 | Stopping the gateway raises an alert on the fallback | ⬜ |
 
 ## Stage 16 — Hosting on the Victus
 
