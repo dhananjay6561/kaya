@@ -85,6 +85,8 @@ type Record struct {
 	ReplyTo   *Target
 	ViewOnce  bool
 	ExpiresAt *time.Time
+	// Forwarded is true when the sender passed on someone else's message instead of writing it.
+	Forwarded bool
 
 	PushName     string
 	BusinessName string
@@ -214,6 +216,7 @@ func FromMessage(evt *events.Message, own Own, source string) Record {
 			expires := info.Timestamp.Add(time.Duration(seconds) * time.Second)
 			rec.ExpiresAt = &expires
 		}
+		rec.Forwarded = ctx.GetIsForwarded() || ctx.GetForwardingScore() > 0
 	}
 	return rec
 }

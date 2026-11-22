@@ -183,13 +183,13 @@ func (s *Store) storeMessage(ctx context.Context, tx pgx.Tx, rec Record, senderI
 	var inserted bool
 	err = tx.QueryRow(ctx, `
 		INSERT INTO messages (chat_id, wa_id, sender_id, from_me, sent_at, kind, body, reply_to_wa_id,
-			reply_to_sender_id, source, view_once, expires_at)
-		VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12)
+			reply_to_sender_id, source, view_once, expires_at, forwarded)
+		VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13)
 		ON CONFLICT (chat_id, wa_id, sender_id) DO UPDATE SET source = 'live'
 			WHERE messages.source = 'history' AND EXCLUDED.source = 'live'
 		RETURNING id, xmax = 0`,
 		chatID, rec.WAID, senderID, rec.FromMe, rec.At, rec.Kind, rec.Body, replyID, replySender, rec.Source,
-		rec.ViewOnce, rec.ExpiresAt).Scan(&messageID, &inserted)
+		rec.ViewOnce, rec.ExpiresAt, rec.Forwarded).Scan(&messageID, &inserted)
 	if errors.Is(err, pgx.ErrNoRows) {
 		return out, nil
 	}

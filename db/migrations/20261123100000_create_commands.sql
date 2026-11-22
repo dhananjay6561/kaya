@@ -1,4 +1,7 @@
 -- migrate:up
+ALTER TABLE messages ADD COLUMN forwarded boolean NOT NULL DEFAULT false;
+COMMENT ON COLUMN messages.forwarded IS 'The sender passed on someone else''s message instead of writing it. False for everything stored before this column existed.';
+
 CREATE TABLE commands (
   id bigint GENERATED ALWAYS AS IDENTITY PRIMARY KEY,
   message_id bigint NOT NULL UNIQUE,
@@ -25,3 +28,4 @@ GRANT SELECT, INSERT, UPDATE, DELETE ON commands TO kaya_core;
 
 -- migrate:down
 DROP TABLE commands;
+ALTER TABLE messages DROP COLUMN forwarded;
