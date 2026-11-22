@@ -280,8 +280,13 @@ BEGIN
   ASSERT has_table_privilege('kaya_core', 'gateway_events', 'SELECT, UPDATE, DELETE'), 'core consumes events';
   ASSERT NOT has_table_privilege('kaya_core', 'gateway_events', 'INSERT'), 'core never adds events';
 
-  ASSERT has_table_privilege('kaya_gateway', 'ingest_dead', 'SELECT, INSERT, UPDATE, DELETE');
-  ASSERT NOT has_table_privilege('kaya_core', 'ingest_dead', 'SELECT'), 'core cannot read dead letters';
+  FOREACH t IN ARRAY ARRAY['ingest_dead', 'history_jobs', 'pending_changes'] LOOP
+    ASSERT has_table_privilege('kaya_gateway', t, 'SELECT, INSERT, UPDATE, DELETE'), 'the gateway owns ' || t;
+    ASSERT NOT has_table_privilege('kaya_core', t, 'SELECT')
+      AND NOT has_table_privilege('kaya_core', t, 'INSERT')
+      AND NOT has_table_privilege('kaya_core', t, 'UPDATE')
+      AND NOT has_table_privilege('kaya_core', t, 'DELETE'), 'core cannot touch ' || t;
+  END LOOP;
 
   ASSERT has_schema_privilege('kaya_gateway', 'whatsmeow', 'CREATE, USAGE'), 'the gateway owns the whatsmeow schema';
   ASSERT NOT has_schema_privilege('kaya_core', 'whatsmeow', 'USAGE'), 'core cannot look inside the whatsmeow schema';
@@ -336,6 +341,20 @@ BEGIN
 END
 $$;
 RESET ROLE;
+
+DO $$
+DECLARE
+  job bigint;
+BEGIN
+  INSERT INTO history_jobs (wa_id, notification, sync_type) VALUES ('TESTHIST1', '\x01', 'RECENT') RETURNING id INTO job;
+  PERFORM pg_temp.expect_error($q$INSERT INTO history_jobs (wa_id, notification, sync_type) VALUES ('TESTHIST1', '\x01', 'RECENT')$q$, '23505');
+  PERFORM pg_temp.expect_error($q$INSERT INTO history_jobs (wa_id, sync_type) VALUES ('TESTHIST2', 'RECENT')$q$, '23514');
+  PERFORM pg_temp.expect_error(format($q$UPDATE history_jobs SET state = 'stored' WHERE id = %s$q$, job), '23514');
+  PERFORM pg_temp.expect_error(format($q$UPDATE history_jobs SET state = 'paused', notification = NULL WHERE id = %s$q$, job), '23514');
+  UPDATE history_jobs SET state = 'stored', notification = NULL WHERE id = job;
+  UPDATE history_jobs SET state = 'done' WHERE id = job;
+END
+$$;
 
 ROLLBACK;
 \echo schema tests passed
