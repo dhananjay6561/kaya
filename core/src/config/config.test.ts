@@ -62,6 +62,18 @@ describe("loadConfig", () => {
     assert.equal(config.databaseUrl, "postgresql://u:p@db/kaya");
   });
 
+  it("prefers CORE_DATABASE_URL over the shared DATABASE_URL", () => {
+    const config = loadConfig(
+      { ...valid, CORE_DATABASE_URL: "postgres://kaya_core@db:5432/kaya" },
+      "/base",
+    );
+    assert.equal(config.databaseUrl, "postgres://kaya_core@db:5432/kaya");
+    assert.equal(
+      loadConfig({ ...valid, CORE_DATABASE_URL: "" }, "/base").databaseUrl,
+      valid.DATABASE_URL,
+    );
+  });
+
   it("switches providers through config alone", () => {
     const config = loadConfig(
       { DATABASE_URL: valid.DATABASE_URL, LLM_PROVIDER: "stub", CHAT_CHANNEL: "stub" },

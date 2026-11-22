@@ -68,7 +68,10 @@ export function loadConfig(
   env: NodeJS.ProcessEnv = process.env,
   baseDir: string = process.cwd(),
 ): Config {
-  const result = schema.safeParse(env);
+  const result = schema.safeParse({
+    ...env,
+    DATABASE_URL: optional(env.CORE_DATABASE_URL) ?? env.DATABASE_URL,
+  });
   const problems = result.success
     ? []
     : result.error.issues.map((issue) => `${issue.path.join(".")}: ${issue.message}`);
