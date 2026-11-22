@@ -11,7 +11,7 @@ import type {
 export type StubChannel = ChatChannel &
   Readonly<{
     sent: readonly OutgoingMessage[];
-    receive(text: string): Promise<IncomingMessage>;
+    receive(text: string, options?: Readonly<{ sentAt?: Date }>): Promise<IncomingMessage>;
   }>;
 
 export class ChannelNotStartedError extends Error {
@@ -60,10 +60,17 @@ export function createStubChannel(): StubChannel {
       handlers.add(handler);
       return () => handlers.delete(handler);
     },
-    async receive(text: string) {
+    async receive(text: string, options: Readonly<{ sentAt?: Date }> = {}) {
       assertStarted();
-      const message: IncomingMessage = { id: randomUUID(), text, receivedAt: new Date() };
-      const results = await Promise.allSettled([...handlers].map(async (h) => h(message)));
+      const now = new Date();
+      const message: IncomingMessage = {
+        id: randomUUID(),
+        text,
+        sentAt: options.sentAt ?? now,
+        receivedAt: now,
+      };
+      const context = { signal: new AbortController().signal };
+      const results = await Promise.allSettled([...handlers].map(async (h) => h(message, context)));
       const failures = results.flatMap((r) => (r.status === "rejected" ? [r.reason] : []));
       if (failures.length > 0) {
         throw new AggregateError(failures, `${failures.length} message handler(s) failed`);

@@ -1,6 +1,13 @@
 import type { Checker } from "../../modules/health/index.js";
 
-export type IncomingMessage = Readonly<{ id: string; text: string; receivedAt: Date }>;
+export type IncomingMessage = Readonly<{
+  id: string;
+  text: string;
+  /** When DJ sent it. */
+  sentAt: Date;
+  /** When Kaya first took it in. The gap to sentAt is how long Kaya was away. */
+  receivedAt: Date;
+}>;
 
 export type OutgoingMessage = Readonly<{
   idempotencyKey: string;
@@ -16,7 +23,10 @@ export type SendOptions = Readonly<{
 
 export type SentMessage = Readonly<{ id: string; sentAt: Date }>;
 
-export type MessageHandler = (message: IncomingMessage) => Promise<void> | void;
+export type MessageHandler = (
+  message: IncomingMessage,
+  context: Readonly<{ signal: AbortSignal }>,
+) => Promise<void> | void;
 
 export interface ChatChannel extends Checker {
   readonly name: string;
