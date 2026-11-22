@@ -32,7 +32,8 @@ func savePaired(t *testing.T, s *Sessions, jid types.JID) {
 	}
 }
 
-// testDB returns a pool whose search_path is a fresh schema, dropped when the test ends.
+// testDB returns a pool on a fresh database, dropped when the test ends. A database rather than a
+// schema, because whatsmeow looks for its version table without regard to search_path.
 func testDB(t *testing.T) *store.DB {
 	t.Helper()
 	raw := os.Getenv("TEST_DATABASE_URL")
@@ -42,17 +43,17 @@ func testDB(t *testing.T) *store.DB {
 	ctx := context.Background()
 	suffix := make([]byte, 6)
 	_, _ = rand.Read(suffix)
-	schema := "test_whatsapp_" + hex.EncodeToString(suffix)
+	name := "kaya_test_whatsapp_" + hex.EncodeToString(suffix)
 
 	admin, err := pgx.Connect(ctx, raw)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if _, err := admin.Exec(ctx, "CREATE SCHEMA "+schema); err != nil {
+	if _, err := admin.Exec(ctx, "CREATE DATABASE "+name); err != nil {
 		t.Fatal(err)
 	}
 	t.Cleanup(func() {
-		_, _ = admin.Exec(context.Background(), "DROP SCHEMA "+schema+" CASCADE")
+		_, _ = admin.Exec(context.Background(), "DROP DATABASE "+name+" WITH (FORCE)")
 		_ = admin.Close(context.Background())
 	})
 
@@ -60,9 +61,7 @@ func testDB(t *testing.T) *store.DB {
 	if err != nil {
 		t.Fatal(err)
 	}
-	q := u.Query()
-	q.Set("search_path", schema)
-	u.RawQuery = q.Encode()
+	u.Path = "/" + name
 	db, err := store.Open(u.String())
 	if err != nil {
 		t.Fatal(err)
