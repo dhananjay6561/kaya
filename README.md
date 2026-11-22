@@ -52,8 +52,11 @@ contact, and it works with everything your WhatsApp account can see.
 - **One-command stack.** `make up` builds and starts Postgres 18 with pgvector, runs the database
   migrations, then starts the gateway and core, and waits until every service is healthy.
 - **WhatsApp pairing as a linked device.** `make pair` links Kaya by a QR code in the terminal or by
-  an 8-character pairing code. The session is stored in Postgres, survives restarts, and the gateway
-  reconnects after dropped connections. Built and tested; the final check on a real phone is pending.
+  an 8-character pairing code. The session is stored in Postgres and survives restarts. Built and
+  tested; the final check on a real phone is pending.
+- **A connection that looks after itself.** The gateway reconnects after a drop with a growing wait,
+  notices a connection that has gone silent and replaces it, detects a logout from the phone, and
+  writes every change of state as an event for the agent. `/health` shows the state and since when.
 - **Live ingest.** Every new message is stored with its chat and contact, and a person's LID, phone
   number and device addresses are treated as one contact. Edits, "delete for everyone" and reactions
   are applied as they arrive. A message is acknowledged to WhatsApp only after it is stored, so a
@@ -506,7 +509,7 @@ Status key: ✅ done · 🟨 in progress · ⬜ not started
 | Stage | Delivers | Status |
 |---|---|---|
 | 0. Foundation | Monorepo, config, Compose stack, migrations, logging, health, provider interfaces | ✅ |
-| 1. WhatsApp gateway | Contracts (1.0 ✅); pairing, live ingest, history sync and media (1.1 to 1.4, built, awaiting a phone check); connection health, send API | 🟨 |
+| 1. WhatsApp gateway | Contracts (1.0 ✅); pairing, live ingest, history sync, media and connection health (1.1 to 1.5, built, awaiting a phone check); send API | 🟨 |
 | 2. Talking to Kaya | Self-chat command channel, built-in commands | ⬜ |
 | 3. Brain | Groq replies, embeddings, meaning-based search, Q&A with sources, tagging, summaries | ⬜ |
 | 4. Agent loop and safety | Masking, context picking, tool calling, confirm-before-act, prompt-injection guard, usage tracking | ⬜ |
