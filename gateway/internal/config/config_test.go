@@ -18,7 +18,10 @@ func TestLoadDefaults(t *testing.T) {
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
-	want := Config{LogLevel: "info", DataDir: "/base/data", ListenHost: "127.0.0.1", Port: 3001, DatabaseURL: validURL}
+	want := Config{
+		LogLevel: "info", DataDir: "/base/data", ListenHost: "127.0.0.1", Port: 3001, DatabaseURL: validURL,
+		MediaMaxBytes: 100 << 20, MediaMaxPerHour: 60,
+	}
 	if cfg != want {
 		t.Errorf("got %+v, want %+v", cfg, want)
 	}
@@ -37,7 +40,7 @@ func TestLoadAllValues(t *testing.T) {
 	}
 	want := Config{
 		LogLevel: "debug", DataDir: "/srv/kaya", ListenHost: "0.0.0.0", Port: 9000,
-		DatabaseURL: "postgresql://db:5432/kaya",
+		DatabaseURL: "postgresql://db:5432/kaya", MediaMaxBytes: 100 << 20, MediaMaxPerHour: 60,
 	}
 	if cfg != want {
 		t.Errorf("got %+v, want %+v", cfg, want)
@@ -112,6 +115,21 @@ func TestGatewayDatabaseURLWinsOverTheSharedOne(t *testing.T) {
 	}
 	_, err = Load(env(map[string]string{"DATABASE_URL": validURL, "GATEWAY_DATABASE_URL": "http://x/y"}), "/base")
 	if err == nil || !strings.Contains(err.Error(), "GATEWAY_DATABASE_URL: must be a postgres:// URL") {
+		t.Fatalf("got %v", err)
+	}
+}
+
+func TestMediaLimits(t *testing.T) {
+	cfg, err := Load(env(map[string]string{"DATABASE_URL": validURL}), "/base")
+	if err != nil || cfg.MediaMaxBytes != 100<<20 || cfg.MediaMaxPerHour != 60 {
+		t.Fatalf("defaults: %+v, %v", cfg, err)
+	}
+	cfg, err = Load(env(map[string]string{"DATABASE_URL": validURL, "MEDIA_MAX_BYTES": "1048576", "MEDIA_MAX_PER_HOUR": "5"}), "/base")
+	if err != nil || cfg.MediaMaxBytes != 1<<20 || cfg.MediaMaxPerHour != 5 {
+		t.Fatalf("set values: %+v, %v", cfg, err)
+	}
+	_, err = Load(env(map[string]string{"DATABASE_URL": validURL, "MEDIA_MAX_BYTES": "0", "MEDIA_MAX_PER_HOUR": "many"}), "/base")
+	if err == nil || !strings.Contains(err.Error(), "MEDIA_MAX_BYTES") || !strings.Contains(err.Error(), "MEDIA_MAX_PER_HOUR") {
 		t.Fatalf("got %v", err)
 	}
 }

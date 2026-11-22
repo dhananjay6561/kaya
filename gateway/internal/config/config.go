@@ -18,6 +18,10 @@ type Config struct {
 	ListenHost  string
 	Port        int
 	DatabaseURL string
+	// MediaMaxBytes is the largest file the gateway will download.
+	MediaMaxBytes int64
+	// MediaMaxPerHour is how many files the gateway will download in an hour.
+	MediaMaxPerHour int
 }
 
 // Error lists every problem found in the config. It never includes the values themselves.
@@ -45,6 +49,24 @@ func Load(getenv func(string) string, baseDir string) (Config, error) {
 		DataDir:    orDefault(getenv("DATA_DIR"), "./data"),
 		ListenHost: orDefault(getenv("LISTEN_HOST"), "127.0.0.1"),
 		Port:       3001,
+
+		MediaMaxBytes:   100 << 20,
+		MediaMaxPerHour: 60,
+	}
+
+	if raw := getenv("MEDIA_MAX_BYTES"); raw != "" {
+		if n, err := strconv.ParseInt(raw, 10, 64); err != nil || n < 1 {
+			fail("MEDIA_MAX_BYTES", "must be a positive number of bytes")
+		} else {
+			cfg.MediaMaxBytes = n
+		}
+	}
+	if raw := getenv("MEDIA_MAX_PER_HOUR"); raw != "" {
+		if n, err := strconv.Atoi(raw); err != nil || n < 1 {
+			fail("MEDIA_MAX_PER_HOUR", "must be a positive number")
+		} else {
+			cfg.MediaMaxPerHour = n
+		}
 	}
 
 	if !slices.Contains(logLevels, cfg.LogLevel) {
