@@ -22,7 +22,7 @@ This folder is also a Go module (`contracts.go` embeds the schemas) and an npm w
 ## Changing a contract
 
 1. Edit the schema. Add a valid sample for anything new and an invalid sample for each new rule.
-2. Update the Go types in `gateway/internal/contracts/types.go`.
+2. Update the Go types in `contracts/types.go`.
 3. Run `make contracts` to regenerate `core/src/contracts/types.gen.ts`.
 4. Run `make check`. Both test suites run every sample.
 

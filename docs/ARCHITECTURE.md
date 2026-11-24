@@ -9,7 +9,7 @@ kept outside this repository.
 | Service | Language | Owns |
 |---|---|---|
 | `gateway` | Go (whatsmeow) | The WhatsApp connection: pairing, session, receiving, sending, media. Knows nothing about the agent. |
-| `core` | TypeScript (Node 24) | The agent: commands, LLM calls, tools, safety rules, confirmations, scheduler, browser control |
+| `core` | TypeScript (Node 24), moving to Go (`core-go/`, decision 72) | The agent: commands, LLM calls, tools, safety rules, confirmations, scheduler, browser control |
 | `services/docs` (later) | Python | PPT and PDF generation, Drive upload |
 | `services/voice` (later) | Python (Pipecat) | Live phone calls |
 | `db` | Postgres + pgvector | All shared data |
@@ -29,11 +29,18 @@ kaya/
 │       ├── modules/        one folder per feature (commands, chats, tools, ...)
 │       ├── providers/      swappable backends behind interfaces (llm/, channel/, telephony/)
 │       └── lib/            small shared helpers
+├── core-go/                the Go core that replaces core/ (its own Go module), until it moves to core/
+│   ├── cmd/core/           main package
+│   └── internal/           config, and one package per feature as it is ported
 ├── gateway/                Go WhatsApp gateway (its own Go module)
 │   ├── cmd/gateway/        main package
-│   └── internal/           config, whatsapp, store, events, httpapi
+│   └── internal/           config, whatsapp, ingest, events, send, media
+├── kit/                    Go code both services share (its own module): logging, httpapi (the
+│                           /health server), envfile, store (the Postgres pool), testdb
+├── go.work                 lets editors and tools see every Go module at once
 ├── services/               Python services (docs, voice), added in their stages
-├── contracts/              JSON Schemas for every message between services
+├── contracts/              JSON Schemas for every message between services, and the Go types and
+│                           validator for them (its own module)
 ├── db/migrations/          plain SQL migrations (dbmate)
 ├── deploy/                 Victus host setup, compose override, backups, hosting checklist
 ├── docs/                   spec, architecture, infra, decisions, phases
@@ -142,7 +149,7 @@ Folders appear when a phase needs them; empty placeholders are not committed.
   reader before handling.
   - Formats are pinned with patterns, so ajv and the Go validator agree: lowercase UUIDs, and
     timestamps in UTC with an uppercase `T` and `Z`.
-  - Go: hand-written types in `gateway/internal/contracts`. Every time field uses
+  - Go: hand-written types in the `contracts` module, used by the gateway and the Go core. Every time field uses
     `contracts.Time`, which always encodes as UTC. Validation errors name the field and the rule,
     never the value, so they are safe to log.
   - TypeScript: types generated into `core/src/contracts/types.gen.ts` (`make contracts`).
