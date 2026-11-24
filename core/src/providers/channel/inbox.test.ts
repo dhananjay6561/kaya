@@ -343,6 +343,26 @@ describe("command inbox", { skip: !testDatabaseUrl && "TEST_DATABASE_URL not set
     );
   });
 
+  it("stores the answer a handler reports, and nothing for one that reports none", async () => {
+    const answered = await message({ body: "a question" });
+    const notice = await message({ body: "/status" });
+    await record(answered);
+    await record(notice);
+    started(async (incoming) =>
+      incoming.text === "a question" ? { answerId: "3EB0THEANSWER" } : { answerId: "" },
+    );
+    await eventually("both to be settled", async () =>
+      (await commands()).every((c) => !c.endsWith("pending")),
+    );
+    const { rows } = await testDb.admin.query<{ answer_wa_id: string | null }>(
+      "SELECT answer_wa_id FROM commands ORDER BY id",
+    );
+    assert.deepEqual(
+      rows.map((row) => row.answer_wa_id),
+      ["3EB0THEANSWER", null],
+    );
+  });
+
   it("decides urgency when a command is recorded, not when it runs", async () => {
     const stored = await message({ body: "plain words" });
     await record(stored, () => true);

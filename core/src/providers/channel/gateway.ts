@@ -5,13 +5,15 @@ import type { Logger } from "../../lib/logger.js";
 import { type MessageListener, readConnection } from "../../modules/gateway/index.js";
 import { createInbox, type Inbox } from "./inbox.js";
 import { ChannelNotStartedError, IdempotencyKeyReusedError } from "./stub.js";
-import type {
-  ChatChannel,
-  IncomingMessage,
-  MessageHandler,
-  OutgoingMessage,
-  SendOptions,
-  SentMessage,
+import {
+  answerOf,
+  type ChatChannel,
+  type Handled,
+  type IncomingMessage,
+  type MessageHandler,
+  type OutgoingMessage,
+  type SendOptions,
+  type SentMessage,
 } from "./types.js";
 
 export type IncomingEvents = Readonly<{
@@ -97,7 +99,10 @@ export function createGatewayChannel(deps: GatewayChannelDeps): ChatChannel {
         })
       : undefined;
 
-  async function deliver(message: IncomingMessage, signal: AbortSignal): Promise<void> {
+  async function deliver(
+    message: IncomingMessage,
+    signal: AbortSignal,
+  ): Promise<Handled | undefined> {
     const results = await Promise.allSettled(
       [...handlers].map(async (handle) => handle(message, { signal })),
     );
@@ -106,6 +111,11 @@ export function createGatewayChannel(deps: GatewayChannelDeps): ChatChannel {
     if (failures.length > 1) {
       throw new AggregateError(failures, `${failures.length} message handler(s) failed`);
     }
+    for (const result of results) {
+      const answerId = result.status === "fulfilled" ? answerOf(result.value) : undefined;
+      if (answerId) return { answerId };
+    }
+    return undefined;
   }
 
   const assertStarted = () => {

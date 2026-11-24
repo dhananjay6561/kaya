@@ -19,6 +19,7 @@ export {
   type StubChannel,
 } from "./stub.js";
 export type * from "./types.js";
+export { answerOf } from "./types.js";
 
 export function createChannel(
   config: Config["channel"],

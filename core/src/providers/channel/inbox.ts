@@ -2,7 +2,7 @@ import type pg from "pg";
 import type { MessageStored } from "../../contracts/index.js";
 import { isConnectionError } from "../../lib/db.js";
 import type { Logger } from "../../lib/logger.js";
-import type { IncomingMessage } from "./types.js";
+import { answerOf, type IncomingMessage } from "./types.js";
 
 export type InboxOptions = Readonly<{
   pool: pg.Pool;
@@ -17,7 +17,7 @@ export type InboxOptions = Readonly<{
   isUrgent?: (text: string) => boolean;
 }>;
 
-export type Deliver = (message: IncomingMessage, signal: AbortSignal) => Promise<void>;
+export type Deliver = (message: IncomingMessage, signal: AbortSignal) => Promise<unknown>;
 
 export type Inbox = Readonly<{
   record(message: MessageStored, tx: pg.ClientBase): Promise<boolean>;
@@ -84,10 +84,11 @@ export function createInbox(options: InboxOptions): Inbox {
       wakeUp = done;
     });
 
-  const finish = (id: string, error?: string) =>
+  const finish = (id: string, error?: string, answerWaId?: string) =>
     pool.query(
-      "UPDATE commands SET state = $2, error = $3, finished_at = now() WHERE id = $1 AND state = 'pending'",
-      [id, error ? "failed" : "done", error ?? null],
+      `UPDATE commands SET state = $2, error = $3, answer_wa_id = $4, finished_at = now()
+       WHERE id = $1 AND state = 'pending'`,
+      [id, error ? "failed" : "done", error ?? null, answerWaId ?? null],
     );
 
   const giveBackAttempt = (id: string) =>
@@ -166,8 +167,9 @@ export function createInbox(options: InboxOptions): Inbox {
       }
     }
 
+    let handled: unknown;
     try {
-      await deliver(
+      handled = await deliver(
         { id: row.wa_id, text, sentAt: row.sent_at, receivedAt: row.created_at },
         halted.signal,
       );
@@ -185,7 +187,7 @@ export function createInbox(options: InboxOptions): Inbox {
       await finish(row.id, code);
       return true;
     }
-    await finish(row.id);
+    await finish(row.id, undefined, answerOf(handled));
     return true;
   }
 

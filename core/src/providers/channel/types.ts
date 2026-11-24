@@ -25,10 +25,18 @@ export type SendOptions = Readonly<{
 
 export type SentMessage = Readonly<{ id: string; sentAt: Date }>;
 
+/** What a handler reports back: the answer that makes the message part of the conversation. */
+export type Handled = Readonly<{ answerId?: string }>;
+
+export function answerOf(result: unknown): string | undefined {
+  const answerId = (result as Handled | null | undefined)?.answerId;
+  return typeof answerId === "string" && answerId !== "" ? answerId : undefined;
+}
+
 export type MessageHandler = (
   message: IncomingMessage,
   context: Readonly<{ signal: AbortSignal }>,
-) => Promise<void> | void;
+) => unknown;
 
 export interface ChatChannel extends Checker {
   readonly name: string;
