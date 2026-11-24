@@ -40,7 +40,7 @@ describe("status text", () => {
         "Kaya 8fc3488, up 2h 13m.",
         "WhatsApp: connected for 12m.",
         "Answering messages.",
-        "Last message stored 2m ago.",
+        "Last incoming message stored 2m ago.",
       ].join("\n"),
     );
   });
@@ -71,7 +71,7 @@ describe("status text", () => {
     const { connection: _c, lastStoredAt: _l, ...fresh } = healthy;
     const text = formatStatus(fresh);
     assert.match(text, /^WhatsApp: no report from the gateway yet\.$/m);
-    assert.match(text, /^No messages stored yet\.$/m);
+    assert.match(text, /^No incoming messages stored yet\.$/m);
   });
 
   it("never shows a negative age when clocks disagree", () => {
@@ -116,10 +116,14 @@ describe("status from the database", {
       "INSERT INTO chats (kind, contact_id) VALUES ('direct', $1) RETURNING id",
       [own],
     );
+    const friend = await testDb.admin.query<{ id: string }>(
+      "SELECT contact_id_for('100000000000002@lid', '919888888888@s.whatsapp.net') AS id",
+    );
     await testDb.admin.query(
-      `INSERT INTO messages (chat_id, wa_id, sender_id, from_me, sent_at, kind, body, source)
-       VALUES ($1, '3EB0STATUS', $2, true, now(), 'text', 'hi', 'live')`,
-      [chat.rows[0]?.id, own],
+      `INSERT INTO messages (chat_id, wa_id, sender_id, from_me, sent_at, kind, body, source, created_at)
+       VALUES ($1, '3EB0INCOMING', $3, false, now(), 'text', 'hi', 'live', now() - interval '2 hours'),
+              ($1, '3EB0STATUS', $2, true, now(), 'text', '/status', 'live', now())`,
+      [chat.rows[0]?.id, own, friend.rows[0]?.id],
     );
     await testDb.admin.query(
       "INSERT INTO connection_state (state, own_jid, occurred_at) VALUES ('connected', '919999999999@s.whatsapp.net', now())",
@@ -137,7 +141,11 @@ describe("status from the database", {
       startedAt,
     });
     assert.equal(full.connection?.state, "connected");
-    assert.ok(full.lastStoredAt instanceof Date);
+    const age = Date.now() - (full.lastStoredAt?.getTime() ?? 0);
+    assert.ok(
+      age > 110 * minute && age < 130 * minute,
+      "the owner's own messages, like the /status itself, do not count",
+    );
     assert.equal(full.eventsWaiting, 1);
     assert.equal(full.eventsDead, 0);
   });

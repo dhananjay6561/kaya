@@ -25,7 +25,9 @@ export async function readStatus(source: StatusSource): Promise<Status> {
   const [pause, connection, last, events] = await Promise.all([
     source.pause.state(),
     readConnection(pool),
-    pool.query<{ created_at: Date }>("SELECT created_at FROM messages ORDER BY id DESC LIMIT 1"),
+    pool.query<{ created_at: Date }>(
+      "SELECT created_at FROM messages WHERE NOT from_me ORDER BY id DESC LIMIT 1",
+    ),
     pool.query<{ waiting: number; dead: number }>(
       `SELECT (SELECT count(*)::int FROM gateway_events WHERE state = 'pending') AS waiting,
               (SELECT count(*)::int FROM gateway_events WHERE state = 'dead') AS dead`,
@@ -67,8 +69,8 @@ export function formatStatus(status: Status): string {
       ? `Paused for ${since(status.pause.since)}. Send /resume to start again.`
       : "Answering messages.",
     status.lastStoredAt
-      ? `Last message stored ${since(status.lastStoredAt)} ago.`
-      : "No messages stored yet.",
+      ? `Last incoming message stored ${since(status.lastStoredAt)} ago.`
+      : "No incoming messages stored yet.",
   ];
   if (status.eventsWaiting > 0) lines.push(`Events waiting for core: ${status.eventsWaiting}.`);
   if (status.eventsDead > 0) lines.push(`Events core gave up on: ${status.eventsDead}.`);
