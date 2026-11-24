@@ -4,6 +4,7 @@ import { createContracts } from "./contracts/index.js";
 import { createDb } from "./lib/db.js";
 import { startHttpServer } from "./lib/http-server.js";
 import { createLogger, type Logger } from "./lib/logger.js";
+import { chatReply } from "./modules/chat/index.js";
 import { isBuiltinCommand, startCommands } from "./modules/commands/index.js";
 import { createEventConsumer, createGatewayEvents } from "./modules/gateway/index.js";
 import { createHealthRoute } from "./modules/health/index.js";
@@ -59,6 +60,8 @@ async function run(config: Config, logger: Logger): Promise<void> {
     pause,
     status: async () =>
       formatStatus(await readStatus({ pool: db.pool, pause, version, startedAt })),
+    chat: (text, signal) =>
+      chatReply(text, { llm: providers.llm, logger, timeZone: config.timeZone }, signal),
   });
   try {
     try {
