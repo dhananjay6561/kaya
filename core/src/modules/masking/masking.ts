@@ -28,7 +28,7 @@ export type MaskSession = Readonly<{
 
 type Span = { start: number; end: number; kind: MaskKind };
 
-type Scan = Readonly<{ text: string; context: string; spans: Span[] }>;
+type Scan = Readonly<{ text: string; context: string; spans: Span[]; taken: Uint8Array }>;
 
 type Rule = Readonly<{
   kind: MaskKind;
@@ -191,18 +191,19 @@ function find(rule: Rule, scan: Scan): void {
     let end = start + match[0].length;
     while (start < end && /\s/.test(scan.text[start] ?? "")) start++;
     while (end > start && /[\s,.;:]/.test(scan.text[end - 1] ?? "")) end--;
-    const inside = scan.spans.find((span) => start < span.end && span.start < end);
-    if (inside && rule.clip && inside.start > start) {
-      end = inside.start;
+    const firstTaken = scan.taken.subarray(start, end).indexOf(1);
+    if (firstTaken > 0 && rule.clip) {
+      end = start + firstTaken;
       while (end > start && /[\s,.;:]/.test(scan.text[end - 1] ?? "")) end--;
     }
-    const clash = scan.spans.some((span) => start < span.end && span.start < end);
+    const clash = scan.taken.subarray(start, end).includes(1);
     const value = scan.text.slice(start, end);
     if (end <= start || clash || (rule.accept && !rule.accept(value, start, scan))) {
       pattern.lastIndex = match.index + 1;
       continue;
     }
     scan.spans.push({ start, end, kind: rule.kind });
+    scan.taken.fill(1, start, end);
   }
 }
 
@@ -252,6 +253,7 @@ export function createMaskSession(): MaskSession {
         text: asciiDigits(escaped),
         context: asciiDigits(options.context ?? ""),
         spans: [],
+        taken: new Uint8Array(escaped.length),
       };
       for (const rule of rules) find(rule, scan);
       let result = "";
