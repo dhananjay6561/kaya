@@ -14,6 +14,7 @@ export type GroqOptions = Readonly<{
   fetch?: typeof fetch;
   baseUrl?: string;
   timeoutMs?: number;
+  deadlineMs?: number;
   maxRetries?: number;
   retryBaseMs?: number;
   maxRetryWaitMs?: number;
@@ -38,8 +39,10 @@ const responseSchema = z.object({
 
 const errorSchema = z.object({ error: z.object({ code: z.string().nullish() }) });
 
-const safeDetail = (code: string | null | undefined) =>
-  code && /^[a-z][a-z0-9_]{0,60}$/.test(code) ? code : undefined;
+const safeDetail = (code: unknown) =>
+  typeof code === "string" && /^[a-z][a-z0-9_]{0,60}$/.test(code) ? code : undefined;
+
+const tooLong = /context_length|too_large|too_long|max_tokens/;
 
 function retryAfterMs(response: Response): number | undefined {
   const header = response.headers.get("retry-after");
@@ -73,6 +76,7 @@ export function createGroqLlm(config: GroqConfig, options: GroqOptions = {}): Ll
   const send = options.fetch ?? fetch;
   const baseUrl = (options.baseUrl ?? "https://api.groq.com/openai/v1").replace(/\/+$/, "");
   const timeoutMs = options.timeoutMs ?? 30_000;
+  const deadlineMs = options.deadlineMs ?? 45_000;
   const maxRetries = options.maxRetries ?? 2;
   const retryBaseMs = options.retryBaseMs ?? 1_000;
   const maxRetryWaitMs = options.maxRetryWaitMs ?? 10_000;
@@ -81,8 +85,26 @@ export function createGroqLlm(config: GroqConfig, options: GroqOptions = {}): Ll
     heavy: config.heavyModel,
   };
 
-  async function once(body: string, signal: AbortSignal | undefined): Promise<Completion> {
-    const timeout = AbortSignal.timeout(timeoutMs);
+  async function once(
+    body: string,
+    signal: AbortSignal | undefined,
+    budgetMs: number,
+  ): Promise<Completion> {
+    const timeout = AbortSignal.timeout(Math.min(timeoutMs, budgetMs));
+    const stopped = (): unknown => {
+      if (signal?.aborted) return signal.reason;
+      if (timeout.aborted) return new LlmError("groq", "timeout");
+      return undefined;
+    };
+    const readJson = async (response: Response) => {
+      try {
+        return await response.json();
+      } catch {
+        const reason = stopped();
+        if (reason !== undefined) throw reason;
+        return undefined;
+      }
+    };
     let response: Response;
     try {
       response = await send(`${baseUrl}/chat/completions`, {
@@ -95,17 +117,15 @@ export function createGroqLlm(config: GroqConfig, options: GroqOptions = {}): Ll
         signal: signal ? AbortSignal.any([signal, timeout]) : timeout,
       });
     } catch (err) {
-      if (signal?.aborted) throw signal.reason;
-      if (timeout.aborted) throw new LlmError("groq", "timeout");
-      throw new LlmError("groq", "unavailable", {
-        detail: safeDetail((err as Error).name.toLowerCase()),
-      });
+      const reason = stopped();
+      if (reason !== undefined) throw reason;
+      const cause = (err as { cause?: { code?: unknown } } | null)?.cause?.code;
+      const detail = safeDetail(typeof cause === "string" ? cause.toLowerCase() : undefined);
+      throw new LlmError("groq", "unavailable", detail ? { detail } : {});
     }
 
     if (!response.ok) {
-      const detail = safeDetail(
-        errorSchema.safeParse(await response.json().catch(() => undefined)).data?.error.code,
-      );
+      const detail = safeDetail(errorSchema.safeParse(await readJson(response)).data?.error.code);
       const status = response.status;
       const info = { status, ...(detail ? { detail } : {}) };
       if (status === 429) {
@@ -117,10 +137,16 @@ export function createGroqLlm(config: GroqConfig, options: GroqOptions = {}): Ll
       }
       if (status === 401 || status === 403) throw new LlmError("groq", "auth", info);
       if (status >= 500) throw new LlmError("groq", "unavailable", info);
+      if (status === 413 || (detail && tooLong.test(detail))) {
+        throw new LlmError("groq", "too_long", info);
+      }
+      if (status === 404 || detail === "model_not_found" || detail === "model_decommissioned") {
+        throw new LlmError("groq", "misconfigured", info);
+      }
       throw new LlmError("groq", "rejected", info);
     }
 
-    const parsed = responseSchema.safeParse(await response.json().catch(() => undefined));
+    const parsed = responseSchema.safeParse(await readJson(response));
     if (!parsed.success) throw new LlmError("groq", "bad_response", { status: response.status });
     const { choices, usage, model } = parsed.data;
     const choice = choices[0];
@@ -151,14 +177,15 @@ export function createGroqLlm(config: GroqConfig, options: GroqOptions = {}): Ll
         include_reasoning: false,
       });
 
+      const deadline = Date.now() + deadlineMs;
       for (let attempt = 0; ; attempt++) {
         try {
-          return await once(body, signal);
+          return await once(body, signal, deadline - Date.now());
         } catch (err) {
           if (!(err instanceof LlmError) || attempt >= maxRetries) throw err;
           if (!["rate_limited", "unavailable", "timeout"].includes(err.code)) throw err;
           const delay = err.retryAfterMs ?? retryBaseMs * 2 ** attempt;
-          if (delay > maxRetryWaitMs) throw err;
+          if (delay > maxRetryWaitMs || Date.now() + delay >= deadline) throw err;
           await wait(delay, signal);
         }
       }

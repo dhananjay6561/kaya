@@ -119,7 +119,8 @@ describe("groq", () => {
       [401, "auth"],
       [403, "auth"],
       [400, "rejected"],
-      [413, "rejected"],
+      [413, "too_long"],
+      [404, "misconfigured"],
     ] as const) {
       const { llm, calls } = groq([() => failure(status, "invalid_api_key")]);
       await assert.rejects(llm.complete(ask), (err: unknown) => {
@@ -127,6 +128,104 @@ describe("groq", () => {
       });
       assert.equal(calls.length, 1);
     }
+  });
+
+  it("names a too-long message and a model Groq does not know, whatever the status", async () => {
+    for (const [code, expected] of [
+      ["context_length_exceeded", "too_long"],
+      ["model_decommissioned", "misconfigured"],
+    ] as const) {
+      const { llm } = groq([() => failure(400, code)]);
+      await assert.rejects(
+        llm.complete(ask),
+        (err: unknown) => err instanceof LlmError && err.code === expected,
+      );
+    }
+  });
+
+  it("reads a Retry-After date", async () => {
+    const at = new Date(Date.now() + 30_000).toUTCString();
+    const { llm, calls } = groq([() => failure(429, undefined, { "retry-after": at })]);
+    await assert.rejects(llm.complete(ask), (err: unknown) => {
+      assert.ok(err instanceof LlmError);
+      assert.ok((err.retryAfterMs ?? 0) > 20_000 && (err.retryAfterMs ?? 0) <= 30_000);
+      return true;
+    });
+    assert.equal(calls.length, 1, "too long to wait for");
+  });
+
+  it("doubles its wait between tries and gives up rather than wait too long", async () => {
+    const { llm, calls } = groq([() => failure(503), () => failure(503), () => ok("x")], {
+      retryBaseMs: 6,
+      maxRetryWaitMs: 10,
+    });
+    await assert.rejects(llm.complete(ask), (err: unknown) => {
+      return err instanceof LlmError && err.code === "unavailable";
+    });
+    assert.equal(calls.length, 2, "the second wait (12 ms) is over the 10 ms limit");
+  });
+
+  it("stops retrying at the overall deadline", async () => {
+    let calls = 0;
+    const fake: typeof fetch = (_input, init) =>
+      new Promise((_, reject) => {
+        calls++;
+        init?.signal?.addEventListener("abort", () => reject(init.signal?.reason));
+      });
+    const llm = createGroqLlm(
+      { apiKey: "k", heavyModel: "h", routineModel: "r" },
+      { fetch: fake, timeoutMs: 1_000, deadlineMs: 30, maxRetries: 5, retryBaseMs: 1 },
+    );
+    const started = Date.now();
+    await assert.rejects(
+      llm.complete(ask),
+      (err: unknown) => err instanceof LlmError && err.code === "timeout",
+    );
+    assert.ok(Date.now() - started < 500, "the deadline, not the per-call timeout, ends it");
+    assert.ok(calls <= 2);
+  });
+
+  it("stops waiting between tries when the caller gives up", async () => {
+    const controller = new AbortController();
+    const { llm, calls } = groq([() => failure(503), () => ok("never")], { retryBaseMs: 5_000 });
+    setTimeout(() => controller.abort(new Error("core is stopping")), 10);
+    await assert.rejects(llm.complete(ask, { signal: controller.signal }), /core is stopping/);
+    assert.equal(calls.length, 1);
+  });
+
+  it("calls a timeout while reading the answer a timeout, not a bad answer", async () => {
+    const fake: typeof fetch = async (_input, init) => {
+      const body = new ReadableStream({
+        start(controller) {
+          controller.enqueue(new TextEncoder().encode('{"model":'));
+          init?.signal?.addEventListener("abort", () => controller.error(init.signal?.reason));
+        },
+      });
+      return new Response(body, { status: 200 });
+    };
+    const llm = createGroqLlm(
+      { apiKey: "k", heavyModel: "h", routineModel: "r" },
+      { fetch: fake, timeoutMs: 20, maxRetries: 0 },
+    );
+    await assert.rejects(
+      llm.complete(ask),
+      (err: unknown) => err instanceof LlmError && err.code === "timeout",
+    );
+  });
+
+  it("keeps a network failure's code", async () => {
+    const fake: typeof fetch = async () => {
+      throw new TypeError("fetch failed", { cause: { code: "ECONNRESET" } });
+    };
+    const llm = createGroqLlm(
+      { apiKey: "k", heavyModel: "h", routineModel: "r" },
+      { fetch: fake, maxRetries: 0 },
+    );
+    await assert.rejects(
+      llm.complete(ask),
+      (err: unknown) =>
+        err instanceof LlmError && err.code === "unavailable" && err.detail === "econnreset",
+    );
   });
 
   it("keeps only safe error codes from Groq", async () => {

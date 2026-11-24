@@ -3,6 +3,8 @@ export type LlmErrorCode =
   | "timeout"
   | "unavailable"
   | "auth"
+  | "too_long"
+  | "misconfigured"
   | "rejected"
   | "bad_response";
 
