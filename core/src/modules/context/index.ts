@@ -1,7 +1,8 @@
 export {
   buildContext,
   type ContextPackage,
+  type CountTokens,
   type Exchange,
-  estimateTokens,
+  shorten,
 } from "./context.js";
-export { type ConversationOptions, chatAnswerKey, readConversation } from "./conversation.js";
+export { type ConversationOptions, readConversation } from "./conversation.js";

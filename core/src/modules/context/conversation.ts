@@ -1,52 +1,36 @@
 import type pg from "pg";
-import { requestIdFor } from "../../providers/channel/index.js";
 import type { Exchange } from "./context.js";
 
 export type ConversationOptions = Readonly<{
-  before: Date;
-  excludeWaId?: string;
+  /** WhatsApp id of the question being answered: only exchanges before it are read. */
+  before: string;
+  sentAt: Date;
   withinMs?: number;
   maxExchanges?: number;
 }>;
 
-export const chatAnswerKey = (commandWaId: string) => `command:${commandWaId}:chat`;
-
-/** DJ's recent questions in his own chat that Kaya answered, with the answers, oldest first. */
+/** DJ's recent questions in his own chat with the answers Kaya sent, oldest first. */
 export async function readConversation(
   pool: pg.Pool,
   options: ConversationOptions,
 ): Promise<Exchange[]> {
   const withinMs = options.withinMs ?? 12 * 60 * 60_000;
-  const maxExchanges = options.maxExchanges ?? 20;
-  const { rows: asked } = await pool.query<{ wa_id: string; sent_at: Date; body: string }>(
-    `SELECT c.wa_id, c.sent_at, m.body
+  const { rows } = await pool.query<{ question: string; answer: string; sent_at: Date }>(
+    `SELECT q.body AS question, a.body AS answer, c.sent_at
      FROM commands c
-     JOIN messages m ON m.id = c.message_id
-     WHERE c.state = 'done'
-       AND c.sent_at < $1 AND c.sent_at >= $2
-       AND c.wa_id IS DISTINCT FROM $3
-       AND m.deleted_at IS NULL AND m.body IS NOT NULL
-     ORDER BY c.sent_at DESC, c.id DESC
-     LIMIT $4`,
-    [
-      options.before,
-      new Date(options.before.getTime() - withinMs),
-      options.excludeWaId ?? null,
-      maxExchanges,
-    ],
+     JOIN messages q ON q.id = c.message_id
+     JOIN messages a ON a.chat_id = q.chat_id AND a.wa_id = c.answer_wa_id AND a.from_me
+     WHERE c.answer_wa_id IS NOT NULL
+       AND c.id < coalesce((SELECT min(id) FROM commands WHERE wa_id = $1), 'Infinity'::numeric)
+       AND c.sent_at >= $2
+       AND q.deleted_at IS NULL AND a.deleted_at IS NULL
+       AND q.body IS NOT NULL AND a.body IS NOT NULL
+       AND (q.edited_at IS NULL OR q.edited_at <= c.finished_at)
+     ORDER BY c.id DESC
+     LIMIT $3`,
+    [options.before, new Date(options.sentAt.getTime() - withinMs), options.maxExchanges ?? 20],
   );
-  if (asked.length === 0) return [];
-  const ids = asked.map((row) => requestIdFor(chatAnswerKey(row.wa_id)));
-  const { rows: answered } = await pool.query<{ id: string; text: string }>(
-    `SELECT id::text, payload -> 'content' ->> 'text' AS text
-     FROM send_requests WHERE id = ANY($1::uuid[]) AND state = 'sent'`,
-    [ids],
-  );
-  const answers = new Map(answered.map((row) => [row.id, row.text]));
-  return asked
-    .flatMap((row, i) => {
-      const answer = answers.get(ids[i] ?? "");
-      return answer ? [{ question: row.body.trim(), answer, at: row.sent_at }] : [];
-    })
+  return rows
+    .map((row) => ({ question: row.question.trim(), answer: row.answer, at: row.sent_at }))
     .reverse();
 }

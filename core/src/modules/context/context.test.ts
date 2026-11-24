@@ -1,24 +1,29 @@
 import assert from "node:assert/strict";
 import { describe, it } from "node:test";
-import { buildContext, type Exchange, estimateTokens } from "./context.js";
+import { buildContext, type Exchange, shorten } from "./context.js";
 
 const at = new Date("2026-11-24T10:00:00Z");
+const count = (text: string) => Array.from(text).length;
 const exchange = (n: number, size = 10): Exchange => ({
   question: `question ${n} ${"q".repeat(size)}`,
   answer: `answer ${n} ${"a".repeat(size)}`,
   at,
 });
+const firstWords = (text: string) => text.split(" ").slice(0, 2).join(" ");
 
-describe("token estimate", () => {
-  it("counts Latin text at about four characters a token", () => {
-    assert.equal(estimateTokens(""), 4);
-    assert.equal(estimateTokens("a".repeat(400)), 104);
+describe("shorten", () => {
+  it("keeps the start and the end and cuts the middle", () => {
+    const text = `start ${"x".repeat(500)} end`;
+    const short = shorten(text, 60, count);
+    assert.ok(count(short) <= 60);
+    assert.ok(short.startsWith("start"));
+    assert.ok(short.endsWith("end"));
+    assert.match(short, / … /);
   });
 
-  it("counts Hindi and emoji as a token each, so the budget is never underestimated", () => {
-    assert.equal(estimateTokens("नमस्ते"), 6 + 4);
-    assert.equal(estimateTokens("😀😀"), 2 + 4);
-    assert.ok(estimateTokens("kya haal hai") < estimateTokens("क्या हाल है"));
+  it("leaves text that fits alone, and gives up with an ellipsis", () => {
+    assert.equal(shorten("short", 60, count), "short");
+    assert.equal(shorten("x".repeat(100), 2, count), "…");
   });
 });
 
@@ -29,9 +34,10 @@ describe("context builder", () => {
       history: [exchange(1), exchange(2)],
       question: "and in Hindi?",
       budget: 10_000,
+      count,
     });
     assert.deepEqual(
-      built.messages.map((m) => `${m.role}: ${m.content.split(" ").slice(0, 2).join(" ")}`),
+      built.messages.map((m) => `${m.role}: ${firstWords(m.content)}`),
       [
         "system: be brief",
         "user: question 1",
@@ -42,36 +48,77 @@ describe("context builder", () => {
       ],
     );
     assert.equal(built.exchanges, 2);
+    assert.equal(built.leftOut, 0);
+    assert.equal(built.messages[0]?.content, "be brief", "no note when nothing was left out");
   });
 
-  it("keeps the newest exchanges that fit and drops a question with its answer", () => {
+  it("keeps the newest exchanges that fit, drops older ones whole, and says so", () => {
     const history = [1, 2, 3, 4, 5].map((n) => exchange(n, 200));
-    const one =
-      estimateTokens(history[0]?.question ?? "") + estimateTokens(history[0]?.answer ?? "");
-    const fixed = estimateTokens("s") + estimateTokens("now?");
-    const built = buildContext({
-      system: "s",
-      history,
-      question: "now?",
-      budget: fixed + 2 * one + 1,
-    });
+    const built = buildContext({ system: "s", history, question: "now?", budget: 1_100, count });
     assert.equal(built.exchanges, 2);
+    assert.equal(built.leftOut, 3);
     assert.deepEqual(
-      built.messages.slice(1, -1).map((m) => m.content.split(" ").slice(0, 2).join(" ")),
+      built.messages.slice(1, -1).map((m) => firstWords(m.content)),
       ["question 4", "answer 4", "question 5", "answer 5"],
     );
-    assert.ok(built.tokens <= fixed + 2 * one + 1);
+    assert.match(
+      built.messages[0]?.content ?? "",
+      /Older parts of this conversation were left out/,
+    );
+    assert.ok(built.tokens <= 1_100);
   });
 
-  it("sends just the question when the budget has no room for history", () => {
-    const built = buildContext({ system: "s", history: [exchange(1)], question: "q", budget: 1 });
+  it("shortens the newest exchange rather than drop it", () => {
+    const big: Exchange = {
+      question: `paste ${"p".repeat(5_000)} end`,
+      answer: "summary here",
+      at,
+    };
+    const built = buildContext({
+      system: "s",
+      history: [big],
+      question: "make it shorter",
+      budget: 600,
+      count,
+    });
+    assert.equal(built.exchanges, 1);
+    const [, question, answer] = built.messages;
+    assert.ok(question?.content.startsWith("paste") && question.content.endsWith("end"));
+    assert.equal(answer?.content, "summary here");
+    assert.ok(built.tokens <= 600);
+  });
+
+  it("sends just the question when there is no room at all", () => {
+    const built = buildContext({
+      system: "s",
+      history: [exchange(1)],
+      question: "q",
+      budget: 10,
+      count,
+    });
     assert.equal(built.exchanges, 0);
     assert.equal(built.messages.length, 2);
   });
 
-  it("does not skip an old exchange to fit after a big one is dropped", () => {
+  it("does not skip past an exchange that does not fit", () => {
     const history = [exchange(1, 5), exchange(2, 5_000), exchange(3, 5)];
-    const built = buildContext({ system: "s", history, question: "q", budget: 200 });
+    const built = buildContext({ system: "s", history, question: "q", budget: 300, count });
     assert.equal(built.exchanges, 1, "the conversation stays continuous: only the newest one");
+    assert.equal(firstWords(built.messages[1]?.content ?? ""), "question 3");
+  });
+
+  it("counts with the tokenizer it is given", () => {
+    const calls: string[] = [];
+    buildContext({
+      system: "s",
+      history: [exchange(1)],
+      question: "q",
+      budget: 10_000,
+      count: (text) => {
+        calls.push(text);
+        return 1;
+      },
+    });
+    assert.ok(calls.includes("q") && calls.some((c) => c.startsWith("question 1")));
   });
 });
