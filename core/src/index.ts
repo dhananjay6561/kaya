@@ -50,7 +50,7 @@ async function run(config: Config, logger: Logger): Promise<void> {
       results: gatewayEvents,
       incoming: gatewayEvents,
       logger,
-      exemptFromCap: isBuiltinCommand,
+      isUrgent: isBuiltinCommand,
     },
   });
   const pause = createPause(db.pool);
