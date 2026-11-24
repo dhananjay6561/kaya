@@ -73,6 +73,11 @@ export function createStubChannel(): StubChannel {
       byKey.set(message.idempotencyKey, { result, message });
       return result;
     },
+    async follow(idempotencyKey: string, options: SendOptions = {}) {
+      options.signal?.throwIfAborted();
+      assertStarted();
+      return byKey.get(idempotencyKey)?.result;
+    },
     onMessage(handler: MessageHandler) {
       handlers.add(handler);
       return () => handlers.delete(handler);

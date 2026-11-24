@@ -236,6 +236,20 @@ describe("gateway channel", { skip: !testDatabaseUrl && "TEST_DATABASE_URL not s
     assert.deepEqual(rows[0]?.payload.content, { type: "text", text: "up 1m" });
   });
 
+  it("follows a message already queued under a key, and reports none when there is none", async () => {
+    await linked();
+    const c = await channel();
+    assert.equal(await c.follow("never-sent"), undefined);
+    const first = c.send({ idempotencyKey: "followed", text: "whatever it said" });
+    await eventually("the queued request", async () => (await queued()).length === 1);
+    const following = c.follow("followed");
+    await gatewaySends(requestIdFor("followed"), "3EB0FOLLOWED");
+    assert.equal((await following)?.id, "3EB0FOLLOWED");
+    assert.equal((await first).id, "3EB0FOLLOWED");
+    assert.equal((await c.follow("followed"))?.id, "3EB0FOLLOWED");
+    assert.equal((await queued()).length, 1, "following never queues anything");
+  });
+
   it("stops waiting even when the caller gives up in the middle of a check", async () => {
     await linked();
     const giveUp = new AbortController();

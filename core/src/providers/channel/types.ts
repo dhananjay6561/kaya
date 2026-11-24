@@ -35,5 +35,7 @@ export interface ChatChannel extends Checker {
   start(): Promise<void>;
   stop(): Promise<void>;
   send(message: OutgoingMessage, options?: SendOptions): Promise<SentMessage>;
+  /** Waits for a message already queued under this key; undefined if none was queued. */
+  follow(idempotencyKey: string, options?: SendOptions): Promise<SentMessage | undefined>;
   onMessage(handler: MessageHandler): () => void;
 }

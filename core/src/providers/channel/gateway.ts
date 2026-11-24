@@ -29,7 +29,7 @@ export type GatewayChannelDeps = Readonly<{
   incoming?: IncomingEvents;
   logger?: Logger;
   inboxPollMs?: number;
-  exemptFromCap?: (text: string) => boolean;
+  isUrgent?: (text: string) => boolean;
   ttlMs?: number;
   pollMs?: number;
   graceMs?: number;
@@ -93,7 +93,7 @@ export function createGatewayChannel(deps: GatewayChannelDeps): ChatChannel {
           pool,
           logger: deps.logger,
           ...(deps.inboxPollMs === undefined ? {} : { pollMs: deps.inboxPollMs }),
-          ...(deps.exemptFromCap ? { exemptFromCap: deps.exemptFromCap } : {}),
+          ...(deps.isUrgent ? { isUrgent: deps.isUrgent } : {}),
         })
       : undefined;
 
@@ -114,9 +114,9 @@ export function createGatewayChannel(deps: GatewayChannelDeps): ChatChannel {
 
   async function outcome(
     id: string,
-    message: OutgoingMessage,
+    message: OutgoingMessage | undefined,
     textMayChange: boolean,
-  ): Promise<SentMessage | undefined> {
+  ): Promise<SentMessage | undefined | "none"> {
     const { rows } = await pool.query<Row>(
       `SELECT state, wa_id, error, finished_at,
               payload -> 'content' ->> 'text' AS text,
@@ -127,10 +127,12 @@ export function createGatewayChannel(deps: GatewayChannelDeps): ChatChannel {
       [id, graceMs / 1_000, (graceMs + sendingGraceMs) / 1_000],
     );
     const row = rows[0];
-    if (!row) return undefined;
-    const textDiffers = row.text !== message.text.trim() && !textMayChange;
-    if (textDiffers || row.reply_to !== (message.replyTo ?? null)) {
-      throw new IdempotencyKeyReusedError(id);
+    if (!row) return "none";
+    if (message) {
+      const textDiffers = row.text !== message.text.trim() && !textMayChange;
+      if (textDiffers || row.reply_to !== (message.replyTo ?? null)) {
+        throw new IdempotencyKeyReusedError(id);
+      }
     }
     if (row.state === "sent" && row.wa_id && row.finished_at) {
       return { id: row.wa_id, sentAt: row.finished_at };
@@ -166,6 +168,24 @@ export function createGatewayChannel(deps: GatewayChannelDeps): ChatChannel {
     });
   }
 
+  const waitSignal = (options: SendOptions) =>
+    options.signal ? AbortSignal.any([options.signal, stopping.signal]) : stopping.signal;
+
+  async function waitFor(
+    id: string,
+    message: OutgoingMessage | undefined,
+    textMayChange: boolean,
+    signal: AbortSignal,
+  ): Promise<SentMessage> {
+    for (;;) {
+      signal.throwIfAborted();
+      const sent = await outcome(id, message, textMayChange);
+      if (sent === "none") throw new Error("a queued send request disappeared");
+      if (sent) return sent;
+      await nudge(id, pollMs, signal);
+    }
+  }
+
   return Object.freeze({
     name: "gateway",
     async start() {
@@ -195,9 +215,7 @@ export function createGatewayChannel(deps: GatewayChannelDeps): ChatChannel {
     async send(message: OutgoingMessage, options: SendOptions = {}) {
       options.signal?.throwIfAborted();
       assertStarted();
-      const signal = options.signal
-        ? AbortSignal.any([options.signal, stopping.signal])
-        : stopping.signal;
+      const signal = waitSignal(options);
       const ttlMs = options.ttlMs ?? deps.ttlMs;
       if (message.idempotencyKey.trim() === "") throw new Error("idempotency key is empty");
       if (message.text.trim() === "") throw new Error("message text is empty");
@@ -205,7 +223,7 @@ export function createGatewayChannel(deps: GatewayChannelDeps): ChatChannel {
       const id = requestIdFor(message.idempotencyKey);
       const textMayChange = options.textMayChange ?? false;
       const earlier = await outcome(id, message, textMayChange);
-      if (earlier) return earlier;
+      if (earlier !== "none") return earlier ?? (await waitFor(id, message, textMayChange, signal));
 
       const own = (await readConnection(pool))?.ownJid;
       if (!own) throw new GatewayNotLinkedError();
@@ -225,13 +243,15 @@ export function createGatewayChannel(deps: GatewayChannelDeps): ChatChannel {
         "INSERT INTO send_requests (id, payload, expires_at) VALUES ($1, $2, $3) ON CONFLICT (id) DO NOTHING",
         [id, contracts.encodeSendRequest(request), request.expires_at],
       );
-
-      for (;;) {
-        signal.throwIfAborted();
-        const sent = await outcome(id, message, textMayChange);
-        if (sent) return sent;
-        await nudge(id, pollMs, signal);
-      }
+      return waitFor(id, message, textMayChange, signal);
+    },
+    async follow(idempotencyKey: string, options: SendOptions = {}) {
+      options.signal?.throwIfAborted();
+      assertStarted();
+      const id = requestIdFor(idempotencyKey);
+      const earlier = await outcome(id, undefined, true);
+      if (earlier === "none") return undefined;
+      return earlier ?? (await waitFor(id, undefined, true, waitSignal(options)));
     },
     onMessage(handler: MessageHandler) {
       handlers.add(handler);
