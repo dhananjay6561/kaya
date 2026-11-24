@@ -7,9 +7,14 @@ import (
 	"slices"
 	"strconv"
 	"strings"
+
+	"github.com/dhananjay6561/kaya/kit/store"
 )
 
 var logLevels = []string{"trace", "debug", "info", "warn", "error", "fatal"}
+
+// DBSettings are the pool options the gateway opens Postgres with, in the service and in tests.
+var DBSettings = []store.Option{store.WithAppName("kaya-gateway"), store.WithSearchPath("whatsmeow,public")}
 
 // Config holds the gateway settings, already validated.
 type Config struct {

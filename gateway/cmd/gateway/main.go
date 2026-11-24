@@ -32,8 +32,6 @@ var version = "dev"
 
 const shutdownGrace = 10 * time.Second
 
-var dbSettings = []store.Option{store.WithAppName("kaya-gateway"), store.WithSearchPath("whatsmeow,public")}
-
 func main() {
 	if len(os.Args) > 1 {
 		switch os.Args[1] {
@@ -95,7 +93,7 @@ func run(cfg config.Config, logger *slog.Logger) error {
 		return err
 	}
 
-	db, err := store.Open(cfg.DatabaseURL, dbSettings...)
+	db, err := store.Open(cfg.DatabaseURL, config.DBSettings...)
 	if err != nil {
 		return err
 	}
@@ -176,7 +174,7 @@ func mediaCommand(args []string) error {
 	}
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer stop()
-	db, err := store.Open(cfg.DatabaseURL, dbSettings...)
+	db, err := store.Open(cfg.DatabaseURL, config.DBSettings...)
 	if err != nil {
 		return err
 	}
@@ -208,7 +206,7 @@ func pair(args []string) error {
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer stop()
 
-	db, err := store.Open(cfg.DatabaseURL, dbSettings...)
+	db, err := store.Open(cfg.DatabaseURL, config.DBSettings...)
 	if err != nil {
 		return err
 	}
