@@ -7,6 +7,7 @@ import (
 	"errors"
 	"fmt"
 	"log/slog"
+	"slices"
 	"sync"
 	"time"
 
@@ -15,7 +16,8 @@ import (
 	"github.com/dhananjay6561/kaya/contracts"
 )
 
-// AfterCommit runs once the event that produced it is committed as handled.
+// AfterCommit runs once the event that produced it is committed as handled. It runs on the
+// consumer's own goroutine, so it must not block: hand anything slow to another goroutine.
 type AfterCommit func()
 
 // Querier is what reading the connection state needs: a pool or a transaction.
@@ -64,16 +66,20 @@ type Events struct {
 
 	mu       sync.Mutex
 	nextID   int
-	messages map[int]MessageListener
+	messages []messageEntry
 	sends    map[string]map[int]SendResultListener
+}
+
+type messageEntry struct {
+	id       int
+	listener MessageListener
 }
 
 // NewEvents returns handlers for every gateway event type.
 func NewEvents(logger *slog.Logger) *Events {
 	return &Events{
-		logger:   logger,
-		messages: map[int]MessageListener{},
-		sends:    map[string]map[int]SendResultListener{},
+		logger: logger,
+		sends:  map[string]map[int]SendResultListener{},
 	}
 }
 
@@ -83,11 +89,11 @@ func (e *Events) OnMessage(listener MessageListener) func() {
 	defer e.mu.Unlock()
 	e.nextID++
 	id := e.nextID
-	e.messages[id] = listener
+	e.messages = append(e.messages, messageEntry{id: id, listener: listener})
 	return func() {
 		e.mu.Lock()
 		defer e.mu.Unlock()
-		delete(e.messages, id)
+		e.messages = slices.DeleteFunc(e.messages, func(m messageEntry) bool { return m.id == id })
 	}
 }
 
@@ -117,25 +123,25 @@ func (e *Events) Handle(ctx context.Context, tx pgx.Tx, event contracts.Event) (
 	case contracts.EventConnectionState:
 		var data contracts.ConnectionState
 		if err := event.DecodeData(&data); err != nil {
-			return nil, err
+			return nil, fmt.Errorf("%w: %w", contracts.ErrInvalid, err)
 		}
 		return e.connectionChanged(ctx, tx, data, event.OccurredAt.Time)
 	case contracts.EventMessageStored:
 		var data contracts.MessageStored
 		if err := event.DecodeData(&data); err != nil {
-			return nil, err
+			return nil, fmt.Errorf("%w: %w", contracts.ErrInvalid, err)
 		}
 		return e.messageStored(ctx, tx, data)
 	case contracts.EventSendResult:
 		var data contracts.SendResult
 		if err := event.DecodeData(&data); err != nil {
-			return nil, err
+			return nil, fmt.Errorf("%w: %w", contracts.ErrInvalid, err)
 		}
 		return func() { e.sendResult(data) }, nil
 	case contracts.EventHistorySynced:
 		var data contracts.HistorySynced
 		if err := event.DecodeData(&data); err != nil {
-			return nil, err
+			return nil, fmt.Errorf("%w: %w", contracts.ErrInvalid, err)
 		}
 		return func() {
 			e.logger.Info("history batch stored",
@@ -168,17 +174,12 @@ func (e *Events) connectionChanged(ctx context.Context, tx pgx.Tx, data contract
 
 func (e *Events) messageStored(ctx context.Context, tx pgx.Tx, data contracts.MessageStored) (AfterCommit, error) {
 	e.mu.Lock()
-	listeners := make([]MessageListener, 0, len(e.messages))
-	for id := 1; id <= e.nextID; id++ {
-		if listener, ok := e.messages[id]; ok {
-			listeners = append(listeners, listener)
-		}
-	}
+	listeners := slices.Clone(e.messages)
 	e.mu.Unlock()
 
 	var followUps []AfterCommit
-	for _, listener := range listeners {
-		followUp, err := listener(ctx, tx, data)
+	for _, entry := range listeners {
+		followUp, err := entry.listener(ctx, tx, data)
 		if err != nil {
 			return nil, err
 		}
