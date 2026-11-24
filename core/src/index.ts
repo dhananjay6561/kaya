@@ -10,6 +10,7 @@ import { readConversation } from "./modules/context/index.js";
 import { createEventConsumer, createGatewayEvents } from "./modules/gateway/index.js";
 import { createHealthRoute } from "./modules/health/index.js";
 import { createPause } from "./modules/pause/index.js";
+import { createIndexer } from "./modules/search/index.js";
 import { formatStatus, readStatus } from "./modules/status/index.js";
 import { createProviders } from "./providers/index.js";
 
@@ -55,12 +56,27 @@ async function run(config: Config, logger: Logger): Promise<void> {
     },
   });
   const pause = createPause(db.pool);
+  const indexer = createIndexer({
+    pool: db.pool,
+    embeddings: providers.embeddings,
+    pause,
+    logger,
+    timeZone: config.timeZone,
+  });
   startCommands({
     channel: providers.channel,
     logger,
     pause,
     status: async () =>
-      formatStatus(await readStatus({ pool: db.pool, pause, version, startedAt })),
+      formatStatus(
+        await readStatus({
+          pool: db.pool,
+          pause,
+          version,
+          startedAt,
+          searchIndex: () => indexer.progress(),
+        }),
+      ),
     chat: (message, signal) =>
       chatReply(
         message,
@@ -86,6 +102,7 @@ async function run(config: Config, logger: Logger): Promise<void> {
     }
     await providers.channel.start();
     consumer.start();
+    indexer.start();
 
     const server = await startHttpServer({
       host: config.listenHost,
@@ -116,6 +133,7 @@ async function run(config: Config, logger: Logger): Promise<void> {
       await server.close();
     }
   } finally {
+    await indexer.stop();
     await consumer.stop();
     await providers.channel.stop();
     await db.close();
