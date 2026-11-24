@@ -12,15 +12,27 @@ export type SlashCommand = Readonly<
 const isBuiltin = (name: string): name is BuiltinName =>
   (builtinNames as readonly string[]).includes(name);
 
-/** Anything that starts with a slash is meant for Kaya itself; everything else is not a command. */
+const graphemes = new Intl.Segmenter(undefined, { granularity: "grapheme" });
+
+function firstCharacters(text: string, count: number): string {
+  return Array.from(graphemes.segment(text), (part) => part.segment)
+    .slice(0, count)
+    .join("");
+}
+
 export function parseSlash(text: string): SlashCommand | undefined {
-  const trimmed = text.trim();
-  if (!trimmed.startsWith("/")) return undefined;
-  const [word = "", ...rest] = trimmed.slice(1).split(/\s+/);
-  const name = word.toLowerCase();
-  if (!isBuiltin(name)) return { kind: "unknown", name: Array.from(word).slice(0, 30).join("") };
+  const cleaned = text
+    .normalize("NFKC")
+    .replace(/(?!\u200d)\p{Cf}/gu, "")
+    .trim();
+  if (!cleaned.startsWith("/")) return undefined;
+  const [word = "", ...rest] = cleaned.slice(1).split(/\s+/);
+  const name = word.toLowerCase().replace(/[.!?]+$/, "");
+  if (!isBuiltin(name)) return { kind: "unknown", name: firstCharacters(word, 30) };
   return rest.join("") === "" ? { kind: "builtin", name } : { kind: "extra_text", name };
 }
+
+export const isBuiltinCommand = (text: string) => parseSlash(text)?.kind === "builtin";
 
 export type BuiltinDeps = Readonly<{
   pause: PauseSwitch;
@@ -44,7 +56,7 @@ export async function answerSlash(
   switch (command.kind) {
     case "unknown":
       return command.name
-        ? `I don't know /${command.name}. Send /help to see what I can do.`
+        ? `/${command.name} is not a command I know. Send /help to see what I can do.`
         : "Send /help to see what I can do.";
     case "extra_text":
       return `/${command.name} takes nothing after it, so nothing was done. Send just /${command.name}.`;
@@ -55,14 +67,14 @@ export async function answerSlash(
     case "help": {
       const state = await deps.pause.state();
       return state.paused
-        ? `${helpText}\nI am paused: only these commands get an answer.`
+        ? `${helpText}\nI am paused: only slash commands get an answer.`
         : helpText;
     }
     case "status":
       return deps.status();
     case "pause":
       return (await deps.pause.pause(commandId)) === "paused"
-        ? "Paused. Until you send /resume I answer only /help, /status and /resume."
+        ? "Paused. Until you send /resume I answer only slash commands, like /status."
         : "Already paused. Send /resume to start again.";
     case "resume":
       return (await deps.pause.resume(commandId)) === "resumed"
