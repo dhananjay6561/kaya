@@ -211,6 +211,43 @@ describe("chat reply", () => {
     assert.equal(reply.text, "Call 9876543210 or mail rahul@x.com.");
   });
 
+  it("hides an OTP in a past answer when the question asked for one", async () => {
+    const cloud = { ...createStubLlm({ reply: () => "ok" }), locality: "cloud" as const };
+    await chatReply(
+      q("thanks"),
+      {
+        llm: cloud,
+        logger,
+        timeZone: "UTC",
+        now: () => now,
+        history: async () => [
+          { question: "what was that OTP?", answer: "Here it is: 482913", at: now },
+        ],
+      },
+      signal,
+    );
+    assert.equal(cloud.requests[0]?.messages[2]?.content, "Here it is: [OTP_1]");
+  });
+
+  it("puts details back before the answer is formatted for WhatsApp", async () => {
+    const cloud = {
+      ...createStubLlm({ reply: () => "[PHONE_1](https://wa.me/[PHONE_1])" }),
+      locality: "cloud" as const,
+    };
+    const reply = await chatReply(
+      q("link?"),
+      {
+        llm: cloud,
+        logger,
+        timeZone: "UTC",
+        now: () => now,
+        history: async () => [{ question: "number?", answer: "9876543210", at: now }],
+      },
+      signal,
+    );
+    assert.doesNotMatch(reply.text, /PHONE_1/);
+  });
+
   it("sends everything as it is to a local model", async () => {
     const local = createStubLlm({ reply: () => "ok" });
     await chatReply(

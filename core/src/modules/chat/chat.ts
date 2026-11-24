@@ -149,7 +149,9 @@ export async function chatReply(
   };
 
   const history = (await recentHistory(question, options)).map((exchange) =>
-    privacy ? { ...exchange, answer: privacy.mask(exchange.answer) } : exchange,
+    privacy
+      ? { ...exchange, answer: privacy.mask(exchange.answer, { context: exchange.question }) }
+      : exchange,
   );
   let completion: Completion;
   try {
@@ -167,9 +169,7 @@ export async function chatReply(
   const masked = privacy?.counts() ?? {};
   if (Object.keys(masked).length > 0)
     options.logger.info({ masked }, "private details were masked");
-  const answer = privacy
-    ? privacy.restore(toWhatsApp(completion.text))
-    : toWhatsApp(completion.text);
+  const answer = toWhatsApp(privacy ? privacy.restore(completion.text) : completion.text);
   const ranOut = completion.finishReason === "length";
   if (!answer) {
     return {
