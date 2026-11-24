@@ -8,6 +8,7 @@ import {
   SendFailedError,
 } from "../../providers/channel/index.js";
 import { LlmError } from "../../providers/llm/index.js";
+import type { ChatAnswer } from "../chat/index.js";
 import { createMemoryPause } from "../pause/index.js";
 import { isBuiltinCommand, parseSlash } from "./builtins.js";
 import { startCommands } from "./commands.js";
@@ -61,7 +62,7 @@ describe("reading a slash command", () => {
 function kaya(
   options: {
     status?: () => Promise<string>;
-    chat?: (message: IncomingMessage, signal: AbortSignal) => Promise<string>;
+    chat?: (message: IncomingMessage, signal: AbortSignal) => Promise<ChatAnswer>;
     fail?: (text: string) => Error | undefined;
   } = {},
 ) {
@@ -80,7 +81,8 @@ function kaya(
     logger,
     pause,
     status: options.status ?? (async () => "status text"),
-    chat: options.chat ?? (async (message) => `You said: ${message.text}`),
+    chat:
+      options.chat ?? (async (message) => ({ text: `You said: ${message.text}`, remember: true })),
   });
   const say = async (text: string, sentAt?: Date, id?: string) => {
     const before = channel.sent.length;
@@ -177,7 +179,9 @@ describe("built-in commands", () => {
 
   it("does not ask the model again for a retried message that was already answered", async () => {
     let calls = 0;
-    const { channel, say } = kaya({ chat: async () => `answer ${++calls}` });
+    const { channel, say } = kaya({
+      chat: async () => ({ text: `answer ${++calls}`, remember: true }),
+    });
     await channel.start();
     assert.deepEqual(await say("what is 2+2", undefined, "3EB0CHAT"), ["answer 1"]);
     assert.deepEqual(await say("what is 2+2", undefined, "3EB0CHAT"), []);
@@ -189,7 +193,7 @@ describe("built-in commands", () => {
     const { channel } = kaya({
       chat: async () => {
         calls++;
-        return "late answer";
+        return { text: "late answer", remember: true };
       },
     });
     await channel.start();
@@ -250,7 +254,7 @@ describe("plain messages", () => {
     const { channel, say } = kaya({
       chat: async (message, signal) => {
         asked.push({ text: message.text, signal });
-        return "Four.";
+        return { text: "Four.", remember: true };
       },
     });
     await channel.start();
@@ -264,7 +268,7 @@ describe("plain messages", () => {
     const { channel, say } = kaya({
       chat: async () => {
         asked++;
-        return "answer";
+        return { text: "answer", remember: true };
       },
     });
     await channel.start();

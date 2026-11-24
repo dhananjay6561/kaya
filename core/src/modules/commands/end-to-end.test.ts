@@ -54,7 +54,7 @@ describe("a command, end to end", { skip: !testDatabaseUrl && "TEST_DATABASE_URL
       logger,
       pause: createPause(db.pool),
       status: async () => "ok",
-      chat: async (message) => `You said: ${message.text}`,
+      chat: async (message) => ({ text: `You said: ${message.text}`, remember: true }),
     });
     await channel.start();
     consumer.start();

@@ -6,8 +6,7 @@ import {
   SendFailedError,
 } from "../../providers/channel/index.js";
 import { LlmError } from "../../providers/llm/index.js";
-import { clipTo } from "../chat/index.js";
-import { chatAnswerKey } from "../context/index.js";
+import { type ChatAnswer, clipTo } from "../chat/index.js";
 import type { PauseSwitch } from "../pause/index.js";
 import { answerSlash, parseSlash } from "./builtins.js";
 
@@ -16,7 +15,7 @@ export type CommandsOptions = Readonly<{
   logger: Logger;
   pause: PauseSwitch;
   status(): Promise<string>;
-  chat(message: IncomingMessage, signal: AbortSignal): Promise<string>;
+  chat(message: IncomingMessage, signal: AbortSignal): Promise<ChatAnswer>;
   maxAgeMs?: number;
   silentAfterMs?: number;
   minReplyTtlMs?: number;
@@ -82,13 +81,16 @@ export function startCommands(options: CommandsOptions): () => void {
     const answer = {
       idempotencyKey: slash
         ? `command:${message.id}:${slash.kind}:${slash.name}`
-        : chatAnswerKey(message.id),
+        : `command:${message.id}:chat`,
       replyTo: message.id,
     };
-    const produce = async (): Promise<string> => {
+    const produce = async (): Promise<ChatAnswer> => {
       try {
         return slash
-          ? await answerSlash(slash, message.id, { pause, status: options.status })
+          ? {
+              text: await answerSlash(slash, message.id, { pause, status: options.status }),
+              remember: false,
+            }
           : await options.chat(message, signal);
       } catch (err) {
         if (signal.aborted || isConnectionError(err)) throw err;
@@ -104,14 +106,19 @@ export function startCommands(options: CommandsOptions): () => void {
       }
     };
     try {
-      if (await channel.follow(answer.idempotencyKey, { signal })) return;
+      const earlier = await channel.follow(answer.idempotencyKey, { signal });
+      if (earlier) return slash ? undefined : { answerId: earlier.id };
       if (Date.now() - message.sentAt.getTime() > maxAgeMs) {
         throw new SendFailedError(answer.idempotencyKey, "expired");
       }
-      const text = await produce();
+      const produced = await produce();
       // The answer is worth sending until the command itself would count as too old.
       const ttlMs = Math.max(minReplyTtlMs, maxAgeMs - (Date.now() - message.sentAt.getTime()));
-      await channel.send({ ...answer, text }, { signal, ttlMs, textMayChange: true });
+      const sent = await channel.send(
+        { ...answer, text: produced.text },
+        { signal, ttlMs, textMayChange: true },
+      );
+      return produced.remember ? { answerId: sent.id } : undefined;
     } catch (err) {
       if (!(err instanceof SendFailedError) || !neverSent.has(err.code)) throw err;
       logger.warn(
