@@ -158,3 +158,38 @@ func TestNeverPutsSecretsInTheError(t *testing.T) {
 		t.Fatalf("secret leaked or no error: %v", err)
 	}
 }
+
+func TestTimeZonesAreFoundWhateverTheirCase(t *testing.T) {
+	for _, c := range []struct{ given, want string }{
+		{"Asia/Kolkata", "Asia/Kolkata"},
+		{"asia/kolkata", "Asia/Kolkata"},
+		{" ASIA/KOLKATA ", "Asia/Kolkata"},
+		{"utc", "UTC"},
+		{"america/new_york", "America/New_York"},
+		{"America/Port-au-Prince", "America/Port-au-Prince"},
+		{"US/Eastern", "US/Eastern"},
+		{"Etc/GMT+5", "Etc/GMT+5"},
+	} {
+		if got := load(t, env(valid, "TIMEZONE", c.given)).TimeZone; got != c.want {
+			t.Errorf("%q: got %q, want %q", c.given, got, c.want)
+		}
+	}
+	for _, bad := range []string{"Local", "local", "India/Delhi", "+05:30", "asia"} {
+		if got := problems(t, env(valid, "TIMEZONE", bad)); !slices.Equal(got, []string{"TIMEZONE: must be an IANA time zone such as Asia/Kolkata"}) {
+			t.Errorf("%q: got %v", bad, got)
+		}
+	}
+}
+
+func TestDatabaseURLsAreTrimmedAndSocketsAllowed(t *testing.T) {
+	if got := load(t, env(valid, "DATABASE_URL", "  postgres://localhost/kaya  ")).DatabaseURL; got != "postgres://localhost/kaya" {
+		t.Fatalf("got %q", got)
+	}
+	load(t, env(valid, "DATABASE_URL", "postgres:///kaya?host=/var/run/postgresql"))
+	if got := load(t, env(valid, "CORE_DATABASE_URL", "  ")).DatabaseURL; got != valid["DATABASE_URL"] {
+		t.Fatalf("an empty CORE_DATABASE_URL should fall back to DATABASE_URL, got %q", got)
+	}
+	if got := load(t, env(valid, "CORE_PORT", " 8080 ")).Port; got != 8080 {
+		t.Fatalf("got %d", got)
+	}
+}

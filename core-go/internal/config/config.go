@@ -86,18 +86,18 @@ func Load(getenv func(string) string, baseDir string) (Config, error) {
 	}
 
 	dbKey := "CORE_DATABASE_URL"
-	if getenv(dbKey) == "" {
+	if strings.TrimSpace(getenv(dbKey)) == "" {
 		dbKey = "DATABASE_URL"
 	}
-	cfg.DatabaseURL = getenv(dbKey)
+	cfg.DatabaseURL = strings.TrimSpace(getenv(dbKey))
 	switch u, err := url.Parse(cfg.DatabaseURL); {
 	case cfg.DatabaseURL == "":
 		fail("DATABASE_URL", "required")
-	case err != nil || (u.Scheme != "postgres" && u.Scheme != "postgresql") || u.Host == "":
+	case err != nil || (u.Scheme != "postgres" && u.Scheme != "postgresql"):
 		fail(dbKey, "must be a postgres:// URL")
 	}
 
-	if raw := getenv("CORE_PORT"); raw != "" {
+	if raw := strings.TrimSpace(getenv("CORE_PORT")); raw != "" {
 		port, err := strconv.Atoi(raw)
 		switch {
 		case err != nil:
@@ -109,7 +109,9 @@ func Load(getenv func(string) string, baseDir string) (Config, error) {
 		}
 	}
 
-	if _, err := time.LoadLocation(cfg.TimeZone); err != nil || cfg.TimeZone == "Local" {
+	if zone, ok := canonicalZone(cfg.TimeZone); ok {
+		cfg.TimeZone = zone
+	} else {
 		fail("TIMEZONE", "must be an IANA time zone such as Asia/Kolkata")
 	}
 
@@ -135,6 +137,59 @@ func Load(getenv func(string) string, baseDir string) (Config, error) {
 		cfg.DataDir = filepath.Join(baseDir, cfg.DataDir)
 	}
 	return cfg, nil
+}
+
+// canonicalZone finds an IANA zone whatever its case, and gives its proper spelling, so a value
+// accepted on a Mac (whose file system ignores case) is accepted the same way in a container.
+func canonicalZone(name string) (string, bool) {
+	name = strings.TrimSpace(name)
+	if name == "" || strings.EqualFold(name, "local") {
+		return "", false
+	}
+	for _, short := range []string{"UTC", "GMT"} {
+		if strings.EqualFold(name, short) {
+			return short, true
+		}
+	}
+	for _, candidate := range []string{name, titled(name), strings.ToUpper(name)} {
+		if loc, err := time.LoadLocation(candidate); err == nil && validZoneName(candidate) {
+			return loc.String(), true
+		}
+	}
+	return "", false
+}
+
+// validZoneName accepts the way IANA spells zones: each part starts with a capital and has small
+// letters too ("Asia/Kolkata"), unless it is a short code or carries digits ("US", "Etc/GMT+5").
+func validZoneName(name string) bool {
+	for part := range strings.SplitSeq(name, "/") {
+		switch {
+		case part == "" || part[0] < 'A' || part[0] > 'Z':
+			return false
+		case strings.ToUpper(part) != part:
+		case len(part) <= 3 || strings.ContainsAny(part, "0123456789"):
+		default:
+			return false
+		}
+	}
+	return true
+}
+
+func titled(name string) string {
+	parts := strings.Split(name, "/")
+	for i, part := range parts {
+		words := strings.FieldsFunc(part, func(r rune) bool { return r == '_' || r == '-' })
+		seps := strings.FieldsFunc(part, func(r rune) bool { return r != '_' && r != '-' })
+		var b strings.Builder
+		for j, word := range words {
+			b.WriteString(strings.ToUpper(word[:1]) + strings.ToLower(word[1:]))
+			if j < len(seps) {
+				b.WriteString(seps[j])
+			}
+		}
+		parts[i] = b.String()
+	}
+	return strings.Join(parts, "/")
 }
 
 func orDefault(value, fallback string) string {
