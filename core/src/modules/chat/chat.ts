@@ -8,6 +8,7 @@ import {
   type ReasoningEffort,
 } from "../../providers/llm/index.js";
 import { buildContext, type Exchange } from "../context/index.js";
+import { createMaskSession } from "../masking/index.js";
 
 export type Question = Readonly<{ id: string; text: string; sentAt: Date }>;
 
@@ -45,7 +46,7 @@ export function systemPrompt(now: Date, timeZone: string, locality: Locality = "
     "About you, so you never have to guess:",
     locality === "local"
       ? "- You run entirely on their own computer: your memory is their own database, and the model answering is on their machine too."
-      : "- Your memory is stored on their own computer, in their own database. To answer, the conversation you see here is sent to an AI service in the cloud.",
+      : "- Your memory is stored on their own computer, in their own database. To answer, the conversation you see here is sent to an AI service in the cloud, so private details in it (phone numbers, emails, codes, account numbers, addresses) are hidden behind placeholders such as [PHONE_1]. When you refer to one, write the placeholder exactly as it is; they see the real value.",
     "- There are no sessions and nothing resets: every message they have sent you and every answer is stored for good, whatever time passes. You see only the most recent part of it here, and earlier messages are marked with how long ago they were sent; treat old ones as background, not as the current topic.",
     "- If they ask you to remember something: it is saved in your conversation history, but you cannot yet pin it as a lasting fact, so after many more messages you may no longer see it. Say that plainly.",
     "- You are being built step by step, and for now you can only talk. These you cannot do yet, so never offer them, promise them or suggest you will: reminders, alarms, notes, to-do lists, reading their other WhatsApp chats, searching the web, opening links or files, sending messages for them. If they ask for one, say plainly that you can't do it yet.",
@@ -116,6 +117,7 @@ export async function chatReply(
 ): Promise<ChatAnswer> {
   const now = options.now?.() ?? new Date();
   const { llm } = options;
+  const privacy = llm.locality === "cloud" ? createMaskSession() : undefined;
   const ask = async (history: readonly Exchange[], effort: ReasoningEffort = "medium") => {
     const context = buildContext({
       system: systemPrompt(now, options.timeZone, llm.locality),
@@ -146,7 +148,9 @@ export async function chatReply(
     return completion;
   };
 
-  const history = await recentHistory(question, options);
+  const history = (await recentHistory(question, options)).map((exchange) =>
+    privacy ? { ...exchange, answer: privacy.mask(exchange.answer) } : exchange,
+  );
   let completion: Completion;
   try {
     completion = await ask(history);
@@ -160,7 +164,12 @@ export async function chatReply(
     completion = await ask(history, "low");
   }
 
-  const answer = toWhatsApp(completion.text);
+  const masked = privacy?.counts() ?? {};
+  if (Object.keys(masked).length > 0)
+    options.logger.info({ masked }, "private details were masked");
+  const answer = privacy
+    ? privacy.restore(toWhatsApp(completion.text))
+    : toWhatsApp(completion.text);
   const ranOut = completion.finishReason === "length";
   if (!answer) {
     return {

@@ -19,7 +19,12 @@ describe("system prompt", () => {
   it("tells the truth about where the conversation goes", () => {
     assert.match(systemPrompt(now, "UTC", "cloud"), /sent to an AI service in the cloud/);
     assert.doesNotMatch(systemPrompt(now, "UTC", "cloud"), /run entirely on their own computer/);
+    assert.match(
+      systemPrompt(now, "UTC", "cloud"),
+      /hidden behind placeholders such as \[PHONE_1\]/,
+    );
     assert.match(systemPrompt(now, "UTC", "local"), /run entirely on their own computer/);
+    assert.doesNotMatch(systemPrompt(now, "UTC", "local"), /placeholders/);
     assert.doesNotMatch(systemPrompt(now, "UTC", "local"), /in the cloud/);
   });
 
@@ -176,6 +181,50 @@ describe("chat reply", () => {
       llm.requests[0]?.messages.slice(1).map((m) => m.content),
       ["(sent just now) short", "reply", "next?"],
     );
+  });
+
+  it("masks what the owner did not type before it goes to a cloud model, and restores the answer", async () => {
+    const history = async () => [
+      {
+        question: "what's Rahul's number?",
+        answer: "Rahul is on 9876543210, mail rahul@x.com",
+        at: now,
+      },
+    ];
+    const cloud = {
+      ...createStubLlm({ reply: () => "Call [PHONE_1] or mail [EMAIL_1]." }),
+      locality: "cloud" as const,
+    };
+    const reply = await chatReply(
+      q("my own number is 9123456780, and Rahul's again?"),
+      { llm: cloud, logger, timeZone: "UTC", now: () => now, history },
+      signal,
+    );
+    const sent = cloud.requests[0]?.messages ?? [];
+    assert.equal(sent[2]?.content, "Rahul is on [PHONE_1], mail [EMAIL_1]");
+    assert.equal(
+      sent[3]?.content,
+      "my own number is 9123456780, and Rahul's again?",
+      "the owner's own words go as written",
+    );
+    assert.doesNotMatch(JSON.stringify(sent), /9876543210|rahul@x\.com/);
+    assert.equal(reply.text, "Call 9876543210 or mail rahul@x.com.");
+  });
+
+  it("sends everything as it is to a local model", async () => {
+    const local = createStubLlm({ reply: () => "ok" });
+    await chatReply(
+      q("again?"),
+      {
+        llm: local,
+        logger,
+        timeZone: "UTC",
+        now: () => now,
+        history: async () => [{ question: "number?", answer: "9876543210", at: now }],
+      },
+      signal,
+    );
+    assert.equal(local.requests[0]?.messages[2]?.content, "9876543210");
   });
 
   it("says so when the model gives nothing back", async () => {
