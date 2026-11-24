@@ -36,8 +36,30 @@ func TestOpenKeepsSettingsFromTheURL(t *testing.T) {
 	defer defaults.Close()
 	cfg = defaults.pool.Config()
 	if cfg.MaxConns != 10 || cfg.ConnConfig.ConnectTimeout != 5*time.Second ||
-		cfg.ConnConfig.RuntimeParams["application_name"] != "kaya-gateway" {
+		cfg.ConnConfig.RuntimeParams["application_name"] != "kaya" ||
+		cfg.ConnConfig.RuntimeParams["search_path"] != "" {
 		t.Fatalf("defaults not applied: max=%d timeout=%s", cfg.MaxConns, cfg.ConnConfig.ConnectTimeout)
+	}
+}
+
+func TestOpenAppliesOptionsUnlessTheURLSetsThem(t *testing.T) {
+	db, err := Open("postgres://127.0.0.1:1/kaya", WithAppName("kaya-core"), WithSearchPath("whatsmeow,public"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer db.Close()
+	params := db.pool.Config().ConnConfig.RuntimeParams
+	if params["application_name"] != "kaya-core" || params["search_path"] != "whatsmeow,public" {
+		t.Fatalf("options not applied: %v", params)
+	}
+
+	urlWins, err := Open("postgres://127.0.0.1:1/kaya?application_name=probe", WithAppName("kaya-core"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer urlWins.Close()
+	if got := urlWins.pool.Config().ConnConfig.RuntimeParams["application_name"]; got != "probe" {
+		t.Fatalf("the URL should win, got %q", got)
 	}
 }
 

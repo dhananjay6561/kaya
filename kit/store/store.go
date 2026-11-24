@@ -1,4 +1,4 @@
-// Package store owns the gateway's connection to Postgres.
+// Package store owns a Kaya service's connection to Postgres.
 package store
 
 import (
@@ -20,8 +20,26 @@ type DB struct {
 	dsn  string
 }
 
+// Option changes how Open sets up the pool.
+type Option func(*settings)
+
+type settings struct {
+	appName    string
+	searchPath string
+}
+
+// WithAppName names the connections in pg_stat_activity, unless the URL already names them.
+func WithAppName(name string) Option { return func(s *settings) { s.appName = name } }
+
+// WithSearchPath sets the schemas unqualified names resolve in, unless the URL already sets it.
+func WithSearchPath(path string) Option { return func(s *settings) { s.searchPath = path } }
+
 // Open builds a connection pool for url. It does not connect until the first query.
-func Open(dsn string) (*DB, error) {
+func Open(dsn string, options ...Option) (*DB, error) {
+	chosen := settings{appName: "kaya"}
+	for _, option := range options {
+		option(&chosen)
+	}
 	cfg, err := pgxpool.ParseConfig(dsn)
 	if err != nil {
 		return nil, fmt.Errorf("parse DATABASE_URL: %w", err)
@@ -39,11 +57,11 @@ func Open(dsn string) (*DB, error) {
 	if !set["connect_timeout"] {
 		cfg.ConnConfig.ConnectTimeout = 5 * time.Second
 	}
-	if !set["search_path"] {
-		cfg.ConnConfig.RuntimeParams["search_path"] = "whatsmeow,public"
+	if !set["search_path"] && chosen.searchPath != "" {
+		cfg.ConnConfig.RuntimeParams["search_path"] = chosen.searchPath
 	}
 	if !set["application_name"] {
-		cfg.ConnConfig.RuntimeParams["application_name"] = "kaya-gateway"
+		cfg.ConnConfig.RuntimeParams["application_name"] = chosen.appName
 	}
 
 	pool, err := pgxpool.NewWithConfig(context.Background(), cfg)

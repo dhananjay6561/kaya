@@ -13,9 +13,9 @@ import (
 
 	"go.mau.fi/whatsmeow"
 
-	"github.com/dhananjay6561/kaya/gateway/internal/store"
 	"github.com/dhananjay6561/kaya/gateway/internal/testdb"
 	"github.com/dhananjay6561/kaya/kit/logging"
+	"github.com/dhananjay6561/kaya/kit/store"
 )
 
 type fakeDownloader struct {

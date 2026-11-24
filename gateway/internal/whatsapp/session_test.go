@@ -10,8 +10,8 @@ import (
 	"go.mau.fi/whatsmeow/types"
 	waLog "go.mau.fi/whatsmeow/util/log"
 
-	"github.com/dhananjay6561/kaya/gateway/internal/store"
 	"github.com/dhananjay6561/kaya/gateway/internal/testdb"
+	"github.com/dhananjay6561/kaya/kit/store"
 )
 
 func savePaired(t *testing.T, s *Sessions, jid types.JID) {

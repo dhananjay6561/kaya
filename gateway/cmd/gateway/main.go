@@ -21,16 +21,18 @@ import (
 	"github.com/dhananjay6561/kaya/gateway/internal/ingest"
 	"github.com/dhananjay6561/kaya/gateway/internal/media"
 	"github.com/dhananjay6561/kaya/gateway/internal/send"
-	"github.com/dhananjay6561/kaya/gateway/internal/store"
 	"github.com/dhananjay6561/kaya/gateway/internal/whatsapp"
 	"github.com/dhananjay6561/kaya/kit/envfile"
 	"github.com/dhananjay6561/kaya/kit/httpapi"
 	"github.com/dhananjay6561/kaya/kit/logging"
+	"github.com/dhananjay6561/kaya/kit/store"
 )
 
 var version = "dev"
 
 const shutdownGrace = 10 * time.Second
+
+var dbSettings = []store.Option{store.WithAppName("kaya-gateway"), store.WithSearchPath("whatsmeow,public")}
 
 func main() {
 	if len(os.Args) > 1 {
@@ -93,7 +95,7 @@ func run(cfg config.Config, logger *slog.Logger) error {
 		return err
 	}
 
-	db, err := store.Open(cfg.DatabaseURL)
+	db, err := store.Open(cfg.DatabaseURL, dbSettings...)
 	if err != nil {
 		return err
 	}
@@ -174,7 +176,7 @@ func mediaCommand(args []string) error {
 	}
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer stop()
-	db, err := store.Open(cfg.DatabaseURL)
+	db, err := store.Open(cfg.DatabaseURL, dbSettings...)
 	if err != nil {
 		return err
 	}
@@ -206,7 +208,7 @@ func pair(args []string) error {
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer stop()
 
-	db, err := store.Open(cfg.DatabaseURL)
+	db, err := store.Open(cfg.DatabaseURL, dbSettings...)
 	if err != nil {
 		return err
 	}

@@ -9,8 +9,8 @@ import (
 
 	"github.com/dhananjay6561/kaya/contracts"
 	"github.com/dhananjay6561/kaya/gateway/internal/events"
-	"github.com/dhananjay6561/kaya/gateway/internal/store"
 	"github.com/dhananjay6561/kaya/gateway/internal/testdb"
+	"github.com/dhananjay6561/kaya/kit/store"
 )
 
 type fixture struct {
