@@ -176,7 +176,7 @@ describe("command inbox", { skip: !testDatabaseUrl && "TEST_DATABASE_URL not set
   });
 
   function started(
-    deliver: (message: IncomingMessage, signal: AbortSignal) => Promise<void>,
+    deliver: (message: IncomingMessage, signal: AbortSignal) => Promise<unknown>,
     options: {
       maxAttempts?: number;
       maxPerMinute?: number;
