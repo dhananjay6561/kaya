@@ -18,9 +18,14 @@ describe("system prompt", () => {
 
   it("says what Kaya cannot do yet, so it does not pretend", () => {
     const prompt = systemPrompt(now, "UTC");
-    assert.match(prompt, /cannot yet read their other chats, search the web/);
-    assert.match(prompt, /recent conversation in this chat, but not older messages/);
+    assert.match(prompt, /cannot yet read their other WhatsApp chats, search the web/);
+    assert.match(prompt, /remember your conversations with them for good/);
+    assert.match(prompt, /run on their own computer/);
     assert.match(prompt, /cannot check anything live/);
+    assert.match(prompt, /Never make up facts/);
+    assert.match(prompt, /Read past typos and autocorrect/);
+    assert.match(prompt, /never offer or promise what you cannot do yet/);
+    assert.match(prompt, /If they write Hinglish, answer in Hinglish/);
     assert.match(prompt, /Never claim to have done something you did not do/);
   });
 });
@@ -97,7 +102,7 @@ describe("WhatsApp formatting", () => {
 });
 
 describe("chat reply", () => {
-  it("asks the routine model with the system prompt and the message", async () => {
+  it("asks the stronger model with the system prompt and the message", async () => {
     const llm = createStubLlm({ reply: () => "**Hi!** I'm Kaya." });
     const reply = await chatReply(
       q("who are you?"),
@@ -106,7 +111,9 @@ describe("chat reply", () => {
     );
     assert.deepEqual(reply, { text: "*Hi!* I'm Kaya.", remember: true });
     const request = llm.requests[0];
-    assert.equal(request?.tier, "routine");
+    assert.equal(request?.tier, "heavy");
+    assert.equal(request?.effort, "medium");
+    assert.equal(request?.maxTokens, 2_048);
     assert.equal(request?.messages.length, 2);
     assert.equal(request?.messages[0]?.role, "system");
     assert.deepEqual(request?.messages[1], { role: "user", content: "who are you?" });
