@@ -215,6 +215,27 @@ describe("gateway channel", { skip: !testDatabaseUrl && "TEST_DATABASE_URL not s
     assert.equal((await queued()).length, 1);
   });
 
+  it("keeps the text queued first when told the text may change, but still checks the reply", async () => {
+    await linked();
+    const c = await channel();
+    const first = c.send({ idempotencyKey: "status", text: "up 1m" });
+    await eventually("the queued request", async () => (await queued()).length === 1);
+    const retried = c.send({ idempotencyKey: "status", text: "up 2m" }, { textMayChange: true });
+    await assert.rejects(
+      c.send(
+        { idempotencyKey: "status", text: "up 2m", replyTo: "3EB0OTHER" },
+        { textMayChange: true },
+      ),
+      IdempotencyKeyReusedError,
+    );
+    await gatewaySends(requestIdFor("status"), "3EB0STATUS");
+    assert.equal((await retried).id, "3EB0STATUS");
+    assert.equal((await first).id, "3EB0STATUS");
+    const rows = await queued();
+    assert.equal(rows.length, 1);
+    assert.deepEqual(rows[0]?.payload.content, { type: "text", text: "up 1m" });
+  });
+
   it("stops waiting even when the caller gives up in the middle of a check", async () => {
     await linked();
     const giveUp = new AbortController();

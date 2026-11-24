@@ -117,7 +117,11 @@ export function createGatewayChannel(deps: GatewayChannelDeps): ChatChannel {
     if (!started) throw new ChannelNotStartedError("gateway");
   };
 
-  async function outcome(id: string, message: OutgoingMessage): Promise<SentMessage | undefined> {
+  async function outcome(
+    id: string,
+    message: OutgoingMessage,
+    textMayChange: boolean,
+  ): Promise<SentMessage | undefined> {
     const { rows } = await pool.query<Row>(
       `SELECT state, wa_id, error, finished_at,
               payload -> 'content' ->> 'text' AS text,
@@ -129,7 +133,8 @@ export function createGatewayChannel(deps: GatewayChannelDeps): ChatChannel {
     );
     const row = rows[0];
     if (!row) return undefined;
-    if (row.text !== message.text.trim() || row.reply_to !== (message.replyTo ?? null)) {
+    const textDiffers = row.text !== message.text.trim() && !textMayChange;
+    if (textDiffers || row.reply_to !== (message.replyTo ?? null)) {
       throw new IdempotencyKeyReusedError(id);
     }
     if (row.state === "sent" && row.wa_id && row.finished_at) {
@@ -203,7 +208,8 @@ export function createGatewayChannel(deps: GatewayChannelDeps): ChatChannel {
       if (message.text.trim() === "") throw new Error("message text is empty");
 
       const id = requestIdFor(message.idempotencyKey);
-      const earlier = await outcome(id, message);
+      const textMayChange = options.textMayChange ?? false;
+      const earlier = await outcome(id, message, textMayChange);
       if (earlier) return earlier;
 
       const own = (await readConnection(pool))?.ownJid;
@@ -227,7 +233,7 @@ export function createGatewayChannel(deps: GatewayChannelDeps): ChatChannel {
 
       for (;;) {
         signal.throwIfAborted();
-        const sent = await outcome(id, message);
+        const sent = await outcome(id, message, textMayChange);
         if (sent) return sent;
         await nudge(id, pollMs, signal);
       }

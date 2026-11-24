@@ -19,6 +19,8 @@ export type SendOptions = Readonly<{
   signal?: AbortSignal;
   /** How long the message stays worth sending. After that it is dropped, not sent late. */
   ttlMs?: number;
+  /** A repeat under the same idempotency key may carry other text; the text queued first is kept. */
+  textMayChange?: boolean;
 }>;
 
 export type SentMessage = Readonly<{ id: string; sentAt: Date }>;
