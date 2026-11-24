@@ -4,7 +4,7 @@ import { createContracts } from "./contracts/index.js";
 import { createDb } from "./lib/db.js";
 import { startHttpServer } from "./lib/http-server.js";
 import { createLogger, type Logger } from "./lib/logger.js";
-import { startCommands } from "./modules/commands/index.js";
+import { isBuiltinCommand, startCommands } from "./modules/commands/index.js";
 import { createEventConsumer, createGatewayEvents } from "./modules/gateway/index.js";
 import { createHealthRoute } from "./modules/health/index.js";
 import { createPause } from "./modules/pause/index.js";
@@ -49,6 +49,7 @@ async function run(config: Config, logger: Logger): Promise<void> {
       results: gatewayEvents,
       incoming: gatewayEvents,
       logger,
+      exemptFromCap: isBuiltinCommand,
     },
   });
   const pause = createPause(db.pool);
