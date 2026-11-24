@@ -343,7 +343,7 @@ describe("command inbox", { skip: !testDatabaseUrl && "TEST_DATABASE_URL not set
     );
   });
 
-  it("stores the answer a handler reports, and nothing for one that reports none", async () => {
+  it("keeps the exchange a handler reports, and nothing for one that reports none", async () => {
     const answered = await message({ body: "a question" });
     const notice = await message({ body: "/status" });
     await record(answered);
@@ -354,13 +354,13 @@ describe("command inbox", { skip: !testDatabaseUrl && "TEST_DATABASE_URL not set
     await eventually("both to be settled", async () =>
       (await commands()).every((c) => !c.endsWith("pending")),
     );
-    const { rows } = await testDb.admin.query<{ answer_wa_id: string | null }>(
-      "SELECT answer_wa_id FROM commands ORDER BY id",
-    );
-    assert.deepEqual(
-      rows.map((row) => row.answer_wa_id),
-      ["3EB0THEANSWER", null],
-    );
+    const { rows } = await testDb.admin.query<{
+      question_message_id: string;
+      answer_wa_id: string;
+    }>("SELECT question_message_id::text, answer_wa_id FROM exchanges");
+    assert.deepEqual(rows, [
+      { question_message_id: String(answered.message_id), answer_wa_id: "3EB0THEANSWER" },
+    ]);
   });
 
   it("decides urgency when a command is recorded, not when it runs", async () => {

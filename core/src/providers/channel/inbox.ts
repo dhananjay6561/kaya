@@ -86,8 +86,14 @@ export function createInbox(options: InboxOptions): Inbox {
 
   const finish = (id: string, error?: string, answerWaId?: string) =>
     pool.query(
-      `UPDATE commands SET state = $2, error = $3, answer_wa_id = $4, finished_at = now()
-       WHERE id = $1 AND state = 'pending'`,
+      `WITH finished AS (
+         UPDATE commands SET state = $2, error = $3, finished_at = now()
+         WHERE id = $1 AND state = 'pending'
+         RETURNING message_id
+       )
+       INSERT INTO exchanges (question_message_id, answer_wa_id)
+       SELECT message_id, $4 FROM finished WHERE $4::text IS NOT NULL
+       ON CONFLICT (question_message_id) DO NOTHING`,
       [id, error ? "failed" : "done", error ?? null, answerWaId ?? null],
     );
 
