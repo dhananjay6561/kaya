@@ -138,12 +138,21 @@ func (db *DB) Listen(ctx context.Context, channel string, fn func()) {
 	}
 }
 
-func (db *DB) listenOnce(ctx context.Context, channel string, fn func()) error {
+// Hijack takes a connection out of the pool for good, for state that must live and die with one
+// connection, such as a session lock or a LISTEN. The caller closes it.
+func (db *DB) Hijack(ctx context.Context) (*pgx.Conn, error) {
 	pooled, err := db.pool.Acquire(ctx)
+	if err != nil {
+		return nil, err
+	}
+	return pooled.Hijack(), nil
+}
+
+func (db *DB) listenOnce(ctx context.Context, channel string, fn func()) error {
+	conn, err := db.Hijack(ctx)
 	if err != nil {
 		return err
 	}
-	conn := pooled.Hijack()
 	defer func() { _ = conn.Close(context.Background()) }()
 	name := conn.Config().RuntimeParams["application_name"] + "-listen"
 	if _, err := conn.Exec(ctx, "SELECT set_config('application_name', $1, false)", name); err != nil {
