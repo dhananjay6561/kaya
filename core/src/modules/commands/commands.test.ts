@@ -14,7 +14,11 @@ import { clip, startCommands } from "./commands.js";
 const logger = createLogger({ level: "silent", service: "core", version: "test" });
 const minute = 60_000;
 const ago = (ms: number) => new Date(Date.now() - ms);
-const deps = () => ({ pause: createMemoryPause(), status: async () => "all good" });
+const deps = () => ({
+  pause: createMemoryPause(),
+  status: async () => "all good",
+  chat: async (text: string) => `You said: ${clip(text)}`,
+});
 
 function watched(fail?: (message: OutgoingMessage) => Error | undefined) {
   const channel = createStubChannel();

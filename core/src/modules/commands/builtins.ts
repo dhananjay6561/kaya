@@ -45,7 +45,7 @@ const helpText = [
   "/status: how Kaya is doing",
   "/pause: stop answering until /resume",
   "/resume: start answering again",
-  "Anything else you send here I repeat back, for now.",
+  "Anything else you send here goes to an AI model, which answers it on its own: it does not see your other chats or earlier messages.",
 ].join("\n");
 
 export async function answerSlash(

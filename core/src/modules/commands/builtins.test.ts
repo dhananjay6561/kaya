@@ -4,9 +4,9 @@ import { createLogger } from "../../lib/logger.js";
 import {
   type ChatChannel,
   createStubChannel,
-  IdempotencyKeyReusedError,
   SendFailedError,
 } from "../../providers/channel/index.js";
+import { LlmError } from "../../providers/llm/index.js";
 import { createMemoryPause } from "../pause/index.js";
 import { isBuiltinCommand, parseSlash } from "./builtins.js";
 import { startCommands } from "./commands.js";
@@ -58,7 +58,11 @@ describe("reading a slash command", () => {
 });
 
 function kaya(
-  options: { status?: () => Promise<string>; fail?: (text: string) => Error | undefined } = {},
+  options: {
+    status?: () => Promise<string>;
+    chat?: (text: string, signal: AbortSignal) => Promise<string>;
+    fail?: (text: string) => Error | undefined;
+  } = {},
 ) {
   const channel = createStubChannel();
   const pause = createMemoryPause();
@@ -75,6 +79,7 @@ function kaya(
     logger,
     pause,
     status: options.status ?? (async () => "status text"),
+    chat: options.chat ?? (async (text) => `You said: ${text}`),
   });
   const say = async (text: string, sentAt?: Date, id?: string) => {
     const before = channel.sent.length;
@@ -169,15 +174,12 @@ describe("built-in commands", () => {
     assert.equal((await pause.state()).paused, true);
   });
 
-  it("still refuses a changed echo under the same command", async () => {
-    const { channel, say } = kaya();
+  it("keeps the first answer when a retried message is answered differently", async () => {
+    let calls = 0;
+    const { channel, say } = kaya({ chat: async () => `answer ${++calls}` });
     await channel.start();
-    await say("first words", undefined, "3EB0ECHO");
-    await assert.rejects(
-      say("other words", undefined, "3EB0ECHO"),
-      (err: unknown) =>
-        err instanceof AggregateError && err.errors[0] instanceof IdempotencyKeyReusedError,
-    );
+    assert.deepEqual(await say("what is 2+2", undefined, "3EB0CHAT"), ["answer 1"]);
+    assert.deepEqual(await say("what is 2+2", undefined, "3EB0CHAT"), []);
   });
 
   it("points to /status when a slash answer could not go out in time", async () => {
@@ -203,7 +205,7 @@ describe("built-in commands", () => {
     await assert.rejects(say("/status"));
     assert.deepEqual(
       channel.sent.map((m) => m.text),
-      ["Something went wrong with that command. Send /status to see how things stand."],
+      ["Something went wrong with that. Send /status to see how things stand."],
     );
   });
 
@@ -216,5 +218,63 @@ describe("built-in commands", () => {
     await channel.start();
     await assert.rejects(say("/status"));
     assert.deepEqual(channel.sent, []);
+  });
+});
+
+describe("plain messages", () => {
+  it("are answered by the model, with the message and a signal", async () => {
+    const asked: { text: string; signal: AbortSignal }[] = [];
+    const { channel, say } = kaya({
+      chat: async (text, signal) => {
+        asked.push({ text, signal });
+        return "Four.";
+      },
+    });
+    await channel.start();
+    assert.deepEqual(await say("what is 2+2"), ["Four."]);
+    assert.equal(asked[0]?.text, "what is 2+2");
+    assert.ok(asked[0]?.signal instanceof AbortSignal);
+  });
+
+  it("never reach the model while paused or when taken in late", async () => {
+    let asked = 0;
+    const { channel, say } = kaya({
+      chat: async () => {
+        asked++;
+        return "answer";
+      },
+    });
+    await channel.start();
+    await say("/pause");
+    assert.deepEqual(await say("hello"), []);
+    await say("/resume");
+    assert.match((await say("late one", ago(11 * minute)))[0] ?? "", /^I was away/);
+    assert.equal(asked, 0);
+  });
+
+  it("get a plain notice when the model fails, and the command fails with its code", async () => {
+    const cases = [
+      ["rate_limited", /^I have hit my limit with the AI service/],
+      ["auth", /refused my key/],
+      ["rejected", /turned this message down/],
+      ["timeout", /is not answering right now/],
+      ["unavailable", /is not answering right now/],
+      ["bad_response", /is not answering right now/],
+    ] as const;
+    for (const [code, notice] of cases) {
+      const { channel, say } = kaya({
+        chat: async () => {
+          throw new LlmError("groq", code);
+        },
+      });
+      await channel.start();
+      await assert.rejects(
+        say("hello"),
+        (err: unknown) => err instanceof AggregateError && err.errors[0]?.code === code,
+      );
+      assert.equal(channel.sent.length, 1, code);
+      assert.match(channel.sent[0]?.text ?? "", notice);
+      assert.match(channel.sent[0]?.idempotencyKey ?? "", /:failed$/);
+    }
   });
 });

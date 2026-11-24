@@ -5,6 +5,8 @@ import {
   type IncomingMessage,
   SendFailedError,
 } from "../../providers/channel/index.js";
+import { LlmError } from "../../providers/llm/index.js";
+import { clipTo } from "../chat/index.js";
 import type { PauseSwitch } from "../pause/index.js";
 import { answerSlash, parseSlash } from "./builtins.js";
 
@@ -13,19 +15,29 @@ export type CommandsOptions = Readonly<{
   logger: Logger;
   pause: PauseSwitch;
   status(): Promise<string>;
+  chat(text: string, signal: AbortSignal): Promise<string>;
   maxAgeMs?: number;
   silentAfterMs?: number;
   minReplyTtlMs?: number;
   noticeTtlMs?: number;
 }>;
 
-const previewLength = 1_000;
+export const clip = (text: string) => clipTo(text, 1_000);
 
-// Whole characters only: cutting an emoji in half leaves text that cannot be stored or sent.
-export function clip(text: string): string {
-  const characters = Array.from(text.toWellFormed());
-  if (characters.length <= previewLength) return characters.join("");
-  return `${characters.slice(0, previewLength).join("")}…`;
+function failureNotice(err: unknown): string {
+  if (!(err instanceof LlmError)) {
+    return "Something went wrong with that. Send /status to see how things stand.";
+  }
+  switch (err.code) {
+    case "rate_limited":
+      return "I have hit my limit with the AI service for now. Try again in a minute.";
+    case "auth":
+      return "The AI service refused my key, so I could not answer. Check GROQ_API_KEY.";
+    case "rejected":
+      return "The AI service turned this message down. Try a shorter or simpler one.";
+    default:
+      return "The AI service is not answering right now. Try again in a bit.";
+  }
 }
 
 const neverSent = new Set(["expired", "no_answer"]);
@@ -62,25 +74,25 @@ export function startCommands(options: CommandsOptions): () => void {
       return;
     }
 
+    let text: string;
+    try {
+      text = slash
+        ? await answerSlash(slash, message.id, { pause, status: options.status })
+        : await options.chat(message.text, signal);
+    } catch (err) {
+      if (signal.aborted || isConnectionError(err)) throw err;
+      await channel.send(
+        {
+          idempotencyKey: `command:${message.id}:failed`,
+          replyTo: message.id,
+          text: failureNotice(err),
+        },
+        { signal, ttlMs: noticeTtlMs },
+      );
+      throw err;
+    }
     // The answer is worth sending until the command itself would count as too old.
     const ttlMs = Math.max(minReplyTtlMs, maxAgeMs - (Date.now() - message.sentAt.getTime()));
-    let text = `You said: ${clip(message.text)}`;
-    if (slash) {
-      try {
-        text = await answerSlash(slash, message.id, { pause, status: options.status });
-      } catch (err) {
-        if (signal.aborted || isConnectionError(err)) throw err;
-        await channel.send(
-          {
-            idempotencyKey: `command:${message.id}:failed`,
-            replyTo: message.id,
-            text: "Something went wrong with that command. Send /status to see how things stand.",
-          },
-          { signal, ttlMs: noticeTtlMs },
-        );
-        throw err;
-      }
-    }
     try {
       await channel.send(
         {
@@ -88,7 +100,7 @@ export function startCommands(options: CommandsOptions): () => void {
           ...(slash ? { idempotencyKey: `command:${message.id}:${slash.kind}:${slash.name}` } : {}),
           text,
         },
-        { signal, ttlMs, textMayChange: slash !== undefined },
+        { signal, ttlMs, textMayChange: true },
       );
     } catch (err) {
       if (!(err instanceof SendFailedError) || !neverSent.has(err.code)) throw err;

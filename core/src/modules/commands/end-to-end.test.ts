@@ -49,7 +49,13 @@ describe("a command, end to end", { skip: !testDatabaseUrl && "TEST_DATABASE_URL
       logger,
       pollMs: 20,
     });
-    startCommands({ channel, logger, pause: createPause(db.pool), status: async () => "ok" });
+    startCommands({
+      channel,
+      logger,
+      pause: createPause(db.pool),
+      status: async () => "ok",
+      chat: async (text) => `You said: ${text}`,
+    });
     await channel.start();
     consumer.start();
     stop = async () => {
