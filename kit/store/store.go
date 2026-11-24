@@ -123,29 +123,41 @@ func (db *DB) InTx(ctx context.Context, fn func(pgx.Tx) error) error {
 	return pgx.BeginFunc(ctx, db.pool, fn)
 }
 
-// Listen calls fn each time a notification arrives on channel, until ctx is done. It keeps one
-// connection for this and reconnects if it is lost, so treat fn as a wake-up, not as a count.
+// Listen calls fn each time a notification arrives on channel, until ctx is done. It takes one
+// connection out of the pool for this, names it "<app>-listen" in pg_stat_activity, and closes it
+// when it stops or fails, so a subscribed connection never goes back into the pool. A lost
+// connection is replaced after a second. fn is a wake-up, not a count: it also runs once each time
+// listening (re)starts, in case something arrived while nobody was listening.
 func (db *DB) Listen(ctx context.Context, channel string, fn func()) {
 	for ctx.Err() == nil {
-		err := db.pool.AcquireFunc(ctx, func(conn *pgxpool.Conn) error {
-			if _, err := conn.Exec(ctx, "LISTEN "+pgx.Identifier{channel}.Sanitize()); err != nil {
-				return err
-			}
-			fn()
-			for {
-				if _, err := conn.Conn().WaitForNotification(ctx); err != nil {
-					return err
-				}
-				fn()
-			}
-		})
-		if err == nil || ctx.Err() != nil {
-			return
-		}
+		_ = db.listenOnce(ctx, channel, fn)
 		select {
 		case <-ctx.Done():
-		case <-time.After(5 * time.Second):
+		case <-time.After(time.Second):
 		}
+	}
+}
+
+func (db *DB) listenOnce(ctx context.Context, channel string, fn func()) error {
+	pooled, err := db.pool.Acquire(ctx)
+	if err != nil {
+		return err
+	}
+	conn := pooled.Hijack()
+	defer func() { _ = conn.Close(context.Background()) }()
+	name := conn.Config().RuntimeParams["application_name"] + "-listen"
+	if _, err := conn.Exec(ctx, "SELECT set_config('application_name', $1, false)", name); err != nil {
+		return err
+	}
+	if _, err := conn.Exec(ctx, "LISTEN "+pgx.Identifier{channel}.Sanitize()); err != nil {
+		return err
+	}
+	fn()
+	for {
+		if _, err := conn.WaitForNotification(ctx); err != nil {
+			return err
+		}
+		fn()
 	}
 }
 

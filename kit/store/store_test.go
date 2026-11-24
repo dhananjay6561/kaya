@@ -2,6 +2,7 @@ package store
 
 import (
 	"context"
+	"fmt"
 	"os"
 	"testing"
 	"time"
@@ -94,5 +95,56 @@ func TestCheckFailsWhenUnreachable(t *testing.T) {
 	defer cancel()
 	if err := db.Check(ctx); err == nil {
 		t.Fatal("expected an error for an unreachable db")
+	}
+}
+
+func TestExecQueryRowAndListen(t *testing.T) {
+	db, err := Open(testURL(t), WithAppName("kaya-probe"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer db.Close()
+	ctx := context.Background()
+	if n, err := db.Exec(ctx, "SELECT 1 FROM generate_series(1, 3)"); err != nil || n != 3 {
+		t.Fatalf("exec: %d %v", n, err)
+	}
+	var two int
+	if err := db.QueryRow(ctx, "SELECT 1 + 1").Scan(&two); err != nil || two != 2 {
+		t.Fatalf("query row: %d %v", two, err)
+	}
+
+	channel := fmt.Sprintf("kit_probe_%d", time.Now().UnixNano())
+	listenCtx, stop := context.WithCancel(ctx)
+	woken := make(chan struct{}, 10)
+	done := make(chan struct{})
+	go func() {
+		db.Listen(listenCtx, channel, func() { woken <- struct{}{} })
+		close(done)
+	}()
+	listening := func() int {
+		var n int
+		_ = db.QueryRow(ctx, "SELECT count(*) FROM pg_stat_activity WHERE application_name = 'kaya-probe-listen' AND query LIKE 'LISTEN%'").Scan(&n)
+		return n
+	}
+	<-woken
+	for listening() == 0 {
+		time.Sleep(10 * time.Millisecond)
+	}
+	if _, err := db.Exec(ctx, "SELECT pg_notify($1, '')", channel); err != nil {
+		t.Fatal(err)
+	}
+	select {
+	case <-woken:
+	case <-time.After(5 * time.Second):
+		t.Fatal("no wake-up for the notification")
+	}
+	stop()
+	<-done
+	deadline := time.Now().Add(5 * time.Second)
+	for listening() != 0 {
+		if time.Now().After(deadline) {
+			t.Fatal("the listening connection outlived Listen")
+		}
+		time.Sleep(10 * time.Millisecond)
 	}
 }
