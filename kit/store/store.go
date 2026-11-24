@@ -104,6 +104,20 @@ func (db *DB) Query(ctx context.Context, sql string, args []any, dest ...any) er
 	return db.pool.QueryRow(ctx, sql, args...).Scan(dest...)
 }
 
+// QueryRow runs a query that returns at most one row; Scan reports pgx.ErrNoRows when there is none.
+func (db *DB) QueryRow(ctx context.Context, sql string, args ...any) pgx.Row {
+	return db.pool.QueryRow(ctx, sql, args...)
+}
+
+// Exec runs a statement and reports how many rows it touched.
+func (db *DB) Exec(ctx context.Context, sql string, args ...any) (int64, error) {
+	tag, err := db.pool.Exec(ctx, sql, args...)
+	if err != nil {
+		return 0, err
+	}
+	return tag.RowsAffected(), nil
+}
+
 // InTx runs fn in a transaction, committing when it returns nil and rolling back otherwise.
 func (db *DB) InTx(ctx context.Context, fn func(pgx.Tx) error) error {
 	return pgx.BeginFunc(ctx, db.pool, fn)
