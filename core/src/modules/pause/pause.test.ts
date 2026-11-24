@@ -69,9 +69,13 @@ describe("pause in the database", { skip: !testDatabaseUrl && "TEST_DATABASE_URL
 
   it("refuses to guess when the row is gone", async () => {
     await testDb.admin.query("DELETE FROM pause_state");
-    const pause = createPause(db.pool);
-    await assert.rejects(pause.state(), PauseStateMissingError);
-    await assert.rejects(pause.pause("cmd-y"), PauseStateMissingError);
-    await testDb.admin.query("INSERT INTO pause_state DEFAULT VALUES");
+    try {
+      const pause = createPause(db.pool);
+      await assert.rejects(pause.state(), PauseStateMissingError);
+      await assert.rejects(pause.pause("cmd-y"), PauseStateMissingError);
+      await assert.rejects(pause.resume("cmd-z"), PauseStateMissingError);
+    } finally {
+      await testDb.admin.query("INSERT INTO pause_state DEFAULT VALUES");
+    }
   });
 });
