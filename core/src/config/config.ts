@@ -56,7 +56,7 @@ const schema = z.object({
       .number({ error: "must be a number" })
       .int({ error: "must be a whole number" })
       .min(500, { error: "must be at least 500" })
-      .default(4_000),
+      .default(3_000),
   ),
   CHAT_CHANNEL: z.preprocess(optional, z.enum(["gateway", "stub"]).default("gateway")),
   TELEPHONY_PROVIDER: z.preprocess(optional, z.enum(["stub"]).default("stub")),
