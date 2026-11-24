@@ -518,7 +518,7 @@ Status key: ✅ done · 🟨 in progress · ⬜ not started
 |---|---|---|
 | 0. Foundation | Monorepo, config, Compose stack, migrations, logging, health, provider interfaces | ✅ |
 | 1. WhatsApp gateway | Contracts, pairing, live ingest, history sync, media, connection health, delivery to core and sending. Checked end to end against a real WhatsApp account. | ✅ |
-| 2. Talking to Kaya | Self-chat command channel (checked on a real account), built-in commands `/help`, `/status`, `/pause`, `/resume` (built) | 🟨 |
+| 2. Talking to Kaya | Self-chat command channel and built-in commands `/help`, `/status`, `/pause`, `/resume`. Checked on a real account. | ✅ |
 | 3. Brain | Groq replies, embeddings, meaning-based search, Q&A with sources, tagging, summaries | ⬜ |
 | 4. Agent loop and safety | Masking, context picking, tool calling, confirm-before-act, prompt-injection guard, usage tracking | ⬜ |
 | 5. Voice notes | Transcription, spoken commands | ⬜ |
