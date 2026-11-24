@@ -72,31 +72,41 @@ func NewConsumer(o ConsumerOptions) *Consumer {
 }
 
 // Start begins draining and listening. It does nothing if the consumer is already running, and
-// waits for a previous run to finish before starting a new one.
+// waits for a previous run to finish first, without holding up a concurrent Stop.
 func (c *Consumer) Start(parent context.Context) {
-	c.mu.Lock()
-	defer c.mu.Unlock()
-	if c.running {
+	for {
+		c.mu.Lock()
+		if c.running {
+			c.mu.Unlock()
+			return
+		}
+		if previous := c.done; previous != nil {
+			select {
+			case <-previous:
+			default:
+				c.mu.Unlock()
+				<-previous
+				continue
+			}
+		}
+		ctx, cancel := context.WithCancel(parent)
+		done := make(chan struct{})
+		c.cancel, c.done, c.running = cancel, done, true
+		c.mu.Unlock()
+		var wg sync.WaitGroup
+		wg.Go(func() { c.drain(ctx) })
+		wg.Go(func() { c.o.DB.Listen(ctx, channel, c.nudge) })
+		go func() {
+			wg.Wait()
+			c.mu.Lock()
+			if c.done == done {
+				c.running = false
+			}
+			c.mu.Unlock()
+			close(done)
+		}()
 		return
 	}
-	if c.done != nil {
-		<-c.done
-	}
-	ctx, cancel := context.WithCancel(parent)
-	done := make(chan struct{})
-	c.cancel, c.done, c.running = cancel, done, true
-	var wg sync.WaitGroup
-	wg.Go(func() { c.drain(ctx) })
-	wg.Go(func() { c.o.DB.Listen(ctx, channel, c.nudge) })
-	go func() {
-		wg.Wait()
-		c.mu.Lock()
-		if c.done == done {
-			c.running = false
-		}
-		c.mu.Unlock()
-		close(done)
-	}()
 }
 
 // Stop ends both loops and waits for them, cutting short whatever they are doing. Every caller
