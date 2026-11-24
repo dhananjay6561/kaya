@@ -306,6 +306,8 @@ BEGIN
 
   ASSERT has_table_privilege('kaya_core', 'commands', 'SELECT, INSERT, UPDATE, DELETE'), 'core owns its command inbox';
   ASSERT has_table_privilege('kaya_core', 'pause_state', 'SELECT, UPDATE'), 'core reads and flips the pause';
+  ASSERT has_table_privilege('kaya_core', 'exchanges', 'SELECT, INSERT, UPDATE, DELETE'), 'core owns its conversation memory';
+  ASSERT NOT has_table_privilege('kaya_gateway', 'exchanges', 'SELECT'), 'the gateway cannot read the conversation memory';
   ASSERT NOT has_table_privilege('kaya_core', 'pause_state', 'INSERT')
     AND NOT has_table_privilege('kaya_core', 'pause_state', 'DELETE'), 'core cannot add or remove the pause row';
   ASSERT NOT has_table_privilege('kaya_gateway', 'pause_state', 'SELECT')
@@ -521,6 +523,9 @@ BEGIN
   PERFORM pg_temp.expect_error('INSERT INTO pause_state DEFAULT VALUES', '23505');
   PERFORM pg_temp.expect_error('INSERT INTO pause_state (only_row) VALUES (false)', '23514');
   UPDATE pause_state SET paused_at = now(), changed_by = '3EB0PAUSE', changed_at = now();
+  INSERT INTO exchanges (question_message_id, answer_wa_id) VALUES (900100, '3EB0ANSWER');
+  PERFORM pg_temp.expect_error($q$INSERT INTO exchanges (question_message_id, answer_wa_id) VALUES (900100, '3EB0AGAIN')$q$, '23505');
+  PERFORM pg_temp.expect_error($q$INSERT INTO exchanges (question_message_id) VALUES (900101)$q$, '23502');
 END
 $$;
 
