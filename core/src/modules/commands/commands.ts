@@ -36,7 +36,7 @@ function failureNotice(err: unknown): string {
     case "too_long":
       return "That is too long for the AI service. Try a shorter message.";
     case "misconfigured":
-      return "The AI service does not know the model I am set to use. Check GROQ_MODEL_ROUTINE.";
+      return "The AI service does not know a model I am set to use. Check GROQ_MODEL_HEAVY and GROQ_MODEL_ROUTINE.";
     case "rejected":
       return "The AI service turned this message down. Try asking another way.";
     default:
@@ -106,19 +106,22 @@ export function startCommands(options: CommandsOptions): () => void {
       }
     };
     try {
+      const canned = `command:${message.id}:chat:canned`;
       const earlier = await channel.follow(answer.idempotencyKey, { signal });
       if (earlier) return slash ? undefined : { answerId: earlier.id };
+      if (!slash && (await channel.follow(canned, { signal }))) return undefined;
       if (Date.now() - message.sentAt.getTime() > maxAgeMs) {
         throw new SendFailedError(answer.idempotencyKey, "expired");
       }
       const produced = await produce();
       // The answer is worth sending until the command itself would count as too old.
       const ttlMs = Math.max(minReplyTtlMs, maxAgeMs - (Date.now() - message.sentAt.getTime()));
+      const idempotencyKey = slash || produced.remember ? answer.idempotencyKey : canned;
       const sent = await channel.send(
-        { ...answer, text: produced.text },
+        { ...answer, idempotencyKey, text: produced.text },
         { signal, ttlMs, textMayChange: true },
       );
-      return produced.remember ? { answerId: sent.id } : undefined;
+      return !slash && produced.remember ? { answerId: sent.id } : undefined;
     } catch (err) {
       if (!(err instanceof SendFailedError) || !neverSent.has(err.code)) throw err;
       logger.warn(

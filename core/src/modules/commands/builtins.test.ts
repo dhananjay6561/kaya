@@ -188,6 +188,21 @@ describe("built-in commands", () => {
     assert.equal(calls, 1);
   });
 
+  it("never remembers a canned reply, even when the command is retried", async () => {
+    let calls = 0;
+    const { channel, say } = kaya({
+      chat: async () => {
+        calls++;
+        return { text: "I had no answer to that.", remember: false };
+      },
+    });
+    await channel.start();
+    assert.deepEqual(await say("???", undefined, "3EB0CANNED"), ["I had no answer to that."]);
+    assert.match(channel.sent[0]?.idempotencyKey ?? "", /:chat:canned$/);
+    assert.deepEqual(await say("???", undefined, "3EB0CANNED"), []);
+    assert.equal(calls, 1, "the retry follows the canned reply instead of asking again");
+  });
+
   it("does not ask the model when a message waited too long for its turn", async () => {
     let calls = 0;
     const { channel } = kaya({
@@ -285,7 +300,7 @@ describe("plain messages", () => {
       ["auth", /refused my key/],
       ["rejected", /turned this message down/],
       ["too_long", /too long for the AI service/],
-      ["misconfigured", /Check GROQ_MODEL_ROUTINE/],
+      ["misconfigured", /Check GROQ_MODEL_HEAVY and GROQ_MODEL_ROUTINE/],
       ["timeout", /is not answering right now/],
       ["unavailable", /is not answering right now/],
       ["bad_response", /is not answering right now/],
