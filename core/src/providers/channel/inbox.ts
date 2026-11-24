@@ -14,7 +14,7 @@ export type InboxOptions = Readonly<{
   maxPerMinute?: number;
   retentionMs?: number;
   purgeEveryMs?: number;
-  exemptFromCap?: (text: string) => boolean;
+  isUrgent?: (text: string) => boolean;
 }>;
 
 export type Deliver = (message: IncomingMessage, signal: AbortSignal) => Promise<void>;
@@ -33,6 +33,7 @@ type Row = {
   sent_at: Date;
   created_at: Date;
   attempts: number;
+  urgent: boolean;
 };
 
 const workerLock = 5_011_603;
@@ -51,7 +52,7 @@ export function createInbox(options: InboxOptions): Inbox {
   const maxPerMinute = options.maxPerMinute ?? 20;
   const retentionMs = options.retentionMs ?? 30 * 24 * 60 * 60_000;
   const purgeEveryMs = options.purgeEveryMs ?? 60 * 60_000;
-  const exemptFromCap = options.exemptFromCap ?? (() => false);
+  const isUrgent = options.isUrgent ?? (() => false);
 
   let running = false;
   let halted = new AbortController();
@@ -133,8 +134,8 @@ export function createInbox(options: InboxOptions): Inbox {
     if (!ready() || !(await holdsTheLock())) return false;
     const { rows } = await pool.query<Row>(
       `UPDATE commands SET attempts = attempts + 1
-       WHERE id = (SELECT id FROM commands WHERE state = 'pending' ORDER BY id LIMIT 1)
-       RETURNING id, message_id, wa_id, sent_at, created_at, attempts`,
+       WHERE id = (SELECT id FROM commands WHERE state = 'pending' ORDER BY urgent DESC, id LIMIT 1)
+       RETURNING id, message_id, wa_id, sent_at, created_at, attempts, urgent`,
     );
     const row = rows[0];
     if (!row) return false;
@@ -154,13 +155,13 @@ export function createInbox(options: InboxOptions): Inbox {
       return true;
     }
 
-    if (!exemptFromCap(text)) {
+    if (!row.urgent) {
       const recent = await pool.query<{ n: number }>(
-        "SELECT count(*)::int AS n FROM commands WHERE finished_at > now() - interval '1 minute' AND error IS DISTINCT FROM 'rate_limited'",
+        "SELECT count(*)::int AS n FROM commands WHERE finished_at > now() - interval '1 minute' AND error IS DISTINCT FROM 'over_cap'",
       );
       if ((recent.rows[0]?.n ?? 0) >= maxPerMinute) {
         logger.error({ command_id: row.id }, "too many commands in a minute; this one was dropped");
-        await finish(row.id, "rate_limited");
+        await finish(row.id, "over_cap");
         return true;
       }
     }
@@ -234,7 +235,7 @@ export function createInbox(options: InboxOptions): Inbox {
         message.source === "live" &&
         message.change === "new";
       if (!typedByDj) return false;
-      const { rowCount } = await tx.query(
+      const { rows } = await tx.query<{ id: string }>(
         `INSERT INTO commands (message_id, wa_id, sent_at)
          SELECT m.id, m.wa_id, m.sent_at
          FROM messages m
@@ -247,10 +248,20 @@ export function createInbox(options: InboxOptions): Inbox {
            AND m.sent_at > now() - interval '1 day'
            AND c.kind = 'direct' AND c.contact_id = m.sender_id
            AND NOT EXISTS (SELECT 1 FROM send_requests sent WHERE sent.wa_id = m.wa_id)
-         ON CONFLICT (message_id) DO NOTHING`,
+         ON CONFLICT (message_id) DO NOTHING
+         RETURNING id`,
         [message.message_id],
       );
-      return (rowCount ?? 0) > 0;
+      const id = rows[0]?.id;
+      if (!id) return false;
+      const found = await tx.query<{ body: string | null }>(
+        "SELECT body FROM messages WHERE id = $1",
+        [message.message_id],
+      );
+      if (isUrgent(found.rows[0]?.body ?? "")) {
+        await tx.query("UPDATE commands SET urgent = true WHERE id = $1", [id]);
+      }
+      return true;
     },
     start(deliver: Deliver, ready: () => boolean = () => true) {
       if (running) return;

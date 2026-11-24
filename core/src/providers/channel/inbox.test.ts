@@ -105,8 +105,10 @@ describe("command inbox", { skip: !testDatabaseUrl && "TEST_DATABASE_URL not set
     };
   }
 
-  async function record(stored: MessageStored): Promise<boolean> {
-    const box = inbox ?? createInbox({ pool: core, logger });
+  const slash = (text: string) => text.startsWith("/");
+
+  async function record(stored: MessageStored, isUrgent = slash): Promise<boolean> {
+    const box = inbox ?? createInbox({ pool: core, logger, isUrgent });
     const client = await core.connect();
     try {
       return await box.record(stored, client);
@@ -180,7 +182,7 @@ describe("command inbox", { skip: !testDatabaseUrl && "TEST_DATABASE_URL not set
       maxPerMinute?: number;
       retentionMs?: number;
       purgeEveryMs?: number;
-      exemptFromCap?: (text: string) => boolean;
+      isUrgent?: (text: string) => boolean;
     } = {},
     ready: () => boolean = () => true,
   ): Inbox {
@@ -315,11 +317,11 @@ describe("command inbox", { skip: !testDatabaseUrl && "TEST_DATABASE_URL not set
     assert.deepEqual(seen, ["command 0", "command 1", "command 2"]);
     assert.deepEqual(
       (await commands()).map((c) => c.split(" ").slice(1).join(" ")),
-      ["done", "done", "done", "failed rate_limited", "failed rate_limited"],
+      ["done", "done", "done", "failed over_cap", "failed over_cap"],
     );
   });
 
-  it("never drops a command the cap was told to let through", async () => {
+  it("runs urgent commands first and never drops them at the cap", async () => {
     const typed = [];
     for (let i = 0; i < 4; i++) typed.push(await message({ body: `command ${i}` }));
     typed.push(await message({ body: "/pause" }));
@@ -329,12 +331,23 @@ describe("command inbox", { skip: !testDatabaseUrl && "TEST_DATABASE_URL not set
       async (incoming) => {
         seen.push(incoming.text);
       },
-      { maxPerMinute: 2, exemptFromCap: (text) => text.startsWith("/") },
+      { maxPerMinute: 3 },
     );
     await eventually("all five to be settled", async () =>
       (await commands()).every((c) => !c.endsWith("pending")),
     );
-    assert.deepEqual(seen, ["command 0", "command 1", "/pause"]);
+    assert.deepEqual(seen, ["/pause", "command 0", "command 1"], "urgent ones count, too");
+    assert.deepEqual(
+      (await commands()).map((c) => c.split(" ").slice(1).join(" ")),
+      ["done", "done", "failed over_cap", "failed over_cap", "done"],
+    );
+  });
+
+  it("decides urgency when a command is recorded, not when it runs", async () => {
+    const stored = await message({ body: "plain words" });
+    await record(stored, () => true);
+    const { rows } = await testDb.admin.query<{ urgent: boolean }>("SELECT urgent FROM commands");
+    assert.deepEqual(rows, [{ urgent: true }]);
   });
 
   it("runs each command in one worker even when two are started", async () => {
