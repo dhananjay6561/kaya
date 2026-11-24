@@ -8,11 +8,13 @@ import {
   SendFailedError,
   type SendOptions,
 } from "../../providers/channel/index.js";
+import { createMemoryPause } from "../pause/index.js";
 import { clip, startCommands } from "./commands.js";
 
 const logger = createLogger({ level: "silent", service: "core", version: "test" });
 const minute = 60_000;
 const ago = (ms: number) => new Date(Date.now() - ms);
+const deps = () => ({ pause: createMemoryPause(), status: async () => "all good" });
 
 function watched(fail?: (message: OutgoingMessage) => Error | undefined) {
   const channel = createStubChannel();
@@ -32,7 +34,7 @@ function watched(fail?: (message: OutgoingMessage) => Error | undefined) {
 describe("commands", () => {
   it("answers what DJ typed, quoting it, for as long as the answer is still worth having", async () => {
     const { channel, wrapped, calls } = watched();
-    startCommands({ channel: wrapped, logger });
+    startCommands({ channel: wrapped, logger, ...deps() });
     await channel.start();
     const message = await channel.receive("remind me to call mum", { sentAt: ago(4 * minute) });
 
@@ -56,7 +58,7 @@ describe("commands", () => {
 
   it("does not act on a command it took in more than 10 minutes late, and says so", async () => {
     const { channel, wrapped, calls } = watched();
-    startCommands({ channel: wrapped, logger });
+    startCommands({ channel: wrapped, logger, ...deps() });
     await channel.start();
 
     await channel.receive("just in time", { sentAt: ago(9 * minute) });
@@ -73,7 +75,7 @@ describe("commands", () => {
 
   it("says nothing about a command more than a day old", async () => {
     const { channel, wrapped } = watched();
-    startCommands({ channel: wrapped, logger });
+    startCommands({ channel: wrapped, logger, ...deps() });
     await channel.start();
     await channel.receive("yesterday's note", { sentAt: ago(25 * 60 * minute) });
     assert.deepEqual(channel.sent, []);
@@ -84,7 +86,7 @@ describe("commands", () => {
       const { channel, wrapped } = watched((message) =>
         message.text.startsWith("You said") ? new SendFailedError("request-id", code) : undefined,
       );
-      startCommands({ channel: wrapped, logger });
+      startCommands({ channel: wrapped, logger, ...deps() });
       await channel.start();
       await assert.rejects(
         channel.receive("turn the lights off"),
@@ -105,7 +107,7 @@ describe("commands", () => {
     const { channel, wrapped } = watched(
       () => new SendFailedError("request-id", "outcome_unknown"),
     );
-    startCommands({ channel: wrapped, logger });
+    startCommands({ channel: wrapped, logger, ...deps() });
     await channel.start();
     await assert.rejects(channel.receive("hello"));
     assert.deepEqual(channel.sent, []);
@@ -122,7 +124,7 @@ describe("commands", () => {
 
   it("stops answering once it is switched off", async () => {
     const channel = createStubChannel();
-    const stop = startCommands({ channel, logger });
+    const stop = startCommands({ channel, logger, ...deps() });
     await channel.start();
     stop();
     await channel.receive("anyone there?");

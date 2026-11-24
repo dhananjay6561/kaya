@@ -4,10 +4,14 @@ import {
   type IncomingMessage,
   SendFailedError,
 } from "../../providers/channel/index.js";
+import type { PauseSwitch } from "../pause/index.js";
+import { answerSlash, parseSlash } from "./builtins.js";
 
 export type CommandsOptions = Readonly<{
   channel: ChatChannel;
   logger: Logger;
+  pause: PauseSwitch;
+  status(): Promise<string>;
   maxAgeMs?: number;
   silentAfterMs?: number;
   minReplyTtlMs?: number;
@@ -26,7 +30,7 @@ export function clip(text: string): string {
 const neverSent = new Set(["expired", "no_answer"]);
 
 export function startCommands(options: CommandsOptions): () => void {
-  const { channel, logger } = options;
+  const { channel, logger, pause } = options;
   const maxAgeMs = options.maxAgeMs ?? 10 * 60_000;
   const silentAfterMs = options.silentAfterMs ?? 24 * 60 * 60_000;
   const minReplyTtlMs = options.minReplyTtlMs ?? 30_000;
@@ -38,6 +42,11 @@ export function startCommands(options: CommandsOptions): () => void {
     const lateMs = message.receivedAt.getTime() - message.sentAt.getTime();
     if (lateMs > silentAfterMs) {
       logger.warn({ command: message.id }, "a command more than a day old was skipped");
+      return;
+    }
+    const slash = parseSlash(message.text);
+    if (!slash && (await pause.state()).paused) {
+      logger.info({ command: message.id }, "Kaya is paused; a message was left unanswered");
       return;
     }
     const reply = { idempotencyKey: `command:${message.id}`, replyTo: message.id };
@@ -54,8 +63,13 @@ export function startCommands(options: CommandsOptions): () => void {
 
     // The answer is worth sending until the command itself would count as too old.
     const ttlMs = Math.max(minReplyTtlMs, maxAgeMs - (Date.now() - message.sentAt.getTime()));
+    const text = slash
+      ? await answerSlash(slash, message.id, { pause, status: options.status })
+      : `You said: ${clip(message.text)}`;
     try {
-      await channel.send({ ...reply, text: `You said: ${clip(message.text)}` }, { signal, ttlMs });
+      // A slash answer can come out differently when a command is retried (a status changes by
+      // the minute); the first one queued is the answer.
+      await channel.send({ ...reply, text }, { signal, ttlMs, textMayChange: slash !== undefined });
     } catch (err) {
       if (!(err instanceof SendFailedError) || !neverSent.has(err.code)) throw err;
       logger.warn(
@@ -66,7 +80,9 @@ export function startCommands(options: CommandsOptions): () => void {
         {
           idempotencyKey: `command:${message.id}:unanswered`,
           replyTo: message.id,
-          text: `I could not answer this in time, so nothing was done. Send it again if you still want it:\n${clip(message.text)}`,
+          text: slash
+            ? "I could not answer this in time. Send /status to see how things stand."
+            : `I could not answer this in time, so nothing was done. Send it again if you still want it:\n${clip(message.text)}`,
         },
         { signal, ttlMs: noticeTtlMs },
       );

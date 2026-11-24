@@ -7,6 +7,7 @@ import { createLogger } from "../../lib/logger.js";
 import { createTestDb, eventually, type TestDb, testDatabaseUrl } from "../../lib/test-db.js";
 import { createGatewayChannel } from "../../providers/channel/index.js";
 import { createEventConsumer, createGatewayEvents } from "../gateway/index.js";
+import { createPause } from "../pause/index.js";
 import { startCommands } from "./commands.js";
 
 const logger = createLogger({ level: "silent", service: "core", version: "test" });
@@ -48,7 +49,7 @@ describe("a command, end to end", { skip: !testDatabaseUrl && "TEST_DATABASE_URL
       logger,
       pollMs: 20,
     });
-    startCommands({ channel, logger });
+    startCommands({ channel, logger, pause: createPause(db.pool), status: async () => "ok" });
     await channel.start();
     consumer.start();
     stop = async () => {
