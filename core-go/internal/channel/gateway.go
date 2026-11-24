@@ -36,6 +36,8 @@ type GatewayOptions struct {
 	Logger    *slog.Logger
 	Inbox     InboxOptions
 
+	// TTL is how long a message stays worth sending when its send does not say; zero means
+	// contracts.DefaultSendTTL.
 	TTL time.Duration
 	// Poll is how often a waiting send looks at its request when no result event wakes it.
 	Poll time.Duration
@@ -49,6 +51,8 @@ type GatewayOptions struct {
 type Gateway struct {
 	o     GatewayOptions
 	inbox *Inbox
+	// life keeps Start and Stop from running at the same time.
+	life sync.Mutex
 
 	mu          sync.Mutex
 	started     bool
@@ -93,6 +97,8 @@ func (g *Gateway) Name() string { return "gateway" }
 
 // Start subscribes to stored messages and starts the command inbox.
 func (g *Gateway) Start(context.Context) error {
+	g.life.Lock()
+	defer g.life.Unlock()
 	g.mu.Lock()
 	defer g.mu.Unlock()
 	if g.started {
@@ -114,24 +120,29 @@ func (g *Gateway) Start(context.Context) error {
 	return nil
 }
 
-// Stop ends every wait at once and stops the inbox; queued requests stay queued.
+// Stop stops the inbox first, so a command cut short by the stop is handed back rather than
+// failed, then ends every other wait at once. Queued requests stay queued.
 func (g *Gateway) Stop() {
+	g.life.Lock()
+	defer g.life.Unlock()
 	g.mu.Lock()
 	if !g.started {
 		g.mu.Unlock()
 		return
 	}
-	g.started = false
 	unsubscribe, stop := g.unsubscribe, g.stop
 	g.unsubscribe = nil
 	g.mu.Unlock()
 	if unsubscribe != nil {
 		unsubscribe()
 	}
-	stop()
 	if g.inbox != nil {
 		g.inbox.Stop()
 	}
+	g.mu.Lock()
+	g.started = false
+	g.mu.Unlock()
+	stop()
 }
 
 // Check reports whether the channel is started.
@@ -253,6 +264,18 @@ func (g *Gateway) outcome(ctx context.Context, id string, m *OutgoingMessage, te
 }
 
 func (g *Gateway) waitFor(ctx context.Context, id string, m *OutgoingMessage, textMayChange bool) (SentMessage, error) {
+	woken := make(chan struct{}, 1)
+	if g.o.Results != nil {
+		forget := g.o.Results.OnSendResult(id, func(contracts.SendResult) {
+			select {
+			case woken <- struct{}{}:
+			default:
+			}
+		})
+		defer forget()
+	}
+	timer := time.NewTimer(g.o.Poll)
+	defer timer.Stop()
 	for {
 		if ctx.Err() != nil {
 			return SentMessage{}, stopped(ctx)
@@ -270,28 +293,12 @@ func (g *Gateway) waitFor(ctx context.Context, id string, m *OutgoingMessage, te
 		if sent != nil {
 			return *sent, nil
 		}
-		g.nudge(ctx, id)
-	}
-}
-
-// nudge waits for the poll interval, or less when the gateway reports on request id.
-func (g *Gateway) nudge(ctx context.Context, id string) {
-	woken := make(chan struct{}, 1)
-	if g.o.Results != nil {
-		forget := g.o.Results.OnSendResult(id, func(contracts.SendResult) {
-			select {
-			case woken <- struct{}{}:
-			default:
-			}
-		})
-		defer forget()
-	}
-	timer := time.NewTimer(g.o.Poll)
-	defer timer.Stop()
-	select {
-	case <-ctx.Done():
-	case <-woken:
-	case <-timer.C:
+		timer.Reset(g.o.Poll)
+		select {
+		case <-ctx.Done():
+		case <-woken:
+		case <-timer.C:
+		}
 	}
 }
 
@@ -356,8 +363,8 @@ func (g *Gateway) enqueue(ctx context.Context, id string, m OutgoingMessage, o S
 		return err
 	}
 	_, err = g.o.DB.Exec(ctx,
-		"INSERT INTO send_requests (id, payload, expires_at) VALUES ($1, $2, $3) ON CONFLICT (id) DO NOTHING",
-		id, raw, request.ExpiresAt.Time)
+		"INSERT INTO send_requests (id, payload, expires_at) VALUES ($1, $2::jsonb, $3) ON CONFLICT (id) DO NOTHING",
+		id, string(raw), request.ExpiresAt.Time)
 	return err
 }
 
