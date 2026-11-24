@@ -34,10 +34,9 @@ kaya/
 │   └── internal/           config, and one package per feature as it is ported
 ├── gateway/                Go WhatsApp gateway (its own Go module)
 │   ├── cmd/gateway/        main package
-│   └── internal/           config, whatsapp, ingest, events, send, media
+│   └── internal/           config, whatsapp, ingest, events, send, media, testdb
 ├── kit/                    Go code both services share (its own module): logging, httpapi (the
 │                           /health server), envfile, store (the Postgres pool), testdb
-├── go.work                 lets editors and tools see every Go module at once
 ├── services/               Python services (docs, voice), added in their stages
 ├── contracts/              JSON Schemas for every message between services, and the Go types and
 │                           validator for them (its own module)

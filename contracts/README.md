@@ -16,7 +16,8 @@ samples/
     └── invalid/               must fail on every side, each for one reason named in the file name
 ```
 
-This folder is also a Go module (`contracts.go` embeds the schemas) and an npm workspace package
+This folder is also a Go module (`contracts.go` embeds the schemas; `types.go` and `validate.go`
+hold the Go types and validator both Go services use) and an npm workspace package
 (`@kaya/contracts`), so both services load the same files.
 
 ## Changing a contract

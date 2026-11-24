@@ -333,7 +333,7 @@ target instead of adding rows.
 | Layer | Choice |
 |---|---|
 | WhatsApp gateway | Go 1.26, [whatsmeow](https://github.com/tulir/whatsmeow), `log/slog` |
-| Agent | TypeScript on Node 24, zod for config, pino for logs, `pg` |
+| Agent | TypeScript on Node 24, zod for config, pino for logs, `pg`; moving to Go (`core-go/`) |
 | Database | Postgres 18 with pgvector, migrations with dbmate |
 | Contracts | JSON Schema 2020-12, validated with ajv in TypeScript and santhosh-tekuri/jsonschema in Go |
 | LLM | Groq behind a provider interface (`openai/gpt-oss-120b` and `openai/gpt-oss-20b`) |
@@ -346,10 +346,14 @@ target instead of adding rows.
 kaya/
 ├── core/               TypeScript agent (npm workspace)
 │   └── src/            config, contracts, modules, providers (llm, channel, telephony), lib
+├── core-go/            the Go agent that replaces core/ (its own Go module)
+│   ├── cmd/core/       main package: serve, healthcheck
+│   └── internal/       config, and one package per feature as it is ported
 ├── gateway/            Go WhatsApp gateway (its own Go module)
-│   ├── cmd/gateway/    main package: serve, pair, healthcheck
-│   └── internal/       config, contracts, httpapi, logging, store, whatsapp
-├── contracts/          JSON Schemas and shared sample payloads for gateway <-> core
+│   ├── cmd/gateway/    main package: serve, pair, media, healthcheck
+│   └── internal/       config, whatsapp, ingest, events, send, media, testdb
+├── kit/                Go code both services share: logging, httpapi, envfile, store, testdb
+├── contracts/          JSON Schemas, shared sample payloads, and the Go types and validator
 ├── db/
 │   ├── migrations/     plain SQL migrations (dbmate)
 │   └── tests/          SQL schema tests
