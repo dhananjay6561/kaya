@@ -22,9 +22,9 @@ import (
 
 	"github.com/dhananjay6561/kaya/contracts"
 	"github.com/dhananjay6561/kaya/gateway/internal/ingest"
-	"github.com/dhananjay6561/kaya/gateway/internal/logging"
 	"github.com/dhananjay6561/kaya/gateway/internal/media"
 	"github.com/dhananjay6561/kaya/gateway/internal/send"
+	"github.com/dhananjay6561/kaya/kit/logging"
 )
 
 // Reasons reported in Status. They are fixed strings, so /health never carries error details.

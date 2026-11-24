@@ -20,7 +20,7 @@ import (
 	"go.mau.fi/whatsmeow/types/events"
 	"google.golang.org/protobuf/proto"
 
-	"github.com/dhananjay6561/kaya/gateway/internal/logging"
+	"github.com/dhananjay6561/kaya/kit/logging"
 )
 
 func newIngester(f *fixture, db DB) (*Ingester, *bytes.Buffer) {

@@ -20,7 +20,7 @@ import (
 	"google.golang.org/protobuf/proto"
 
 	"github.com/dhananjay6561/kaya/contracts"
-	"github.com/dhananjay6561/kaya/gateway/internal/logging"
+	"github.com/dhananjay6561/kaya/kit/logging"
 )
 
 // DB runs a function in one transaction.

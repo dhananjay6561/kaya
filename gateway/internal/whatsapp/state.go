@@ -7,7 +7,7 @@ import (
 
 	"github.com/dhananjay6561/kaya/contracts"
 	"github.com/dhananjay6561/kaya/gateway/internal/ingest"
-	"github.com/dhananjay6561/kaya/gateway/internal/logging"
+	"github.com/dhananjay6561/kaya/kit/logging"
 )
 
 // maxUnpublished is how many state changes are kept while the database is away. Past that the

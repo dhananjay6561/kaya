@@ -15,8 +15,8 @@ import (
 	"go.mau.fi/whatsmeow/types/events"
 	waLog "go.mau.fi/whatsmeow/util/log"
 
-	"github.com/dhananjay6561/kaya/gateway/internal/logging"
 	"github.com/dhananjay6561/kaya/gateway/internal/testdb"
+	"github.com/dhananjay6561/kaya/kit/logging"
 )
 
 func TestNormalizePhone(t *testing.T) {

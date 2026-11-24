@@ -1,4 +1,4 @@
-package config
+package envfile
 
 import (
 	"os"
@@ -27,28 +27,28 @@ func writeFile(t *testing.T, path, content string) {
 	}
 }
 
-func TestFindEnvFileInParent(t *testing.T) {
+func TestFindInParent(t *testing.T) {
 	repo := makeRepo(t, true)
-	got, err := FindEnvFile(filepath.Join(repo, "gateway", "cmd"))
+	got, err := Find(filepath.Join(repo, "gateway", "cmd"))
 	if err != nil || got != filepath.Join(repo, ".env") {
 		t.Fatalf("got %q, %v", got, err)
 	}
 }
 
-func TestFindEnvFileStopsAtRepoRoot(t *testing.T) {
+func TestFindStopsAtRepoRoot(t *testing.T) {
 	outer := t.TempDir()
 	writeFile(t, filepath.Join(outer, ".env"), "OUTSIDE=1\n")
 	repo := filepath.Join(outer, "repo")
 	if err := os.MkdirAll(filepath.Join(repo, ".git"), 0o750); err != nil {
 		t.Fatal(err)
 	}
-	got, err := FindEnvFile(repo)
+	got, err := Find(repo)
 	if err != nil || got != "" {
 		t.Fatalf("got %q, %v; want nothing", got, err)
 	}
 }
 
-func TestLoadEnvFileKeepsRealVariables(t *testing.T) {
+func TestLoadKeepsRealVariables(t *testing.T) {
 	file := filepath.Join(t.TempDir(), "custom.env")
 	writeFile(t, file, "KAYA_TEST_A=from-file\nKAYA_TEST_B=from-file\n")
 	t.Setenv("KAYA_ENV_FILE", file)
@@ -58,7 +58,7 @@ func TestLoadEnvFileKeepsRealVariables(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	got, err := LoadEnvFile()
+	got, err := Load()
 	if err != nil || got != file {
 		t.Fatalf("got %q, %v", got, err)
 	}
@@ -70,9 +70,9 @@ func TestLoadEnvFileKeepsRealVariables(t *testing.T) {
 	}
 }
 
-func TestLoadEnvFileMissingExplicitFile(t *testing.T) {
+func TestLoadMissingExplicitFile(t *testing.T) {
 	t.Setenv("KAYA_ENV_FILE", filepath.Join(t.TempDir(), "nope.env"))
-	if _, err := LoadEnvFile(); err == nil {
+	if _, err := Load(); err == nil {
 		t.Fatal("expected an error for a missing KAYA_ENV_FILE")
 	}
 }

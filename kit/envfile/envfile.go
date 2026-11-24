@@ -1,4 +1,5 @@
-package config
+// Package envfile loads a Kaya .env file into the process environment.
+package envfile
 
 import (
 	"errors"
@@ -10,8 +11,8 @@ import (
 	"github.com/joho/godotenv"
 )
 
-// FindEnvFile walks up from dir looking for .env, stopping at the repo root (the folder with .git).
-func FindEnvFile(dir string) (string, error) {
+// Find walks up from dir looking for .env, stopping at the repo root (the folder with .git).
+func Find(dir string) (string, error) {
 	dir, err := filepath.Abs(dir)
 	if err != nil {
 		return "", err
@@ -32,16 +33,16 @@ func FindEnvFile(dir string) (string, error) {
 	}
 }
 
-// LoadEnvFile loads KAYA_ENV_FILE, or the nearest .env, into the process environment.
+// Load loads KAYA_ENV_FILE, or the nearest .env, into the process environment.
 // Variables already set are never overridden. It returns the loaded path, or "" if none was found.
-func LoadEnvFile() (string, error) {
+func Load() (string, error) {
 	path := os.Getenv("KAYA_ENV_FILE")
 	if path == "" {
 		cwd, err := os.Getwd()
 		if err != nil {
 			return "", err
 		}
-		if path, err = FindEnvFile(cwd); err != nil || path == "" {
+		if path, err = Find(cwd); err != nil || path == "" {
 			return "", err
 		}
 	}

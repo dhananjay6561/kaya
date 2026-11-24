@@ -18,13 +18,14 @@ import (
 	"github.com/dhananjay6561/kaya/contracts"
 	"github.com/dhananjay6561/kaya/gateway/internal/config"
 	"github.com/dhananjay6561/kaya/gateway/internal/events"
-	"github.com/dhananjay6561/kaya/gateway/internal/httpapi"
 	"github.com/dhananjay6561/kaya/gateway/internal/ingest"
-	"github.com/dhananjay6561/kaya/gateway/internal/logging"
 	"github.com/dhananjay6561/kaya/gateway/internal/media"
 	"github.com/dhananjay6561/kaya/gateway/internal/send"
 	"github.com/dhananjay6561/kaya/gateway/internal/store"
 	"github.com/dhananjay6561/kaya/gateway/internal/whatsapp"
+	"github.com/dhananjay6561/kaya/kit/envfile"
+	"github.com/dhananjay6561/kaya/kit/httpapi"
+	"github.com/dhananjay6561/kaya/kit/logging"
 )
 
 var version = "dev"
@@ -68,7 +69,7 @@ func exitOnError(err error) {
 }
 
 func loadConfig() (config.Config, error) {
-	envFile, err := config.LoadEnvFile()
+	envFile, err := envfile.Load()
 	if err != nil {
 		return config.Config{}, err
 	}

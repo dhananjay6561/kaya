@@ -1,4 +1,5 @@
-// Package httpapi serves the gateway's HTTP endpoints.
+// Package httpapi serves a Kaya service's HTTP endpoints: /health, with request ids, logging and
+// panic recovery.
 package httpapi
 
 import (
@@ -12,7 +13,7 @@ import (
 	"sync"
 	"time"
 
-	"github.com/dhananjay6561/kaya/gateway/internal/logging"
+	"github.com/dhananjay6561/kaya/kit/logging"
 )
 
 // Checker reports whether one dependency works.
@@ -20,7 +21,7 @@ type Checker interface {
 	Check(ctx context.Context) error
 }
 
-// Options configures the gateway's routes.
+// Options configures a service's routes.
 type Options struct {
 	Logger       *slog.Logger
 	Service      string
@@ -44,7 +45,7 @@ type healthBody struct {
 	Info    map[string]any         `json:"info,omitempty"`
 }
 
-// NewHandler returns the gateway's routes, wrapped with request ids, logging and panic recovery.
+// NewHandler returns the service's routes, wrapped with request ids, logging and panic recovery.
 func NewHandler(o Options) http.Handler {
 	if o.Logger == nil {
 		o.Logger = slog.New(slog.DiscardHandler)

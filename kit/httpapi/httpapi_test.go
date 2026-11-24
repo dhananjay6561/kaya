@@ -12,7 +12,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/dhananjay6561/kaya/gateway/internal/logging"
+	"github.com/dhananjay6561/kaya/kit/logging"
 )
 
 type checkFunc func(ctx context.Context) error

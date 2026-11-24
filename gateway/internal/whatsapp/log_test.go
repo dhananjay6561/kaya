@@ -10,7 +10,7 @@ import (
 
 	waBinary "go.mau.fi/whatsmeow/binary"
 
-	"github.com/dhananjay6561/kaya/gateway/internal/logging"
+	"github.com/dhananjay6561/kaya/kit/logging"
 )
 
 func lines(t *testing.T, buf *bytes.Buffer) []map[string]any {

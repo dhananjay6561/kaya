@@ -1,4 +1,4 @@
-// Package logging builds the gateway's structured JSON logger.
+// Package logging builds a Kaya service's structured JSON logger.
 package logging
 
 import (

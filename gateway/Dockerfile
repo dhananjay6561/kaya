@@ -1,6 +1,7 @@
 FROM golang:1.26.11-alpine3.24@sha256:ecb67f987aa1a57794c91d19ade7ae0209f2f0f5496aaef9e6ae85ddf92d02ab AS build
 WORKDIR /src
 COPY contracts/ contracts/
+COPY kit/ kit/
 COPY gateway/go.mod gateway/go.sum gateway/
 WORKDIR /src/gateway
 RUN go mod download
