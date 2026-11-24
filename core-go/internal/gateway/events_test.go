@@ -146,3 +146,43 @@ func TestHandsEachStoredMessageToItsListenersInsideTheTransaction(t *testing.T) 
 		t.Fatalf("want the listener's error, got %v", err)
 	}
 }
+
+func TestCallsMessageListenersInOrderAndDropsAllFollowUpsWhenOneFails(t *testing.T) {
+	core, _ := databases(t)
+	events := NewEvents(quiet)
+	var order, ran []string
+	listener := func(name string, fail bool) MessageListener {
+		return func(context.Context, pgx.Tx, contracts.MessageStored) (AfterCommit, error) {
+			order = append(order, name)
+			if fail {
+				return nil, errors.New("second listener failed")
+			}
+			return func() { ran = append(ran, name) }, nil
+		}
+	}
+	for i, name := range []string{"a", "b", "c", "d", "e"} {
+		events.OnMessage(listener(name, false))
+		_ = i
+	}
+	stored := event(t, contracts.EventMessageStored, contracts.MessageStored{
+		MessageID: 1, ChatID: 1, SenderID: 1, WAID: "3EB0CCCC", Kind: "text", Source: "live", Change: "new",
+		SentAt: contracts.At(at("2026-11-22T10:00:00Z")),
+	}, time.Now())
+	if err := handleOne(t, core, events, stored); err != nil {
+		t.Fatal(err)
+	}
+	if !slices.Equal(order, []string{"a", "b", "c", "d", "e"}) || !slices.Equal(ran, order) {
+		t.Fatalf("order %v, follow-ups %v", order, ran)
+	}
+
+	failing := NewEvents(quiet)
+	order, ran = nil, nil
+	failing.OnMessage(listener("first", false))
+	failing.OnMessage(listener("second", true))
+	if err := handleOne(t, core, failing, stored); err == nil {
+		t.Fatal("want the second listener's error")
+	}
+	if len(ran) != 0 {
+		t.Fatalf("no follow-up may run when the event fails, ran %v", ran)
+	}
+}

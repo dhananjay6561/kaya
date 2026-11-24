@@ -2,6 +2,7 @@ package gateway
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"net/url"
 	"slices"
@@ -78,7 +79,7 @@ func (r *rig) states() []string {
 }
 
 func (r *rig) listeners() []string {
-	return r.strings("SELECT pid::text FROM pg_stat_activity WHERE query LIKE 'LISTEN%' AND datname = current_database()")
+	return r.strings("SELECT pid::text FROM pg_stat_activity WHERE application_name = 'kaya-core-listen' AND datname = current_database()")
 }
 
 func record(ctx context.Context, tx pgx.Tx, e contracts.Event) (AfterCommit, error) {
@@ -188,7 +189,18 @@ func TestRunsAFollowUpOnlyOnceTheEventIsCommitted(t *testing.T) {
 	r := newRig(t)
 	observed := make(chan []string, 1)
 	r.run(func(context.Context, pgx.Tx, contracts.Event) (AfterCommit, error) {
-		return func() { observed <- r.states() }, nil
+		return func() {
+			var states []string
+			_ = r.admin.InTx(context.Background(), func(tx pgx.Tx) error {
+				rows, err := tx.Query(context.Background(), "SELECT state FROM gateway_events")
+				if err != nil {
+					return err
+				}
+				states, err = pgx.CollectRows(rows, pgx.RowTo[string])
+				return err
+			})
+			observed <- states
+		}, nil
 	}, nil)
 	add(t, r.admin, connectionEvent(t, "connected"))
 	select {
@@ -237,11 +249,14 @@ func TestTakesEventsByTheirNumberNotWhereTheySit(t *testing.T) {
 		q.Set(setting, "off")
 	}
 	u.RawQuery = q.Encode()
-	tableOrder, err := store.Open(u.String())
+	tableOrder, err := store.Open(u.String(), store.WithAppName("kaya-core"))
 	if err != nil {
 		t.Fatal(err)
 	}
-	defer tableOrder.Close()
+	defer func() {
+		r.stop()
+		tableOrder.Close()
+	}()
 	r.core = tableOrder
 	r.run(record, nil)
 	eventually(t, "three handled events", func() bool { return len(r.seen()) == 3 })
@@ -309,8 +324,10 @@ func TestDoesNotSleepThroughAnEventThatArrivesWhileFinishingARound(t *testing.T)
 		eventually(t, "the round to be held up at its clean-up", func() bool {
 			return len(r.strings("SELECT pid::text FROM pg_stat_activity WHERE wait_event_type = 'Lock' AND query LIKE 'DELETE FROM gateway_events%'")) > 0
 		})
-		raw := `{"id":"` + arrived.ID + `","version":1,"type":"connection.state","occurred_at":"` +
-			arrived.OccurredAt.UTC().Format("2006-01-02T15:04:05.000Z") + `","data":{"state":"connected"}}`
+		raw, err := json.Marshal(arrived)
+		if err != nil {
+			return err
+		}
 		if _, err := blocker.Exec(ctx, "INSERT INTO gateway_events (id, type, payload) VALUES ($1, 'connection.state', $2)", arrived.ID, raw); err != nil {
 			return err
 		}
@@ -350,4 +367,94 @@ func TestStopsAtOnceWhateverItIsDoing(t *testing.T) {
 			t.Fatalf("stop took %s, %s after start", d, wait)
 		}
 	}
+}
+
+func TestLeavesAnEventPendingWhenItStopsMidHandler(t *testing.T) {
+	r := newRig(t)
+	inside := make(chan struct{})
+	r.run(func(ctx context.Context, tx pgx.Tx, e contracts.Event) (AfterCommit, error) {
+		close(inside)
+		<-ctx.Done()
+		return nil, ctx.Err()
+	}, nil)
+	add(t, r.admin, connectionEvent(t, "connected"))
+	<-inside
+	r.stop()
+	if !slices.Equal(r.states(), []string{"pending"}) {
+		t.Fatalf("a shutdown must never set an event aside, got %v", r.states())
+	}
+}
+
+func TestSetsAsideAHandlerThatBreaksItsOwnConnection(t *testing.T) {
+	r := newRig(t)
+	r.run(func(ctx context.Context, tx pgx.Tx, e contracts.Event) (AfterCommit, error) {
+		switch stateOf(e) {
+		case "connecting":
+			short, cancel := context.WithTimeout(ctx, 50*time.Millisecond)
+			defer cancel()
+			_, err := tx.Exec(short, "SELECT pg_sleep(1)")
+			return nil, err
+		case "pairing":
+			rows, err := tx.Query(ctx, "SELECT generate_series(1, 1000)")
+			if err != nil {
+				return nil, err
+			}
+			_ = rows
+			return nil, nil
+		}
+		return record(ctx, tx, e)
+	}, nil)
+	for _, s := range []string{"connecting", "pairing", "connected"} {
+		add(t, r.admin, connectionEvent(t, s))
+	}
+	eventually(t, "the event after the broken ones", func() bool { return slices.Contains(r.seen(), "connected") })
+	if !slices.Equal(r.states(), []string{"dead handler_failed", "dead handler_failed", "handled"}) {
+		t.Fatalf("got %v", r.states())
+	}
+}
+
+func TestReportsStoppedWhenItsParentIsCancelledAndCanStartAgain(t *testing.T) {
+	r := newRig(t)
+	parent, cancel := context.WithCancel(context.Background())
+	r.consumer = NewConsumer(ConsumerOptions{
+		DB: r.core, Validator: validator(t), Logger: quiet, Handle: record,
+		PollInterval: time.Minute, RetryMin: 5 * time.Millisecond, RetryMax: 20 * time.Millisecond,
+	})
+	r.consumer.Start(parent)
+	cancel()
+	eventually(t, "the health check to fail", func() bool { return errors.Is(r.consumer.Check(context.Background()), ErrNotRunning) })
+	r.consumer.Start(context.Background())
+	add(t, r.admin, connectionEvent(t, "connected"))
+	eventually(t, "the event after restarting", func() bool { return len(r.seen()) == 1 })
+}
+
+func TestEveryStopWaitsForTheLoopsToEnd(t *testing.T) {
+	r := newRig(t)
+	release := make(chan struct{})
+	r.run(func(context.Context, pgx.Tx, contracts.Event) (AfterCommit, error) {
+		return func() { <-release }, nil
+	}, nil)
+	add(t, r.admin, connectionEvent(t, "connected"))
+	eventually(t, "the follow-up to start", func() bool { return slices.Equal(r.states(), []string{"handled"}) })
+	stopped := make(chan struct{}, 2)
+	go func() { r.consumer.Stop(); stopped <- struct{}{} }()
+	go func() { r.consumer.Stop(); stopped <- struct{}{} }()
+	select {
+	case <-stopped:
+		t.Fatal("a stop returned while a follow-up was still running")
+	case <-time.After(200 * time.Millisecond):
+	}
+	close(release)
+	<-stopped
+	<-stopped
+}
+
+func TestClosesItsListeningConnectionWhenItStops(t *testing.T) {
+	r := newRig(t)
+	r.run(record, nil)
+	eventually(t, "the listener", func() bool { return len(r.listeners()) > 0 })
+	r.stop()
+	eventually(t, "no listener", func() bool {
+		return len(r.strings("SELECT pid::text FROM pg_stat_activity WHERE datname = current_database() AND query LIKE 'LISTEN%' AND state <> 'idle in transaction (aborted)' AND application_name LIKE 'kaya-core%'")) == 0
+	})
 }
