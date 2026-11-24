@@ -7,7 +7,7 @@ import (
 	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgconn"
 
-	"github.com/dhananjay6561/kaya/gateway/internal/contracts"
+	"github.com/dhananjay6561/kaya/contracts"
 )
 
 const uniqueViolation = "23505"

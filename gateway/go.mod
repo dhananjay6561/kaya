@@ -8,7 +8,6 @@ require (
 )
 
 require (
-	github.com/santhosh-tekuri/jsonschema/v6 v6.0.3
 	go.mau.fi/whatsmeow v0.0.0-20261116172437-19d61352436f
 	google.golang.org/protobuf v1.36.12
 	rsc.io/qr v0.2.0
@@ -24,6 +23,7 @@ require (
 	github.com/mattn/go-isatty v0.0.20 // indirect
 	github.com/petermattis/goid v0.0.0-20261109124353-7cfa343ad0ab // indirect
 	github.com/rs/zerolog v1.35.1 // indirect
+	github.com/santhosh-tekuri/jsonschema/v6 v6.0.3 // indirect
 	github.com/vektah/gqlparser/v2 v2.5.27 // indirect
 	go.mau.fi/libsignal v0.2.3 // indirect
 	go.mau.fi/util v0.11.1 // indirect

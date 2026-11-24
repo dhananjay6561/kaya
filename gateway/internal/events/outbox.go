@@ -7,7 +7,7 @@ import (
 
 	"github.com/jackc/pgx/v5"
 
-	"github.com/dhananjay6561/kaya/gateway/internal/contracts"
+	"github.com/dhananjay6561/kaya/contracts"
 )
 
 // Outbox inserts events into gateway_events. Each insert runs inside the caller's transaction, so

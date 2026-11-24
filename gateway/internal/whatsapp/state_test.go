@@ -15,7 +15,7 @@ import (
 	"go.mau.fi/whatsmeow/types"
 	"go.mau.fi/whatsmeow/types/events"
 
-	"github.com/dhananjay6561/kaya/gateway/internal/contracts"
+	"github.com/dhananjay6561/kaya/contracts"
 )
 
 type fakePublisher struct {

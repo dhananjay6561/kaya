@@ -6,7 +6,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/dhananjay6561/kaya/gateway/internal/contracts"
+	"github.com/dhananjay6561/kaya/contracts"
 	"github.com/dhananjay6561/kaya/gateway/internal/testdb"
 )
 

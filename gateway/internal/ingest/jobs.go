@@ -10,7 +10,7 @@ import (
 	"go.mau.fi/whatsmeow/proto/waHistorySync"
 	"google.golang.org/protobuf/proto"
 
-	"github.com/dhananjay6561/kaya/gateway/internal/contracts"
+	"github.com/dhananjay6561/kaya/contracts"
 )
 
 // History job states, as stored in history_jobs.state.

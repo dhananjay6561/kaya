@@ -12,8 +12,6 @@ import (
 	"time"
 
 	"github.com/santhosh-tekuri/jsonschema/v6"
-
-	shared "github.com/dhananjay6561/kaya/contracts"
 )
 
 const baseURL = "https://kaya.invalid/contracts/v1/"
@@ -77,11 +75,11 @@ func NewValidator() (*Validator, error) {
 	c.DefaultDraft(jsonschema.Draft2020)
 	c.AssertFormat()
 
-	err := fs.WalkDir(shared.Schemas, "schemas/v1", func(p string, d fs.DirEntry, err error) error {
+	err := fs.WalkDir(Schemas, "schemas/v1", func(p string, d fs.DirEntry, err error) error {
 		if err != nil || d.IsDir() || !strings.HasSuffix(p, ".schema.json") {
 			return err
 		}
-		raw, err := fs.ReadFile(shared.Schemas, p)
+		raw, err := fs.ReadFile(Schemas, p)
 		if err != nil {
 			return err
 		}

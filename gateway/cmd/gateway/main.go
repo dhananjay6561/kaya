@@ -15,8 +15,8 @@ import (
 	"syscall"
 	"time"
 
+	"github.com/dhananjay6561/kaya/contracts"
 	"github.com/dhananjay6561/kaya/gateway/internal/config"
-	"github.com/dhananjay6561/kaya/gateway/internal/contracts"
 	"github.com/dhananjay6561/kaya/gateway/internal/events"
 	"github.com/dhananjay6561/kaya/gateway/internal/httpapi"
 	"github.com/dhananjay6561/kaya/gateway/internal/ingest"
