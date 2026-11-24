@@ -50,7 +50,7 @@ describe("groq", () => {
     });
     assert.equal(calls[0]?.url, "https://api.groq.com/openai/v1/chat/completions");
     assert.equal(
-      (calls[0]?.init.headers as Record<string, string>).Authorization,
+      (calls[0]?.init.headers as Record<string, string> | undefined)?.Authorization,
       "Bearer test-key-not-real",
     );
     assert.deepEqual(calls[0]?.body, {
