@@ -76,9 +76,10 @@ contact, and it works with everything your WhatsApp account can see.
 - **Built-in commands.** `/help` lists them, `/status` says whether Kaya is up and connected,
   `/pause` stops every answer until `/resume`. The pause is kept in the database, so it holds
   across restarts, and while paused Kaya still answers its slash commands.
-- **Answers from Groq.** Anything else you type in your own chat is answered by Groq's
-  `openai/gpt-oss-20b`, one message at a time, in WhatsApp formatting and with today's date in your
-  time zone. Only that message is sent, never your other chats. Timeouts, limited retries, and a
+- **Answers from Groq, with memory.** Anything else you type in your own chat is answered by Groq's
+  `openai/gpt-oss-20b`, in WhatsApp formatting and with today's date in your time zone. Kaya builds
+  the context itself: the recent conversation in your own chat, fitted to a token budget set per
+  model, so follow-ups work and the model can be swapped. Never your other chats. Timeouts, limited retries, and a
   plain notice in the chat when the model cannot answer; logs keep token counts, never text.
 - **Least-privilege database logins.** The gateway and core each have their own Postgres role.
   Core, the part that will talk to an LLM, can read chats but cannot see the WhatsApp session, its
@@ -522,7 +523,7 @@ Status key: ✅ done · 🟨 in progress · ⬜ not started
 | 0. Foundation | Monorepo, config, Compose stack, migrations, logging, health, provider interfaces | ✅ |
 | 1. WhatsApp gateway | Contracts, pairing, live ingest, history sync, media, connection health, delivery to core and sending. Checked end to end against a real WhatsApp account. | ✅ |
 | 2. Talking to Kaya | Self-chat command channel and built-in commands `/help`, `/status`, `/pause`, `/resume`. Checked on a real account. | ✅ |
-| 3. Brain | Groq replies (built), embeddings, meaning-based search, Q&A with sources, tagging, summaries | 🟨 |
+| 3. Brain | Groq replies and conversation memory (built), facts about you, masking, local embeddings, meaning-based search, Q&A with sources, tagging, summaries | 🟨 |
 | 4. Agent loop and safety | Masking, context picking, tool calling, confirm-before-act, prompt-injection guard, usage tracking | ⬜ |
 | 5. Voice notes | Transcription, spoken commands | ⬜ |
 | 6. Sending as you | Messages to contacts and groups after confirmation, with rate limits | ⬜ |
