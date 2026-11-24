@@ -1,3 +1,4 @@
+import { countTokens as harmonyTokens } from "gpt-tokenizer/encoding/o200k_harmony";
 import { z } from "zod";
 import type { GroqConfig } from "../../config/index.js";
 import { LlmError } from "./errors.js";
@@ -21,7 +22,8 @@ export type GroqOptions = Readonly<{
 }>;
 
 const reasoningEffort: Record<ModelTier, "low" | "medium"> = { routine: "low", heavy: "medium" };
-const defaultMaxTokens: Record<ModelTier, number> = { routine: 2_048, heavy: 8_192 };
+const defaultMaxTokens: Record<ModelTier, number> = { routine: 1_024, heavy: 8_192 };
+const framingTokens = 4;
 const finishReasons = new Set<string>(["stop", "length", "tool_calls", "content_filter"]);
 
 const responseSchema = z.object({
@@ -166,6 +168,7 @@ export function createGroqLlm(config: GroqConfig, options: GroqOptions = {}): Ll
     name: "groq",
     locality: "cloud",
     contextTokens: config.contextTokens,
+    countTokens: (text: string) => harmonyTokens(text) + framingTokens,
     async complete(request: CompletionRequest, callOptions: CallOptions = {}): Promise<Completion> {
       const { signal } = callOptions;
       signal?.throwIfAborted();

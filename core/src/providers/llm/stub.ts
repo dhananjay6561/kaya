@@ -22,6 +22,7 @@ export function createStubLlm(options: StubLlmOptions = {}): StubLlm {
     name: "stub",
     locality: "local",
     contextTokens: options.contextTokens ?? 4_000,
+    countTokens: (text: string) => roughTokens(text) + 4,
     requests,
     async complete(request: CompletionRequest, callOptions: CallOptions = {}): Promise<Completion> {
       callOptions.signal?.throwIfAborted();

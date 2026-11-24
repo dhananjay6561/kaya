@@ -32,5 +32,7 @@ export interface LlmProvider {
   readonly locality: Locality;
   /** How many tokens of context a request may carry. */
   readonly contextTokens: number;
+  /** Tokens one message takes for this model, its chat framing included. */
+  countTokens(text: string): number;
   complete(request: CompletionRequest, options?: CallOptions): Promise<Completion>;
 }

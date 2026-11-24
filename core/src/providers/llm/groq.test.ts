@@ -61,7 +61,7 @@ describe("groq", () => {
     assert.deepEqual(calls[0]?.body, {
       model: "small-model",
       messages: [{ role: "user", content: "hi" }],
-      max_completion_tokens: 2048,
+      max_completion_tokens: 1024,
       reasoning_effort: "low",
       include_reasoning: false,
     });
@@ -279,6 +279,12 @@ describe("groq", () => {
       { fetch: fake },
     );
     await assert.rejects(llm.complete(ask, { signal: controller.signal }), /core is stopping/);
+  });
+
+  it("counts tokens the way gpt-oss does, with the chat framing", () => {
+    const { llm } = groq([]);
+    assert.equal(llm.countTokens("hello how are you"), 4 + 4);
+    assert.ok(llm.countTokens("order id 4839201, txn 99381") > 10, "numbers cost more than words");
   });
 
   it("does not call out for an empty conversation", async () => {
