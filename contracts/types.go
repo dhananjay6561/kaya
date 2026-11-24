@@ -182,7 +182,7 @@ func NewSendRequest(to, text string, auth Authorization, replyTo *ReplyTo, ttl t
 		ID:            NewID(),
 		Version:       Version,
 		CreatedAt:     At(now),
-		ExpiresAt:     At(now.Add(ttl)),
+		ExpiresAt:     At(now.Add(ttl).Truncate(time.Microsecond)),
 		To:            to,
 		Authorization: auth,
 		Content:       TextContent{Type: "text", Text: strings.TrimSpace(text)},
