@@ -4,7 +4,7 @@ import { type Contracts, newSendRequest } from "../../contracts/index.js";
 import type { Logger } from "../../lib/logger.js";
 import { type MessageListener, readConnection } from "../../modules/gateway/index.js";
 import { createInbox, type Inbox } from "./inbox.js";
-import { ChannelNotStartedError } from "./stub.js";
+import { ChannelNotStartedError, IdempotencyKeyReusedError } from "./stub.js";
 import type {
   ChatChannel,
   IncomingMessage,
@@ -29,6 +29,7 @@ export type GatewayChannelDeps = Readonly<{
   incoming?: IncomingEvents;
   logger?: Logger;
   inboxPollMs?: number;
+  exemptFromCap?: (text: string) => boolean;
   ttlMs?: number;
   pollMs?: number;
   graceMs?: number;
@@ -49,13 +50,6 @@ export class SendFailedError extends Error {
   ) {
     super(`the message was not sent: ${code}`);
     this.name = "SendFailedError";
-  }
-}
-
-export class IdempotencyKeyReusedError extends Error {
-  constructor(readonly requestId: string) {
-    super("this idempotency key was already used for a different message");
-    this.name = "IdempotencyKeyReusedError";
   }
 }
 
@@ -99,6 +93,7 @@ export function createGatewayChannel(deps: GatewayChannelDeps): ChatChannel {
           pool,
           logger: deps.logger,
           ...(deps.inboxPollMs === undefined ? {} : { pollMs: deps.inboxPollMs }),
+          ...(deps.exemptFromCap ? { exemptFromCap: deps.exemptFromCap } : {}),
         })
       : undefined;
 

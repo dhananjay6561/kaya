@@ -180,6 +180,7 @@ describe("command inbox", { skip: !testDatabaseUrl && "TEST_DATABASE_URL not set
       maxPerMinute?: number;
       retentionMs?: number;
       purgeEveryMs?: number;
+      exemptFromCap?: (text: string) => boolean;
     } = {},
     ready: () => boolean = () => true,
   ): Inbox {
@@ -316,6 +317,24 @@ describe("command inbox", { skip: !testDatabaseUrl && "TEST_DATABASE_URL not set
       (await commands()).map((c) => c.split(" ").slice(1).join(" ")),
       ["done", "done", "done", "failed rate_limited", "failed rate_limited"],
     );
+  });
+
+  it("never drops a command the cap was told to let through", async () => {
+    const typed = [];
+    for (let i = 0; i < 4; i++) typed.push(await message({ body: `command ${i}` }));
+    typed.push(await message({ body: "/pause" }));
+    for (const stored of typed) await record(stored);
+    const seen: string[] = [];
+    started(
+      async (incoming) => {
+        seen.push(incoming.text);
+      },
+      { maxPerMinute: 2, exemptFromCap: (text) => text.startsWith("/") },
+    );
+    await eventually("all five to be settled", async () =>
+      (await commands()).every((c) => !c.endsWith("pending")),
+    );
+    assert.deepEqual(seen, ["command 0", "command 1", "/pause"]);
   });
 
   it("runs each command in one worker even when two are started", async () => {

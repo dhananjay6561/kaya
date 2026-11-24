@@ -14,6 +14,7 @@ export type InboxOptions = Readonly<{
   maxPerMinute?: number;
   retentionMs?: number;
   purgeEveryMs?: number;
+  exemptFromCap?: (text: string) => boolean;
 }>;
 
 export type Deliver = (message: IncomingMessage, signal: AbortSignal) => Promise<void>;
@@ -50,6 +51,7 @@ export function createInbox(options: InboxOptions): Inbox {
   const maxPerMinute = options.maxPerMinute ?? 20;
   const retentionMs = options.retentionMs ?? 30 * 24 * 60 * 60_000;
   const purgeEveryMs = options.purgeEveryMs ?? 60 * 60_000;
+  const exemptFromCap = options.exemptFromCap ?? (() => false);
 
   let running = false;
   let halted = new AbortController();
@@ -142,15 +144,6 @@ export function createInbox(options: InboxOptions): Inbox {
       return true;
     }
 
-    const recent = await pool.query<{ n: number }>(
-      "SELECT count(*)::int AS n FROM commands WHERE finished_at > now() - interval '1 minute' AND error IS DISTINCT FROM 'rate_limited'",
-    );
-    if ((recent.rows[0]?.n ?? 0) >= maxPerMinute) {
-      logger.error({ command_id: row.id }, "too many commands in a minute; this one was dropped");
-      await finish(row.id, "rate_limited");
-      return true;
-    }
-
     const found = await pool.query<{ body: string | null }>(
       "SELECT body FROM messages WHERE id = $1 AND deleted_at IS NULL",
       [row.message_id],
@@ -159,6 +152,17 @@ export function createInbox(options: InboxOptions): Inbox {
     if (!text) {
       await finish(row.id, "message_gone");
       return true;
+    }
+
+    if (!exemptFromCap(text)) {
+      const recent = await pool.query<{ n: number }>(
+        "SELECT count(*)::int AS n FROM commands WHERE finished_at > now() - interval '1 minute' AND error IS DISTINCT FROM 'rate_limited'",
+      );
+      if ((recent.rows[0]?.n ?? 0) >= maxPerMinute) {
+        logger.error({ command_id: row.id }, "too many commands in a minute; this one was dropped");
+        await finish(row.id, "rate_limited");
+        return true;
+      }
     }
 
     try {
