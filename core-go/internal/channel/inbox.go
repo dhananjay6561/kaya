@@ -363,7 +363,7 @@ func (in *Inbox) step(ctx context.Context, lock *lockHolder, deliver Deliver, re
 			in.giveBackAttempt(row.id)
 			lock.release()
 			return false, err
-		case in.databaseAway(err):
+		case DatabaseAway(in.o.DB, err):
 			in.giveBackAttempt(row.id)
 			return false, err
 		}
@@ -374,10 +374,10 @@ func (in *Inbox) step(ctx context.Context, lock *lockHolder, deliver Deliver, re
 	return true, in.finish(db, row, "", handled.AnswerID)
 }
 
-// databaseAway reports whether a handler failed because the database is down, not because of its
+// DatabaseAway reports whether a handler failed because the database is down, not because of its
 // own work: a coded failure is the handler's, and a network error counts only if Postgres itself
-// does not answer, since a handler also talks to other services.
-func (in *Inbox) databaseAway(err error) bool {
+// does not answer, since a handler also talks to other services. Only then is the command run again.
+func DatabaseAway(db *store.DB, err error) bool {
 	if len(codesIn(err)) > 0 || !store.IsConnectionError(err) {
 		return false
 	}
@@ -388,7 +388,7 @@ func (in *Inbox) databaseAway(err error) bool {
 	}
 	probe, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 	defer cancel()
-	return in.o.DB.Check(probe) != nil
+	return db.Check(probe) != nil
 }
 
 // deliverWatched hands one command over while watching the worker lock: if its connection drops,

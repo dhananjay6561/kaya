@@ -12,7 +12,6 @@ import (
 	"github.com/dhananjay6561/kaya/core/internal/llm"
 	"github.com/dhananjay6561/kaya/core/internal/pause"
 	"github.com/dhananjay6561/kaya/core/internal/text"
-	"github.com/dhananjay6561/kaya/kit/store"
 )
 
 // ChatAnswer is the model's reply to a plain message. Remember is false for a canned reply that
@@ -29,6 +28,9 @@ type Options struct {
 	Pause   pause.Switch
 	Status  func(ctx context.Context) (string, error)
 	Chat    func(ctx context.Context, m channel.IncomingMessage) (ChatAnswer, error)
+	// DatabaseAway says whether an error means the database is down, so the command will run again
+	// and nothing is said; it must agree with the inbox, so pass channel.DatabaseAway.
+	DatabaseAway func(err error) bool
 
 	// MaxAge is how late a command may be taken in and still be acted on.
 	MaxAge time.Duration
@@ -75,6 +77,9 @@ func neverSent(err error) (*channel.SendFailedError, bool) {
 
 // Start registers the command handler on the channel and returns a function that removes it.
 func Start(o Options) func() {
+	if o.DatabaseAway == nil {
+		panic("commands: Options.DatabaseAway is required")
+	}
 	if o.MaxAge == 0 {
 		o.MaxAge = 10 * time.Minute
 	}
@@ -210,7 +215,7 @@ func (h *handler) produce(ctx context.Context, m channel.IncomingMessage, slash 
 	if err == nil {
 		return answer, nil
 	}
-	if ctx.Err() != nil || store.IsConnectionError(err) {
+	if ctx.Err() != nil || o.DatabaseAway(err) {
 		return ChatAnswer{}, err
 	}
 	if _, sendErr := o.Channel.Send(ctx, channel.OutgoingMessage{

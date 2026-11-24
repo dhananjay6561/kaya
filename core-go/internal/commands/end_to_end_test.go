@@ -3,6 +3,8 @@ package commands
 import (
 	"context"
 	"encoding/json"
+	"net"
+	"syscall"
 	"testing"
 	"time"
 
@@ -115,7 +117,9 @@ func eventually(t *testing.T, what string, ok func() bool) {
 	}
 }
 
-func TestACommandEndToEndIsAnsweredOnceAndKayaNeverAnswersItself(t *testing.T) {
+// running starts the consumer, gateway channel, inbox and command handler on a fresh database.
+func running(t *testing.T, chat func(context.Context, channel.IncomingMessage) (ChatAnswer, error)) *e2e {
+	t.Helper()
 	core, admin := testdb.MigratedPair(t, "kaya_core", store.WithAppName("kaya-core"))
 	v, err := contracts.NewValidator()
 	if err != nil {
@@ -135,10 +139,9 @@ func TestACommandEndToEndIsAnsweredOnceAndKayaNeverAnswersItself(t *testing.T) {
 	})
 	Start(Options{
 		Channel: ch, Logger: quiet, Pause: pause.NewStored(core),
-		Status: func(context.Context) (string, error) { return "ok", nil },
-		Chat: func(_ context.Context, m channel.IncomingMessage) (ChatAnswer, error) {
-			return ChatAnswer{Text: "You said: " + m.Text, Remember: true}, nil
-		},
+		Status:       func(context.Context) (string, error) { return "ok", nil },
+		Chat:         chat,
+		DatabaseAway: func(err error) bool { return channel.DatabaseAway(core, err) },
 	})
 	ctx, cancel := context.WithCancel(bg)
 	if err := ch.Start(ctx); err != nil {
@@ -152,6 +155,20 @@ func TestACommandEndToEndIsAnsweredOnceAndKayaNeverAnswersItself(t *testing.T) {
 	})
 
 	e.emit(contracts.EventConnectionState, contracts.ConnectionState{State: "connected", OwnJID: ownPN})
+	return e
+}
+
+func (e *e2e) idle() {
+	e.t.Helper()
+	eventually(e.t, "every event and command to be handled", func() bool {
+		return e.count("SELECT 1 FROM gateway_events WHERE state = 'pending' UNION ALL SELECT 1 FROM commands WHERE state = 'pending'") == 0
+	})
+}
+
+func TestACommandEndToEndIsAnsweredOnceAndKayaNeverAnswersItself(t *testing.T) {
+	e := running(t, func(_ context.Context, m channel.IncomingMessage) (ChatAnswer, error) {
+		return ChatAnswer{Text: "You said: " + m.Text, Remember: true}, nil
+	})
 	typed := e.stored("3EB0TYPEDBYDJ", "hello kaya")
 
 	var reqs []request
@@ -175,9 +192,7 @@ func TestACommandEndToEndIsAnsweredOnceAndKayaNeverAnswersItself(t *testing.T) {
 	e.stored("3EB0KAYAREPLY", "You said: hello kaya")
 	e.emit(contracts.EventSendResult, contracts.SendResult{RequestID: reqs[0].id, Status: "sent", WAID: "3EB0KAYAREPLY"})
 	e.emit(contracts.EventMessageStored, typed)
-	eventually(t, "every event and command to be handled", func() bool {
-		return e.count("SELECT 1 FROM gateway_events WHERE state = 'pending' UNION ALL SELECT 1 FROM commands WHERE state = 'pending'") == 0
-	})
+	e.idle()
 
 	if n := len(e.requests()); n != 1 {
 		t.Fatalf("the reply, a repeat of the event and Kaya's own message add nothing; %d requests", n)
@@ -187,5 +202,26 @@ func TestACommandEndToEndIsAnsweredOnceAndKayaNeverAnswersItself(t *testing.T) {
 	}
 	if n := e.count("SELECT 1 FROM gateway_events WHERE state = 'dead'"); n != 0 {
 		t.Fatalf("%d dead events", n)
+	}
+}
+
+func TestACommandEndToEndFailsWithANoticeWhenAnotherServiceIsUnreachable(t *testing.T) {
+	calls := 0
+	e := running(t, func(context.Context, channel.IncomingMessage) (ChatAnswer, error) {
+		calls++
+		return ChatAnswer{}, &net.OpError{Op: "dial", Net: "tcp", Err: syscall.ECONNREFUSED}
+	})
+	e.stored("3EB0GROQDOWN", "hello kaya")
+	var reqs []request
+	eventually(t, "the notice to be queued", func() bool { reqs = e.requests(); return len(reqs) > 0 })
+	e.exec("UPDATE send_requests SET state = 'sending', wa_id = '3EB0NOTICE' WHERE id = $1", reqs[0].id)
+	e.exec("UPDATE send_requests SET state = 'sent', finished_at = now() WHERE id = $1", reqs[0].id)
+	e.emit(contracts.EventSendResult, contracts.SendResult{RequestID: reqs[0].id, Status: "sent", WAID: "3EB0NOTICE"})
+	e.idle()
+	if len(reqs) != 1 || reqs[0].payload.Content.Text != "Something went wrong with that. Send /status to see how things stand." {
+		t.Fatalf("got %+v", reqs)
+	}
+	if n := e.count("SELECT 1 FROM commands WHERE state = 'failed'"); n != 1 || calls != 1 {
+		t.Fatalf("the database is up, so the command fails once instead of running again: %d failed, %d calls", n, calls)
 	}
 }
