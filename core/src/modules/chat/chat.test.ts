@@ -16,16 +16,24 @@ describe("system prompt", () => {
     assert.match(systemPrompt(now, "UTC"), /Tuesday 24 November 2026, 19:00 \(UTC\)/);
   });
 
+  it("tells the truth about where the conversation goes", () => {
+    assert.match(systemPrompt(now, "UTC", "cloud"), /sent to an AI service in the cloud/);
+    assert.doesNotMatch(systemPrompt(now, "UTC", "cloud"), /run entirely on their own computer/);
+    assert.match(systemPrompt(now, "UTC", "local"), /run entirely on their own computer/);
+    assert.doesNotMatch(systemPrompt(now, "UTC", "local"), /in the cloud/);
+  });
+
   it("says what Kaya cannot do yet, so it does not pretend", () => {
     const prompt = systemPrompt(now, "UTC");
-    assert.match(prompt, /cannot yet read their other WhatsApp chats, search the web/);
-    assert.match(prompt, /remember your conversations with them for good/);
-    assert.match(prompt, /run on their own computer/);
+    assert.match(prompt, /never offer them, promise them or suggest you will: reminders/);
+    assert.match(prompt, /reading their other WhatsApp chats, searching the web/);
+    assert.match(prompt, /There are no sessions and nothing resets/);
+    assert.match(prompt, /cannot yet pin it as a lasting fact/);
+    assert.match(prompt, /marked with how long ago/);
     assert.match(prompt, /cannot check anything live/);
     assert.match(prompt, /Never make up facts/);
     assert.match(prompt, /Read past typos and autocorrect/);
-    assert.match(prompt, /never offer or promise what you cannot do yet/);
-    assert.match(prompt, /If they write Hinglish, answer in Hinglish/);
+    assert.match(prompt, /answer in Hinglish in Latin letters, never in Devanagari/);
     assert.match(prompt, /Never claim to have done something you did not do/);
   });
 });
@@ -113,7 +121,7 @@ describe("chat reply", () => {
     const request = llm.requests[0];
     assert.equal(request?.tier, "heavy");
     assert.equal(request?.effort, "medium");
-    assert.equal(request?.maxTokens, 2_048);
+    assert.equal(request?.maxTokens, 3_072);
     assert.equal(request?.messages.length, 2);
     assert.equal(request?.messages[0]?.role, "system");
     assert.deepEqual(request?.messages[1], { role: "user", content: "who are you?" });
@@ -128,6 +136,7 @@ describe("chat reply", () => {
         llm,
         logger,
         timeZone: "UTC",
+        now: () => now,
         history: async (question) => {
           seen.push(question.id);
           return [{ question: "how do I say hello?", answer: "Hello.", at: now }];
@@ -139,7 +148,7 @@ describe("chat reply", () => {
     assert.deepEqual(
       llm.requests[0]?.messages.slice(1).map((m) => [m.role, m.content]),
       [
-        ["user", "how do I say hello?"],
+        ["user", "(sent just now) how do I say hello?"],
         ["assistant", "Hello."],
         ["user", "and in Hindi?"],
       ],
@@ -155,6 +164,7 @@ describe("chat reply", () => {
         llm,
         logger,
         timeZone: "UTC",
+        now: () => now,
         history: async () => [
           { question: long, answer: long, at: now },
           { question: "short", answer: "reply", at: now },
@@ -164,7 +174,7 @@ describe("chat reply", () => {
     );
     assert.deepEqual(
       llm.requests[0]?.messages.slice(1).map((m) => m.content),
-      ["short", "reply", "next?"],
+      ["(sent just now) short", "reply", "next?"],
     );
   });
 
@@ -232,6 +242,25 @@ describe("chat reply", () => {
       chatReply(q("hi"), { llm, logger, timeZone: "UTC", history: away }, signal),
       /ECONNREFUSED/,
     );
+  });
+
+  it("asks again with less effort when the model spent all its room thinking", async () => {
+    const efforts: (string | undefined)[] = [];
+    const llm = {
+      ...createStubLlm(),
+      complete: async (request: { effort?: string }) => {
+        efforts.push(request.effort);
+        return {
+          text: request.effort === "low" ? "here you go" : "",
+          model: "m",
+          finishReason: "length" as const,
+          usage: { inputTokens: 1, outputTokens: 1 },
+        };
+      },
+    };
+    const reply = await chatReply(q("hard one"), { llm, logger, timeZone: "UTC" }, signal);
+    assert.deepEqual(efforts, ["medium", "low"]);
+    assert.match(reply.text, /^here you go/);
   });
 
   it("asks again without the conversation when the model says the request is too long", async () => {

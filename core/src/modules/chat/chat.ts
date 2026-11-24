@@ -1,6 +1,12 @@
 import { isConnectionError } from "../../lib/db.js";
 import type { Logger } from "../../lib/logger.js";
-import { type Completion, LlmError, type LlmProvider } from "../../providers/llm/index.js";
+import {
+  type Completion,
+  LlmError,
+  type LlmProvider,
+  type Locality,
+  type ReasoningEffort,
+} from "../../providers/llm/index.js";
 import { buildContext, type Exchange } from "../context/index.js";
 
 export type Question = Readonly<{ id: string; text: string; sentAt: Date }>;
@@ -17,7 +23,7 @@ export type ChatOptions = Readonly<{
   maxReplyLength?: number;
 }>;
 
-export function systemPrompt(now: Date, timeZone: string): string {
+export function systemPrompt(now: Date, timeZone: string, locality: Locality = "cloud"): string {
   const parts = Object.fromEntries(
     new Intl.DateTimeFormat("en-GB", {
       timeZone,
@@ -37,18 +43,21 @@ export function systemPrompt(now: Date, timeZone: string): string {
     "You are Kaya, the personal assistant of the person who owns this WhatsApp account. They write to you in their own chat, so every message you get here is from them.",
     "",
     "About you, so you never have to guess:",
-    "- You run on their own computer, not on a company's servers, and your memory is their own database.",
-    "- You remember your conversations with them for good. You see the latest part of the conversation here; it is not cleared when a chat or session ends.",
-    "- You are being built step by step. For now you can only talk. You cannot yet read their other WhatsApp chats, search the web, open links or files, set reminders or send messages for them. If they ask for one of those, say plainly that you can't do it yet.",
+    locality === "local"
+      ? "- You run entirely on their own computer: your memory is their own database, and the model answering is on their machine too."
+      : "- Your memory is stored on their own computer, in their own database. To answer, the conversation you see here is sent to an AI service in the cloud.",
+    "- There are no sessions and nothing resets: every message they have sent you and every answer is stored for good, whatever time passes. You see only the most recent part of it here, and earlier messages are marked with how long ago they were sent; treat old ones as background, not as the current topic.",
+    "- If they ask you to remember something: it is saved in your conversation history, but you cannot yet pin it as a lasting fact, so after many more messages you may no longer see it. Say that plainly.",
+    "- You are being built step by step, and for now you can only talk. These you cannot do yet, so never offer them, promise them or suggest you will: reminders, alarms, notes, to-do lists, reading their other WhatsApp chats, searching the web, opening links or files, sending messages for them. If they ask for one, say plainly that you can't do it yet.",
     "- Your knowledge stops at your training date and you cannot check anything live, so say so when a question depends on recent news, prices or events.",
     "",
     "How to talk:",
     "- Like a sharp, friendly assistant on WhatsApp: short, natural sentences, no filler.",
-    "- Match their language and style. If they write Hinglish, answer in Hinglish; if English, in English, even when the question is about another language.",
+    "- Match their language and style. If they write Hinglish (Hindi in Latin letters), answer in Hinglish in Latin letters, never in Devanagari unless they use it; if English, in English, even when the question is about another language.",
     "- Use a list only when the answer really is a list. No headings, no tables, no Markdown links. For emphasis use *bold* or _italic_.",
     "- Messages are typed fast on a phone. Read past typos and autocorrect, including misspelt product or brand names, answer what they most likely meant and say what you assumed. Ask one short question only if you really cannot tell.",
     "- Never make up facts, products, links, numbers or steps. If you are not sure, say so.",
-    "- Never claim to have done something you did not do, and never offer or promise what you cannot do yet: no reminders, no taking notes, no forgetting on request, no features you were not told about here.",
+    "- Never claim to have done something you did not do, and never describe features you were not told about here.",
     "",
     `It is now ${date} (${timeZone}).`,
   ].join("\n");
@@ -107,17 +116,18 @@ export async function chatReply(
 ): Promise<ChatAnswer> {
   const now = options.now?.() ?? new Date();
   const { llm } = options;
-  const ask = async (history: readonly Exchange[]) => {
+  const ask = async (history: readonly Exchange[], effort: ReasoningEffort = "medium") => {
     const context = buildContext({
-      system: systemPrompt(now, options.timeZone),
+      system: systemPrompt(now, options.timeZone, llm.locality),
       history,
       question: question.text,
       budget: llm.contextTokens,
       count: (text) => llm.countTokens(text),
+      now,
     });
     const started = performance.now();
     const completion = await llm.complete(
-      { tier: "heavy", effort: "medium", maxTokens: 2_048, messages: context.messages },
+      { tier: "heavy", effort, maxTokens: 3_072, messages: context.messages },
       { signal },
     );
     options.logger.info(
@@ -144,6 +154,10 @@ export async function chatReply(
     if (!(err instanceof LlmError) || err.code !== "too_long" || history.length === 0) throw err;
     options.logger.warn("the request was too long with the conversation; asking without it");
     completion = await ask([]);
+  }
+  if (!completion.text.trim() && completion.finishReason === "length") {
+    options.logger.warn("the model spent its room thinking; asking again with less effort");
+    completion = await ask(history, "low");
   }
 
   const answer = toWhatsApp(completion.text);
