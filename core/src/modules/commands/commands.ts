@@ -1,3 +1,4 @@
+import { isConnectionError } from "../../lib/db.js";
 import type { Logger } from "../../lib/logger.js";
 import {
   type ChatChannel,
@@ -63,13 +64,32 @@ export function startCommands(options: CommandsOptions): () => void {
 
     // The answer is worth sending until the command itself would count as too old.
     const ttlMs = Math.max(minReplyTtlMs, maxAgeMs - (Date.now() - message.sentAt.getTime()));
-    const text = slash
-      ? await answerSlash(slash, message.id, { pause, status: options.status })
-      : `You said: ${clip(message.text)}`;
+    let text = `You said: ${clip(message.text)}`;
+    if (slash) {
+      try {
+        text = await answerSlash(slash, message.id, { pause, status: options.status });
+      } catch (err) {
+        if (signal.aborted || isConnectionError(err)) throw err;
+        await channel.send(
+          {
+            idempotencyKey: `command:${message.id}:failed`,
+            replyTo: message.id,
+            text: "Something went wrong with that command. Send /status to see how things stand.",
+          },
+          { signal, ttlMs: noticeTtlMs },
+        );
+        throw err;
+      }
+    }
     try {
-      // A slash answer can come out differently when a command is retried (a status changes by
-      // the minute); the first one queued is the answer.
-      await channel.send({ ...reply, text }, { signal, ttlMs, textMayChange: slash !== undefined });
+      await channel.send(
+        {
+          ...reply,
+          ...(slash ? { idempotencyKey: `command:${message.id}:${slash.kind}:${slash.name}` } : {}),
+          text,
+        },
+        { signal, ttlMs, textMayChange: slash !== undefined },
+      );
     } catch (err) {
       if (!(err instanceof SendFailedError) || !neverSent.has(err.code)) throw err;
       logger.warn(
