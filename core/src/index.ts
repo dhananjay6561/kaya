@@ -68,8 +68,7 @@ async function run(config: Config, logger: Logger): Promise<void> {
           llm: providers.llm,
           logger,
           timeZone: config.timeZone,
-          history: (question) =>
-            readConversation(db.pool, { before: question.id, sentAt: question.sentAt }),
+          history: () => readConversation(db.pool),
         },
         signal,
       ),

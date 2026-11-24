@@ -43,7 +43,7 @@ describe("conversation", { skip: !testDatabaseUrl && "TEST_DATABASE_URL not set"
   });
 
   beforeEach(async () => {
-    await testDb.admin.query("TRUNCATE commands, messages CASCADE");
+    await testDb.admin.query("TRUNCATE exchanges, commands, messages CASCADE");
   });
 
   let seq = 0;
@@ -67,57 +67,42 @@ describe("conversation", { skip: !testDatabaseUrl && "TEST_DATABASE_URL not set"
     sentAt: Date,
     options: {
       answer?: string | null;
-      state?: "done" | "failed" | "pending";
       questionDeleted?: boolean;
       answerDeleted?: boolean;
       editedAfter?: boolean;
       answerChat?: number;
     } = {},
-  ): Promise<string> {
+  ): Promise<void> {
     const n = ++seq;
-    const waId = `3EB0ASK${n}`;
-    const messageId = await stored(chat, waId, body, sentAt, {
+    const messageId = await stored(chat, `3EB0ASK${n}`, body, sentAt, {
       ...(options.questionDeleted ? { deleted: true } : {}),
       ...(options.editedAfter ? { edited: new Date(now.getTime() + minute) } : {}),
     });
-    const answerWaId = options.answer === null ? null : `3EB0ANS${n}`;
-    if (answerWaId) {
-      await stored(
-        options.answerChat ?? chat,
-        answerWaId,
-        options.answer ?? `answer to ${body}`,
-        sentAt,
-        {
-          ...(options.answerDeleted ? { deleted: true } : {}),
-        },
-      );
-    }
-    const state = options.state ?? "done";
-    await testDb.admin.query(
-      `INSERT INTO commands (message_id, wa_id, sent_at, state, error, finished_at, answer_wa_id)
-       VALUES ($1, $2, $3, $4, $5, $6, $7)`,
-      [
-        messageId,
-        waId,
-        sentAt,
-        state,
-        state === "failed" ? "interrupted" : null,
-        state === "pending" ? null : now,
-        answerWaId,
-      ],
+    if (options.answer === null) return;
+    const answerWaId = `3EB0ANS${n}`;
+    await stored(
+      options.answerChat ?? chat,
+      answerWaId,
+      options.answer ?? `answer to ${body}`,
+      sentAt,
+      {
+        ...(options.answerDeleted ? { deleted: true } : {}),
+      },
     );
-    return waId;
+    await testDb.admin.query(
+      "INSERT INTO exchanges (question_message_id, answer_wa_id, created_at) VALUES ($1, $2, $3)",
+      [messageId, answerWaId, now],
+    );
   }
 
-  const read = (current: string, sentAt: Date, extra = {}) =>
-    readConversation(db.pool, { before: current, sentAt, ...extra });
+  const read = (extra = {}) => readConversation(db.pool, extra);
 
-  it("pairs each answered question with Kaya's answer, oldest first", async () => {
+  it("pairs each question with Kaya's answer, oldest first", async () => {
     await asked("what is the capital of France?", ago(5 * minute));
     await asked("and of Spain?", ago(3 * minute));
-    const current = await asked("and in Hindi?", now, { answer: null, state: "pending" });
+    await asked("and in Hindi?", now, { answer: null });
     assert.deepEqual(
-      (await read(current, now)).map((e) => [e.question, e.answer]),
+      (await read()).map((e) => [e.question, e.answer]),
       [
         ["what is the capital of France?", "answer to what is the capital of France?"],
         ["and of Spain?", "answer to and of Spain?"],
@@ -125,21 +110,18 @@ describe("conversation", { skip: !testDatabaseUrl && "TEST_DATABASE_URL not set"
     );
   });
 
-  it("leaves out unanswered commands before counting, so they never crowd out answers", async () => {
-    await asked("kept", ago(10 * minute));
-    for (let i = 0; i < 5; i++)
-      await asked(`/status ${i}`, ago((9 - i) * minute), { answer: null });
-    const current = await asked("now", now, { answer: null, state: "pending" });
+  it("remembers however long ago it was, keeping the latest ones up to the limit", async () => {
+    await asked("last month", ago(30 * 24 * 60 * minute));
+    await asked("last week", ago(7 * 24 * 60 * minute));
     assert.deepEqual(
-      (await read(current, now, { maxExchanges: 3 })).map((e) => e.question),
-      ["kept"],
+      (await read()).map((e) => e.question),
+      ["last month", "last week"],
     );
-  });
-
-  it("keeps an answer DJ saw even when the command later failed", async () => {
-    await asked("answered then interrupted", ago(2 * minute), { state: "failed" });
-    const current = await asked("now", now, { answer: null, state: "pending" });
-    assert.equal((await read(current, now)).length, 1);
+    for (let i = 1; i <= 3; i++) await asked(`today ${i}`, ago((10 - i) * minute));
+    assert.deepEqual(
+      (await read({ maxExchanges: 3 })).map((e) => e.question),
+      ["today 1", "today 2", "today 3"],
+    );
   });
 
   it("drops an exchange whose question or answer was deleted, or whose question was edited later", async () => {
@@ -148,45 +130,25 @@ describe("conversation", { skip: !testDatabaseUrl && "TEST_DATABASE_URL not set"
     await asked("edited afterwards", ago(3 * minute), { editedAfter: true });
     await asked("answer in another chat", ago(2 * minute), { answerChat: otherChat });
     await asked("kept", ago(1 * minute));
-    const current = await asked("now", now, { answer: null, state: "pending" });
     assert.deepEqual(
-      (await read(current, now)).map((e) => e.question),
+      (await read()).map((e) => e.question),
       ["kept"],
     );
   });
 
-  it("looks back only so far, and only so many", async () => {
-    await asked("yesterday", ago(13 * 60 * minute));
-    for (let i = 1; i <= 4; i++) await asked(`recent ${i}`, ago((10 - i) * minute));
-    const current = await asked("now", now, { answer: null, state: "pending" });
-    assert.deepEqual(
-      (await read(current, now, { maxExchanges: 3 })).map((e) => e.question),
-      ["recent 2", "recent 3", "recent 4"],
-    );
-  });
-
-  it("orders by when Kaya took commands in, so questions sent in the same second all count", async () => {
+  it("keeps the order Kaya answered in, even for questions sent in the same second", async () => {
     await asked("first in the burst", now);
     await asked("second in the burst", now);
-    const current = await asked("third in the burst", now, { answer: null, state: "pending" });
-    await asked("taken in later", now);
+    await asked("third in the burst", now);
     assert.deepEqual(
-      (await read(current, now)).map((e) => e.question),
-      ["first in the burst", "second in the burst"],
+      (await read()).map((e) => e.question),
+      ["first in the burst", "second in the burst", "third in the burst"],
     );
   });
 
-  it("never includes the question being answered, even once it has an answer", async () => {
-    await asked("earlier", ago(minute));
-    const current = await asked("this one", now);
-    assert.deepEqual(
-      (await read(current, now)).map((e) => e.question),
-      ["earlier"],
-    );
-  });
-
-  it("reads everything before an unknown command, for a question not recorded yet", async () => {
-    await asked("earlier", ago(minute));
-    assert.equal((await read("3EB0UNKNOWN", now)).length, 1);
+  it("outlives the commands it came from", async () => {
+    await asked("old question", ago(40 * 24 * 60 * minute));
+    await testDb.admin.query("DELETE FROM commands");
+    assert.equal((await read()).length, 1);
   });
 });
