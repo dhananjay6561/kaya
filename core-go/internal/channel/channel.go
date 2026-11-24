@@ -28,6 +28,7 @@ type OutgoingMessage struct {
 // SendOptions tune one send.
 type SendOptions struct {
 	// TTL is how long the message stays worth sending; after that it is dropped, not sent late.
+	// Zero means the channel's default.
 	TTL time.Duration
 	// TextMayChange lets a repeat under the same key carry other text; the text queued first is kept.
 	TextMayChange bool

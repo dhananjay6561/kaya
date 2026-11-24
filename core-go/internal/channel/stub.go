@@ -3,6 +3,8 @@ package channel
 import (
 	"context"
 	"errors"
+	"fmt"
+	"runtime/debug"
 	"slices"
 	"strings"
 	"sync"
@@ -164,11 +166,13 @@ func (s *Stub) Receive(ctx context.Context, text string, o ReceiveOptions) (Inco
 	return m, handled, err
 }
 
+// deliverTo runs every handler, one after another, and reports what they returned. A handler that
+// panics counts as one that failed.
 func deliverTo(ctx context.Context, handlers []handlerEntry, m IncomingMessage) (Handled, error) {
 	var errs []error
 	var first Handled
 	for _, entry := range handlers {
-		handled, err := entry.handler(ctx, m)
+		handled, err := callHandler(ctx, entry.handler, m)
 		if err != nil {
 			errs = append(errs, err)
 			continue
@@ -186,4 +190,23 @@ func deliverTo(ctx context.Context, handlers []handlerEntry, m IncomingMessage) 
 	return Handled{}, errors.Join(errs...)
 }
 
-func trimmed(s string) string { return strings.TrimSpace(s) }
+func callHandler(ctx context.Context, h Handler, m IncomingMessage) (handled Handled, err error) {
+	defer func() {
+		if p := recover(); p != nil {
+			handled, err = Handled{}, fmt.Errorf("handler panicked: %v\n%s", p, debug.Stack())
+		}
+	}()
+	return h(ctx, m)
+}
+
+// trimmed cuts the same characters JavaScript's trim() does, so text and keys compare the same way
+// they did in the TypeScript core.
+func trimmed(s string) string { return strings.TrimFunc(s, isJSSpace) }
+
+func isJSSpace(r rune) bool {
+	switch r {
+	case '\t', '\n', '\v', '\f', '\r', ' ', 0x00a0, 0x1680, 0x2028, 0x2029, 0x202f, 0x205f, 0x3000, 0xfeff:
+		return true
+	}
+	return r >= 0x2000 && r <= 0x200a
+}
