@@ -5,11 +5,12 @@ import (
 	"errors"
 	"log/slog"
 	"regexp"
-	"strings"
+	"slices"
 	"sync"
 	"time"
 
 	"github.com/jackc/pgx/v5"
+	"github.com/jackc/pgx/v5/pgconn"
 
 	"github.com/dhananjay6561/kaya/contracts"
 	"github.com/dhananjay6561/kaya/kit/logging"
@@ -133,28 +134,39 @@ func (in *Inbox) Wake() {
 	}
 }
 
-// Start begins handing commands to deliver whenever ready says someone can take them.
+// Start begins handing commands to deliver whenever ready says someone can take them. If a
+// previous run is still ending, it waits for that first, without holding up a concurrent Stop.
 func (in *Inbox) Start(deliver Deliver, ready func() bool) {
-	in.mu.Lock()
-	defer in.mu.Unlock()
-	if in.running {
+	for {
+		in.mu.Lock()
+		if in.running {
+			in.mu.Unlock()
+			return
+		}
+		if previous := in.done; previous != nil {
+			select {
+			case <-previous:
+			default:
+				in.mu.Unlock()
+				<-previous
+				continue
+			}
+		}
+		ctx, cancel := context.WithCancel(context.Background())
+		done := make(chan struct{})
+		in.cancel, in.done, in.running = cancel, done, true
+		in.mu.Unlock()
+		go func() {
+			in.run(ctx, deliver, ready)
+			in.mu.Lock()
+			if in.done == done {
+				in.running = false
+			}
+			in.mu.Unlock()
+			close(done)
+		}()
 		return
 	}
-	if in.done != nil {
-		<-in.done
-	}
-	ctx, cancel := context.WithCancel(context.Background())
-	done := make(chan struct{})
-	in.cancel, in.done, in.running = cancel, done, true
-	go func() {
-		in.run(ctx, deliver, ready)
-		in.mu.Lock()
-		if in.done == done {
-			in.running = false
-		}
-		in.mu.Unlock()
-		close(done)
-	}()
 }
 
 // Stop ends the worker at once, cancelling the command it is handing over; that command stays
@@ -229,7 +241,7 @@ func (in *Inbox) sleep(ctx context.Context, d time.Duration) {
 // gone with it, so a crashed worker never blocks the next.
 func (lock *lockHolder) holds(ctx context.Context, db *store.DB) (bool, error) {
 	if lock.conn != nil && !lock.conn.IsClosed() {
-		if err := lock.conn.Ping(ctx); err == nil {
+		if lock.alive(ctx) {
 			return true, nil
 		}
 	}
@@ -251,6 +263,12 @@ func (lock *lockHolder) holds(ctx context.Context, db *store.DB) (bool, error) {
 	return true, nil
 }
 
+func (lock *lockHolder) alive(ctx context.Context) bool {
+	ping, cancel := context.WithTimeout(ctx, 5*time.Second)
+	defer cancel()
+	return lock.conn.Ping(ping) == nil
+}
+
 func (lock *lockHolder) release() {
 	if lock.conn != nil {
 		_ = lock.conn.Close(context.Background())
@@ -268,6 +286,14 @@ type commandRow struct {
 	urgent    bool
 }
 
+// errLockLost ends a delivery whose worker lock went away mid-way, since another worker may now
+// take the same command.
+var errLockLost = errors.New("the command worker lock was lost")
+
+// dbWork is how long the inbox's own bookkeeping may take. It runs past a stop, so a command that
+// was claimed or finished is always recorded as such.
+const dbWork = 10 * time.Second
+
 func (in *Inbox) step(ctx context.Context, lock *lockHolder, deliver Deliver, ready func() bool) (bool, error) {
 	if !ready() {
 		return false, nil
@@ -276,8 +302,11 @@ func (in *Inbox) step(ctx context.Context, lock *lockHolder, deliver Deliver, re
 	if err != nil || !held {
 		return false, err
 	}
+	db, cancel := context.WithTimeout(context.WithoutCancel(ctx), dbWork)
+	defer cancel()
+
 	var row commandRow
-	err = in.o.DB.QueryRow(ctx, `
+	err = in.o.DB.QueryRow(db, `
 		UPDATE commands SET attempts = attempts + 1
 		WHERE id = (SELECT id FROM commands WHERE state = 'pending' ORDER BY urgent DESC, id LIMIT 1)
 		RETURNING id, message_id, wa_id, sent_at, created_at, attempts, urgent`).
@@ -290,57 +319,142 @@ func (in *Inbox) step(ctx context.Context, lock *lockHolder, deliver Deliver, re
 	}
 	if row.attempts > in.o.MaxAttempts {
 		in.o.Logger.Error("a command kept being interrupted and was given up on", "command_id", row.id)
-		return true, in.finish(ctx, row, "interrupted", "")
+		return true, in.finish(db, row, "interrupted", "")
 	}
 
 	var body *string
-	err = in.o.DB.QueryRow(ctx, "SELECT body FROM messages WHERE id = $1 AND deleted_at IS NULL", row.messageID).Scan(&body)
+	err = in.o.DB.QueryRow(db, "SELECT body FROM messages WHERE id = $1 AND deleted_at IS NULL", row.messageID).Scan(&body)
 	if err != nil && !errors.Is(err, pgx.ErrNoRows) {
+		in.giveBackAttempt(row.id)
 		return false, err
 	}
 	text := ""
 	if body != nil {
-		text = strings.TrimSpace(*body)
+		text = trimmed(*body)
 	}
 	if text == "" {
-		return true, in.finish(ctx, row, "message_gone", "")
+		return true, in.finish(db, row, "message_gone", "")
 	}
 
 	if !row.urgent {
 		var recent int
-		err := in.o.DB.QueryRow(ctx, `SELECT count(*) FROM commands
+		err := in.o.DB.QueryRow(db, `SELECT count(*) FROM commands
 			WHERE finished_at > now() - interval '1 minute' AND error IS DISTINCT FROM 'over_cap'`).Scan(&recent)
 		if err != nil {
+			in.giveBackAttempt(row.id)
 			return false, err
 		}
 		if recent >= in.o.MaxPerMinute {
 			in.o.Logger.Error("too many commands in a minute; this one was dropped", "command_id", row.id)
-			return true, in.finish(ctx, row, "over_cap", "")
+			return true, in.finish(db, row, "over_cap", "")
 		}
 	}
 
-	handled, err := deliver(ctx, IncomingMessage{ID: row.waID, Text: text, SentAt: row.sentAt, ReceivedAt: row.createdAt})
+	handled, err := in.deliverWatched(ctx, lock, deliver,
+		IncomingMessage{ID: row.waID, Text: text, SentAt: row.sentAt, ReceivedAt: row.createdAt})
 	if err != nil {
-		if ctx.Err() != nil || store.IsConnectionError(err) {
+		switch {
+		case ctx.Err() != nil:
 			in.giveBackAttempt(row.id)
-			if ctx.Err() != nil {
-				return false, nil
-			}
+			return false, nil
+		case errors.Is(err, errLockLost):
+			in.giveBackAttempt(row.id)
+			lock.release()
+			return false, err
+		case in.databaseAway(err):
+			in.giveBackAttempt(row.id)
 			return false, err
 		}
 		code := failureCode(err)
 		in.o.Logger.Error("a command failed", "command_id", row.id, "error_code", code, logging.Err(err))
-		return true, in.finish(ctx, row, code, "")
+		return true, in.finish(db, row, code, "")
 	}
-	return true, in.finish(ctx, row, "", handled.AnswerID)
+	return true, in.finish(db, row, "", handled.AnswerID)
 }
 
+// databaseAway reports whether a handler failed because the database is down, not because of its
+// own work: a coded failure is the handler's, and a network error counts only if Postgres itself
+// does not answer, since a handler also talks to other services.
+func (in *Inbox) databaseAway(err error) bool {
+	if len(codesIn(err)) > 0 || !store.IsConnectionError(err) {
+		return false
+	}
+	var pg *pgconn.PgError
+	var connect *pgconn.ConnectError
+	if errors.As(err, &pg) || errors.As(err, &connect) {
+		return true
+	}
+	probe, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+	return in.o.DB.Check(probe) != nil
+}
+
+// deliverWatched hands one command over while watching the worker lock: if its connection drops,
+// Postgres frees the lock and another worker may take the same command, so the delivery is cut short.
+func (in *Inbox) deliverWatched(ctx context.Context, lock *lockHolder, deliver Deliver, m IncomingMessage) (Handled, error) {
+	watched, cancel := context.WithCancelCause(ctx)
+	defer cancel(nil)
+	stopWatching := make(chan struct{})
+	watching := make(chan struct{})
+	go func() {
+		defer close(watching)
+		tick := time.NewTicker(2 * time.Second)
+		defer tick.Stop()
+		for {
+			select {
+			case <-stopWatching:
+				return
+			case <-watched.Done():
+				return
+			case <-tick.C:
+				if !lock.alive(watched) && watched.Err() == nil {
+					cancel(errLockLost)
+					return
+				}
+			}
+		}
+	}()
+	handled, err := deliver(watched, m)
+	close(stopWatching)
+	<-watching
+	if errors.Is(context.Cause(watched), errLockLost) && ctx.Err() == nil {
+		return Handled{}, errLockLost
+	}
+	return handled, err
+}
+
+// failureCode is the code to store for a failed command: the one usable code its error carries, or
+// handler_failed when it carries none or several that disagree.
 func failureCode(err error) string {
-	var coded Coded
-	if errors.As(err, &coded) && errorCode.MatchString(coded.ErrorCode()) {
-		return coded.ErrorCode()
+	codes := codesIn(err)
+	if len(codes) == 1 {
+		return codes[0]
 	}
 	return "handler_failed"
+}
+
+// codesIn lists the distinct usable codes anywhere in err's tree.
+func codesIn(err error) []string {
+	var codes []string
+	var walk func(error)
+	walk = func(err error) {
+		if err == nil {
+			return
+		}
+		if coded, ok := err.(Coded); ok && errorCode.MatchString(coded.ErrorCode()) && !slices.Contains(codes, coded.ErrorCode()) {
+			codes = append(codes, coded.ErrorCode())
+		}
+		switch wrapped := err.(type) { //nolint:errorlint // this walks the error tree itself, one node at a time
+		case interface{ Unwrap() []error }:
+			for _, e := range wrapped.Unwrap() {
+				walk(e)
+			}
+		case interface{ Unwrap() error }:
+			walk(wrapped.Unwrap())
+		}
+	}
+	walk(err)
+	return codes
 }
 
 // finish marks a command done or failed, and keeps the exchange when the command was a question
