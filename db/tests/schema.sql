@@ -491,6 +491,8 @@ BEGIN
   INSERT INTO commands (message_id, wa_id, sent_at) VALUES (900001, '3EB0COMMAND', now()) RETURNING id INTO cmd;
   PERFORM 1 FROM commands WHERE id = cmd AND state = 'pending' AND attempts = 0 AND finished_at IS NULL;
   ASSERT FOUND, 'a new command is pending';
+  PERFORM 1 FROM commands WHERE id = cmd AND NOT urgent;
+  ASSERT FOUND, 'a command is not urgent unless core says so';
   PERFORM pg_temp.expect_error($q$INSERT INTO commands (message_id, wa_id, sent_at) VALUES (900001, '3EB0AGAIN', now())$q$, '23505');
   INSERT INTO commands (message_id, wa_id, sent_at) VALUES (900001, '3EB0AGAIN', now()) ON CONFLICT (message_id) DO NOTHING;
   PERFORM pg_temp.expect_error(format($q$UPDATE commands SET state = 'done' WHERE id = %s$q$, cmd), '23514');
