@@ -305,6 +305,11 @@ BEGIN
     AND NOT has_table_privilege('kaya_gateway', 'connection_state', 'UPDATE'), 'the gateway cannot touch core''s copy of the state';
 
   ASSERT has_table_privilege('kaya_core', 'commands', 'SELECT, INSERT, UPDATE, DELETE'), 'core owns its command inbox';
+  ASSERT has_table_privilege('kaya_core', 'pause_state', 'SELECT, UPDATE'), 'core reads and flips the pause';
+  ASSERT NOT has_table_privilege('kaya_core', 'pause_state', 'INSERT')
+    AND NOT has_table_privilege('kaya_core', 'pause_state', 'DELETE'), 'core cannot add or remove the pause row';
+  ASSERT NOT has_table_privilege('kaya_gateway', 'pause_state', 'SELECT')
+    AND NOT has_table_privilege('kaya_gateway', 'pause_state', 'UPDATE'), 'the gateway cannot see or change the pause';
   ASSERT NOT has_table_privilege('kaya_gateway', 'commands', 'SELECT')
     AND NOT has_table_privilege('kaya_gateway', 'commands', 'INSERT')
     AND NOT has_table_privilege('kaya_gateway', 'commands', 'UPDATE')
@@ -506,6 +511,16 @@ BEGIN
 END
 $$;
 RESET ROLE;
+
+DO $$
+BEGIN
+  PERFORM 1 FROM pause_state WHERE paused_at IS NULL;
+  ASSERT FOUND, 'Kaya starts running, not paused';
+  PERFORM pg_temp.expect_error('INSERT INTO pause_state DEFAULT VALUES', '23505');
+  PERFORM pg_temp.expect_error('INSERT INTO pause_state (only_row) VALUES (false)', '23514');
+  UPDATE pause_state SET paused_at = now(), changed_by = '3EB0PAUSE', changed_at = now();
+END
+$$;
 
 ROLLBACK;
 \echo schema tests passed
