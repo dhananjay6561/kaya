@@ -7,6 +7,8 @@ import { createLogger, type Logger } from "./lib/logger.js";
 import { startCommands } from "./modules/commands/index.js";
 import { createEventConsumer, createGatewayEvents } from "./modules/gateway/index.js";
 import { createHealthRoute } from "./modules/health/index.js";
+import { createPause } from "./modules/pause/index.js";
+import { formatStatus, readStatus } from "./modules/status/index.js";
 import { createProviders } from "./providers/index.js";
 
 const version = process.env.KAYA_VERSION || process.env.npm_package_version || "dev";
@@ -28,6 +30,7 @@ function exitOnCrash(logger: Logger): void {
 }
 
 async function run(config: Config, logger: Logger): Promise<void> {
+  const startedAt = new Date();
   const stopping = stopSignal();
   const contracts = createContracts();
   const db = createDb(config.databaseUrl, logger);
@@ -48,7 +51,14 @@ async function run(config: Config, logger: Logger): Promise<void> {
       logger,
     },
   });
-  startCommands({ channel: providers.channel, logger });
+  const pause = createPause(db.pool);
+  startCommands({
+    channel: providers.channel,
+    logger,
+    pause,
+    status: async () =>
+      formatStatus(await readStatus({ pool: db.pool, pause, version, startedAt })),
+  });
   try {
     try {
       await db.check(AbortSignal.timeout(5_000));
