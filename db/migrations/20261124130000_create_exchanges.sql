@@ -11,17 +11,21 @@ COMMENT ON COLUMN exchanges.question_message_id IS 'messages.id of DJ''s questio
 COMMENT ON COLUMN exchanges.answer_wa_id IS 'WhatsApp id of Kaya''s answer, a message in the same chat';
 
 INSERT INTO exchanges (question_message_id, answer_wa_id, created_at)
-SELECT message_id, answer_wa_id, finished_at FROM commands
+SELECT message_id, answer_wa_id, coalesce(finished_at, created_at) FROM commands
 WHERE answer_wa_id IS NOT NULL
 ORDER BY id;
 
-DROP INDEX commands_answered_idx;
-ALTER TABLE commands DROP COLUMN answer_wa_id;
+COMMENT ON COLUMN commands.answer_wa_id IS 'Replaced by exchanges; no longer written. Kept only so a core from before exchanges keeps working during a deploy; dropped in a later release.';
 
 GRANT SELECT, INSERT, UPDATE, DELETE ON exchanges TO kaya_core;
 
 -- migrate:down
-ALTER TABLE commands ADD COLUMN answer_wa_id text;
-CREATE INDEX commands_answered_idx ON commands (id) WHERE answer_wa_id IS NOT NULL;
-UPDATE commands c SET answer_wa_id = e.answer_wa_id FROM exchanges e WHERE e.question_message_id = c.message_id;
+DO $$
+BEGIN
+  IF EXISTS (SELECT 1 FROM exchanges) THEN
+    RAISE EXCEPTION 'exchanges holds conversation memory; copy or empty it before rolling back';
+  END IF;
+END
+$$;
 DROP TABLE exchanges;
+COMMENT ON COLUMN commands.answer_wa_id IS 'WhatsApp id of the answer Kaya sent when the command was a question it answered; the question and this answer are one exchange of the conversation memory. Null for slash commands, notices and anything not answered.';
