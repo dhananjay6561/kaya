@@ -248,3 +248,34 @@ func TestDecodeDataRejectsUnknownFields(t *testing.T) {
 		t.Fatal("expected an error for an unknown field")
 	}
 }
+
+func TestNewSendRequestRoundTrips(t *testing.T) {
+	v, err := NewValidator()
+	if err != nil {
+		t.Fatal(err)
+	}
+	r, err := NewSendRequest("919999999999@s.whatsapp.net", "  hello  ", Authorization{Kind: "self_chat"},
+		&ReplyTo{WAID: "3EB0Q", SenderJID: "919999999999@s.whatsapp.net"}, 45*time.Second)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if r.Content.Text != "hello" || r.ExpiresAt.Sub(r.CreatedAt.Time) != 45*time.Second || r.CreatedAt.Nanosecond()%1000 != 0 {
+		t.Fatalf("got %+v", r)
+	}
+	raw, err := v.EncodeSendRequest(r)
+	if err != nil {
+		t.Fatal(err)
+	}
+	back, err := v.DecodeSendRequest(raw)
+	if err != nil || !back.ExpiresAt.Equal(r.ExpiresAt.Time) || back.ReplyTo == nil {
+		t.Fatalf("round trip: %+v %v", back, err)
+	}
+	if d, _ := NewSendRequest("x@s.whatsapp.net", "hi", Authorization{Kind: "self_chat"}, nil, 0); d.ExpiresAt.Sub(d.CreatedAt.Time) != DefaultSendTTL {
+		t.Fatal("a zero ttl should mean the default")
+	}
+	for _, ttl := range []time.Duration{-time.Second, 25 * time.Hour} {
+		if _, err := NewSendRequest("x@s.whatsapp.net", "hi", Authorization{Kind: "self_chat"}, nil, ttl); !errors.Is(err, ErrInvalid) {
+			t.Fatalf("ttl %s should be refused, got %v", ttl, err)
+		}
+	}
+}

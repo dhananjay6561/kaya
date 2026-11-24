@@ -132,6 +132,23 @@ func (v *Validator) EncodeEvent(e Event) ([]byte, error) {
 	return raw, nil
 }
 
+const expiryProblem = "/expires_at must be after created_at and at most 24 h later"
+
+// EncodeSendRequest marshals r and refuses to return a payload that breaks the contract.
+func (v *Validator) EncodeSendRequest(r SendRequest) ([]byte, error) {
+	if ttl := r.ExpiresAt.Sub(r.CreatedAt.Time); ttl < time.Millisecond || ttl > MaxSendTTL {
+		return nil, &ValidationError{Problems: []string{expiryProblem}}
+	}
+	raw, err := json.Marshal(r)
+	if err != nil {
+		return nil, err
+	}
+	if err := v.ValidateSendRequest(raw); err != nil {
+		return nil, err
+	}
+	return raw, nil
+}
+
 // DecodeEvent validates raw and returns the envelope; use DecodeData for the typed data.
 func (v *Validator) DecodeEvent(raw []byte) (Event, error) {
 	if err := v.ValidateEvent(raw); err != nil {
@@ -154,7 +171,7 @@ func (v *Validator) DecodeSendRequest(raw []byte) (SendRequest, error) {
 		return SendRequest{}, &ValidationError{Problems: []string{"/ does not fit the Go types"}}
 	}
 	if ttl := r.ExpiresAt.Sub(r.CreatedAt.Time); ttl < time.Millisecond || ttl > MaxSendTTL {
-		return SendRequest{}, &ValidationError{Problems: []string{"/expires_at must be after created_at and at most 24 h later"}}
+		return SendRequest{}, &ValidationError{Problems: []string{expiryProblem}}
 	}
 	return r, nil
 }

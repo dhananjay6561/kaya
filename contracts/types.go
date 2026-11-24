@@ -6,6 +6,7 @@ import (
 	"crypto/rand"
 	"encoding/json"
 	"fmt"
+	"strings"
 	"time"
 )
 
@@ -161,6 +162,32 @@ func NewEvent(t EventType, data any) (Event, error) {
 		return Event{}, fmt.Errorf("encode %s data: %w", t, err)
 	}
 	return Event{ID: NewID(), Version: Version, Type: t, OccurredAt: At(time.Now()), Data: raw}, nil
+}
+
+// DefaultSendTTL is how long a send request stays worth sending unless its sender says otherwise.
+const DefaultSendTTL = 15 * time.Minute
+
+// NewSendRequest builds a request to send text to the JID to, worth sending for ttl
+// (DefaultSendTTL when zero). Times are cut to the microsecond, the precision Postgres keeps, so a
+// stored expires_at equals the one in the payload.
+func NewSendRequest(to, text string, auth Authorization, replyTo *ReplyTo, ttl time.Duration) (SendRequest, error) {
+	if ttl == 0 {
+		ttl = DefaultSendTTL
+	}
+	if ttl < time.Millisecond || ttl > MaxSendTTL {
+		return SendRequest{}, &ValidationError{Problems: []string{expiryProblem}}
+	}
+	now := time.Now().UTC().Truncate(time.Microsecond)
+	return SendRequest{
+		ID:            NewID(),
+		Version:       Version,
+		CreatedAt:     At(now),
+		ExpiresAt:     At(now.Add(ttl)),
+		To:            to,
+		Authorization: auth,
+		Content:       TextContent{Type: "text", Text: strings.TrimSpace(text)},
+		ReplyTo:       replyTo,
+	}, nil
 }
 
 // NewID returns a random version 4 UUID.
