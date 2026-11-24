@@ -148,7 +148,7 @@ const rules: readonly Rule[] = [
     kind: "ADDRESS",
     pattern:
       /\b(?:flat|plot|house|h\.?[ \t]?no|door|shop)\.?[ \t]{0,3}(?:no\.?|number|#)?[ \t]{0,3}[:-]?[ \t]{0,3}[A-Za-z]?-?\d+[A-Za-z]?(?:[/-]\d+[A-Za-z]?)?/gi,
-    accept: (match) => /^(?:flat|plot)\b|no|number|#|h\.?\s?no/i.test(match),
+    accept: (match) => /^(?:flat|plot)\b/i.test(match) || /\b(?:no|number)\b|#/i.test(match),
   },
   {
     kind: "ADDRESS",
@@ -244,8 +244,9 @@ export function createMaskSession(): MaskSession {
 
   return Object.freeze({
     mask(text: string, options: MaskOptions = {}) {
-      const escaped = text.replace(issuedShape, (literal) =>
-        literal.replace("[", "［").replace("]", "］"),
+      const escaped = text.replace(
+        issuedShape,
+        (_literal, kind: string, n: string) => `［${kind}_${n}］`,
       );
       const scan: Scan = {
         text: asciiDigits(escaped),
