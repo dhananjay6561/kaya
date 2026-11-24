@@ -1,6 +1,7 @@
 package store
 
 import (
+	"context"
 	"errors"
 	"net"
 	"strings"
@@ -10,9 +11,11 @@ import (
 
 // IsConnectionError reports whether err means the database could not be reached or dropped the
 // connection, so the same work may succeed later. A refused value, a broken constraint, a bad query,
-// a statement timeout or the caller's own deadline is not one: those are for the caller to judge.
+// a statement timeout, the caller's own deadline or a connection still busy with rows the caller
+// never closed is not one: those are for the caller to judge.
 func IsConnectionError(err error) bool {
-	if err == nil {
+	if err == nil || errors.Is(err, context.DeadlineExceeded) || errors.Is(err, context.Canceled) ||
+		strings.Contains(err.Error(), "conn busy") {
 		return false
 	}
 	var pg *pgconn.PgError

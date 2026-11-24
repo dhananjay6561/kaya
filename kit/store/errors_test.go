@@ -35,7 +35,9 @@ func TestIsConnectionError(t *testing.T) {
 		&pgconn.PgError{Code: "57P04"},
 		context.DeadlineExceeded,
 		context.Canceled,
+		fmt.Errorf("read: %w", &net.OpError{Op: "read", Err: fmt.Errorf("i/o timeout: %w", context.DeadlineExceeded)}),
 		fmt.Errorf("decode event data: %w", io.EOF),
+		errors.New("conn busy"),
 		errors.New("bad input"),
 	}
 	for _, err := range notAway {
