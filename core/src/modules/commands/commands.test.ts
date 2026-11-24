@@ -17,7 +17,7 @@ const ago = (ms: number) => new Date(Date.now() - ms);
 const deps = () => ({
   pause: createMemoryPause(),
   status: async () => "all good",
-  chat: async (text: string) => `You said: ${clip(text)}`,
+  chat: async (message: { text: string }) => `You said: ${clip(message.text)}`,
 });
 
 function watched(fail?: (message: OutgoingMessage) => Error | undefined) {

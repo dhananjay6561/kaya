@@ -4,6 +4,7 @@ import { createLogger } from "../../lib/logger.js";
 import {
   type ChatChannel,
   createStubChannel,
+  type IncomingMessage,
   SendFailedError,
 } from "../../providers/channel/index.js";
 import { LlmError } from "../../providers/llm/index.js";
@@ -60,7 +61,7 @@ describe("reading a slash command", () => {
 function kaya(
   options: {
     status?: () => Promise<string>;
-    chat?: (text: string, signal: AbortSignal) => Promise<string>;
+    chat?: (message: IncomingMessage, signal: AbortSignal) => Promise<string>;
     fail?: (text: string) => Error | undefined;
   } = {},
 ) {
@@ -79,7 +80,7 @@ function kaya(
     logger,
     pause,
     status: options.status ?? (async () => "status text"),
-    chat: options.chat ?? (async (text) => `You said: ${text}`),
+    chat: options.chat ?? (async (message) => `You said: ${message.text}`),
   });
   const say = async (text: string, sentAt?: Date, id?: string) => {
     const before = channel.sent.length;
@@ -247,8 +248,8 @@ describe("plain messages", () => {
   it("are answered by the model, with the message and a signal", async () => {
     const asked: { text: string; signal: AbortSignal }[] = [];
     const { channel, say } = kaya({
-      chat: async (text, signal) => {
-        asked.push({ text, signal });
+      chat: async (message, signal) => {
+        asked.push({ text: message.text, signal });
         return "Four.";
       },
     });

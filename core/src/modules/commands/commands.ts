@@ -7,6 +7,7 @@ import {
 } from "../../providers/channel/index.js";
 import { LlmError } from "../../providers/llm/index.js";
 import { clipTo } from "../chat/index.js";
+import { chatAnswerKey } from "../context/index.js";
 import type { PauseSwitch } from "../pause/index.js";
 import { answerSlash, parseSlash } from "./builtins.js";
 
@@ -15,7 +16,7 @@ export type CommandsOptions = Readonly<{
   logger: Logger;
   pause: PauseSwitch;
   status(): Promise<string>;
-  chat(text: string, signal: AbortSignal): Promise<string>;
+  chat(message: IncomingMessage, signal: AbortSignal): Promise<string>;
   maxAgeMs?: number;
   silentAfterMs?: number;
   minReplyTtlMs?: number;
@@ -81,14 +82,14 @@ export function startCommands(options: CommandsOptions): () => void {
     const answer = {
       idempotencyKey: slash
         ? `command:${message.id}:${slash.kind}:${slash.name}`
-        : `command:${message.id}:chat`,
+        : chatAnswerKey(message.id),
       replyTo: message.id,
     };
     const produce = async (): Promise<string> => {
       try {
         return slash
           ? await answerSlash(slash, message.id, { pause, status: options.status })
-          : await options.chat(message.text, signal);
+          : await options.chat(message, signal);
       } catch (err) {
         if (signal.aborted || isConnectionError(err)) throw err;
         await channel.send(
