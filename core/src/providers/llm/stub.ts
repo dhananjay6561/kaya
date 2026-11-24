@@ -2,7 +2,10 @@ import type { CallOptions, Completion, CompletionRequest, LlmProvider } from "./
 
 export type StubLlm = LlmProvider & Readonly<{ requests: readonly CompletionRequest[] }>;
 
-export type StubLlmOptions = Readonly<{ reply?: (request: CompletionRequest) => string }>;
+export type StubLlmOptions = Readonly<{
+  reply?: (request: CompletionRequest) => string;
+  contextTokens?: number;
+}>;
 
 const roughTokens = (text: string) => Math.ceil(text.length / 4);
 
@@ -17,6 +20,8 @@ export function createStubLlm(options: StubLlmOptions = {}): StubLlm {
 
   return Object.freeze({
     name: "stub",
+    locality: "local",
+    contextTokens: options.contextTokens ?? 4_000,
     requests,
     async complete(request: CompletionRequest, callOptions: CallOptions = {}): Promise<Completion> {
       callOptions.signal?.throwIfAborted();

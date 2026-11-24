@@ -24,7 +24,13 @@ export type Completion = Readonly<{
 
 export type CallOptions = Readonly<{ signal?: AbortSignal }>;
 
+export type Locality = "cloud" | "local";
+
 export interface LlmProvider {
   readonly name: string;
+  /** Where requests go: context for a cloud model leaves the machine. */
+  readonly locality: Locality;
+  /** How many tokens of context a request may carry. */
+  readonly contextTokens: number;
   complete(request: CompletionRequest, options?: CallOptions): Promise<Completion>;
 }

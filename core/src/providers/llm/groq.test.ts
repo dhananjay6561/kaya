@@ -30,7 +30,12 @@ function groq(replies: (() => Response | Promise<Response>)[], options: GroqOpti
     return next();
   };
   const llm = createGroqLlm(
-    { apiKey: "test-key-not-real", heavyModel: "big-model", routineModel: "small-model" },
+    {
+      apiKey: "test-key-not-real",
+      heavyModel: "big-model",
+      routineModel: "small-model",
+      contextTokens: 4_000,
+    },
     { fetch: fake, retryBaseMs: 1, ...options },
   );
   return { llm, calls };
@@ -173,7 +178,7 @@ describe("groq", () => {
         init?.signal?.addEventListener("abort", () => reject(init.signal?.reason));
       });
     const llm = createGroqLlm(
-      { apiKey: "k", heavyModel: "h", routineModel: "r" },
+      { apiKey: "k", heavyModel: "h", routineModel: "r", contextTokens: 4_000 },
       { fetch: fake, timeoutMs: 1_000, deadlineMs: 30, maxRetries: 5, retryBaseMs: 1 },
     );
     const started = Date.now();
@@ -204,7 +209,7 @@ describe("groq", () => {
       return new Response(body, { status: 200 });
     };
     const llm = createGroqLlm(
-      { apiKey: "k", heavyModel: "h", routineModel: "r" },
+      { apiKey: "k", heavyModel: "h", routineModel: "r", contextTokens: 4_000 },
       { fetch: fake, timeoutMs: 20, maxRetries: 0 },
     );
     await assert.rejects(
@@ -218,7 +223,7 @@ describe("groq", () => {
       throw new TypeError("fetch failed", { cause: { code: "ECONNRESET" } });
     };
     const llm = createGroqLlm(
-      { apiKey: "k", heavyModel: "h", routineModel: "r" },
+      { apiKey: "k", heavyModel: "h", routineModel: "r", contextTokens: 4_000 },
       { fetch: fake, maxRetries: 0 },
     );
     await assert.rejects(
@@ -252,7 +257,7 @@ describe("groq", () => {
         init?.signal?.addEventListener("abort", () => reject(init.signal?.reason));
       });
     const hanging = createGroqLlm(
-      { apiKey: "k", heavyModel: "h", routineModel: "r" },
+      { apiKey: "k", heavyModel: "h", routineModel: "r", contextTokens: 4_000 },
       { fetch: fake, timeoutMs: 20, maxRetries: 1, retryBaseMs: 1 },
     );
     await assert.rejects(
@@ -269,7 +274,10 @@ describe("groq", () => {
         init?.signal?.addEventListener("abort", () => reject(init.signal?.reason));
         setTimeout(() => controller.abort(new Error("core is stopping")), 5);
       });
-    const llm = createGroqLlm({ apiKey: "k", heavyModel: "h", routineModel: "r" }, { fetch: fake });
+    const llm = createGroqLlm(
+      { apiKey: "k", heavyModel: "h", routineModel: "r", contextTokens: 4_000 },
+      { fetch: fake },
+    );
     await assert.rejects(llm.complete(ask, { signal: controller.signal }), /core is stopping/);
   });
 

@@ -55,8 +55,16 @@ describe("createLlm", () => {
 
     const groq = createLlm({
       provider: "groq",
-      groq: { apiKey: "test-key-not-real", heavyModel: "h", routineModel: "r" },
+      groq: {
+        apiKey: "test-key-not-real",
+        heavyModel: "h",
+        routineModel: "r",
+        contextTokens: 4_000,
+      },
     });
     assert.equal(groq.name, "groq");
+    assert.equal(groq.locality, "cloud");
+    assert.equal(groq.contextTokens, 4_000);
+    assert.equal(createStubLlm().locality, "local");
   });
 });

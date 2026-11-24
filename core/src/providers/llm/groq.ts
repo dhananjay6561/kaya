@@ -164,6 +164,8 @@ export function createGroqLlm(config: GroqConfig, options: GroqOptions = {}): Ll
 
   return Object.freeze({
     name: "groq",
+    locality: "cloud",
+    contextTokens: config.contextTokens,
     async complete(request: CompletionRequest, callOptions: CallOptions = {}): Promise<Completion> {
       const { signal } = callOptions;
       signal?.throwIfAborted();
