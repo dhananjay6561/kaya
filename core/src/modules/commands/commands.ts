@@ -33,8 +33,12 @@ function failureNotice(err: unknown): string {
       return "I have hit my limit with the AI service for now. Try again in a minute.";
     case "auth":
       return "The AI service refused my key, so I could not answer. Check GROQ_API_KEY.";
+    case "too_long":
+      return "That is too long for the AI service. Try a shorter message.";
+    case "misconfigured":
+      return "The AI service does not know the model I am set to use. Check GROQ_MODEL_ROUTINE.";
     case "rejected":
-      return "The AI service turned this message down. Try a shorter or simpler one.";
+      return "The AI service turned this message down. Try asking another way.";
     default:
       return "The AI service is not answering right now. Try again in a bit.";
   }
@@ -74,34 +78,39 @@ export function startCommands(options: CommandsOptions): () => void {
       return;
     }
 
-    let text: string;
+    const answer = {
+      idempotencyKey: slash
+        ? `command:${message.id}:${slash.kind}:${slash.name}`
+        : `command:${message.id}:chat`,
+      replyTo: message.id,
+    };
+    const produce = async (): Promise<string> => {
+      try {
+        return slash
+          ? await answerSlash(slash, message.id, { pause, status: options.status })
+          : await options.chat(message.text, signal);
+      } catch (err) {
+        if (signal.aborted || isConnectionError(err)) throw err;
+        await channel.send(
+          {
+            idempotencyKey: `command:${message.id}:failed`,
+            replyTo: message.id,
+            text: failureNotice(err),
+          },
+          { signal, ttlMs: noticeTtlMs },
+        );
+        throw err;
+      }
+    };
     try {
-      text = slash
-        ? await answerSlash(slash, message.id, { pause, status: options.status })
-        : await options.chat(message.text, signal);
-    } catch (err) {
-      if (signal.aborted || isConnectionError(err)) throw err;
-      await channel.send(
-        {
-          idempotencyKey: `command:${message.id}:failed`,
-          replyTo: message.id,
-          text: failureNotice(err),
-        },
-        { signal, ttlMs: noticeTtlMs },
-      );
-      throw err;
-    }
-    // The answer is worth sending until the command itself would count as too old.
-    const ttlMs = Math.max(minReplyTtlMs, maxAgeMs - (Date.now() - message.sentAt.getTime()));
-    try {
-      await channel.send(
-        {
-          ...reply,
-          ...(slash ? { idempotencyKey: `command:${message.id}:${slash.kind}:${slash.name}` } : {}),
-          text,
-        },
-        { signal, ttlMs, textMayChange: true },
-      );
+      if (await channel.follow(answer.idempotencyKey, { signal })) return;
+      if (Date.now() - message.sentAt.getTime() > maxAgeMs) {
+        throw new SendFailedError(answer.idempotencyKey, "expired");
+      }
+      const text = await produce();
+      // The answer is worth sending until the command itself would count as too old.
+      const ttlMs = Math.max(minReplyTtlMs, maxAgeMs - (Date.now() - message.sentAt.getTime()));
+      await channel.send({ ...answer, text }, { signal, ttlMs, textMayChange: true });
     } catch (err) {
       if (!(err instanceof SendFailedError) || !neverSent.has(err.code)) throw err;
       logger.warn(

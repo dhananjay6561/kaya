@@ -44,7 +44,7 @@ describe("commands", () => {
 
     assert.deepEqual(channel.sent, [
       {
-        idempotencyKey: `command:${message.id}`,
+        idempotencyKey: `command:${message.id}:chat`,
         replyTo: message.id,
         text: "You said: remind me to call mum",
       },

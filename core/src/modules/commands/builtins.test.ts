@@ -157,13 +157,13 @@ describe("built-in commands", () => {
     assert.equal((await pause.state()).paused, true);
   });
 
-  it("keeps the first answer when a retried /status would read differently", async () => {
+  it("does not work out a retried /status again", async () => {
     let calls = 0;
     const { channel, say } = kaya({ status: async () => `up ${++calls}m` });
     await channel.start();
     assert.deepEqual(await say("/status", undefined, "3EB0STATUS"), ["up 1m"]);
     assert.deepEqual(await say("/status", undefined, "3EB0STATUS"), []);
-    assert.equal(calls, 2);
+    assert.equal(calls, 1, "an answer already queued is followed, not worked out again");
   });
 
   it("answers anew when a command was edited into another before its retry", async () => {
@@ -174,12 +174,34 @@ describe("built-in commands", () => {
     assert.equal((await pause.state()).paused, true);
   });
 
-  it("keeps the first answer when a retried message is answered differently", async () => {
+  it("does not ask the model again for a retried message that was already answered", async () => {
     let calls = 0;
     const { channel, say } = kaya({ chat: async () => `answer ${++calls}` });
     await channel.start();
     assert.deepEqual(await say("what is 2+2", undefined, "3EB0CHAT"), ["answer 1"]);
     assert.deepEqual(await say("what is 2+2", undefined, "3EB0CHAT"), []);
+    assert.equal(calls, 1);
+  });
+
+  it("does not ask the model when a message waited too long for its turn", async () => {
+    let calls = 0;
+    const { channel } = kaya({
+      chat: async () => {
+        calls++;
+        return "late answer";
+      },
+    });
+    await channel.start();
+    const realNow = Date.now;
+    const sentAt = new Date(realNow() - 60_000);
+    Date.now = () => realNow() + 10 * minute;
+    try {
+      await assert.rejects(channel.receive("still there?", { sentAt }));
+    } finally {
+      Date.now = realNow;
+    }
+    assert.equal(calls, 0);
+    assert.match(channel.sent[0]?.text ?? "", /^I could not answer this in time/);
   });
 
   it("points to /status when a slash answer could not go out in time", async () => {
@@ -257,6 +279,8 @@ describe("plain messages", () => {
       ["rate_limited", /^I have hit my limit with the AI service/],
       ["auth", /refused my key/],
       ["rejected", /turned this message down/],
+      ["too_long", /too long for the AI service/],
+      ["misconfigured", /Check GROQ_MODEL_ROUTINE/],
       ["timeout", /is not answering right now/],
       ["unavailable", /is not answering right now/],
       ["bad_response", /is not answering right now/],
