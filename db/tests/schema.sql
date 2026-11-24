@@ -308,6 +308,9 @@ BEGIN
   ASSERT has_table_privilege('kaya_core', 'pause_state', 'SELECT, UPDATE'), 'core reads and flips the pause';
   ASSERT has_table_privilege('kaya_core', 'exchanges', 'SELECT, INSERT, UPDATE, DELETE'), 'core owns its conversation memory';
   ASSERT NOT has_table_privilege('kaya_gateway', 'exchanges', 'SELECT'), 'the gateway cannot read the conversation memory';
+  ASSERT has_table_privilege('kaya_core', 'chunks', 'SELECT, INSERT, UPDATE, DELETE')
+    AND has_table_privilege('kaya_core', 'message_chunks', 'SELECT, INSERT, UPDATE, DELETE'), 'core owns the search index';
+  ASSERT NOT has_table_privilege('kaya_gateway', 'chunks', 'SELECT'), 'the gateway cannot read the search index';
   ASSERT NOT has_table_privilege('kaya_core', 'pause_state', 'INSERT')
     AND NOT has_table_privilege('kaya_core', 'pause_state', 'DELETE'), 'core cannot add or remove the pause row';
   ASSERT NOT has_table_privilege('kaya_gateway', 'pause_state', 'SELECT')
@@ -526,6 +529,14 @@ BEGIN
   INSERT INTO exchanges (question_message_id, answer_wa_id) VALUES (900100, '3EB0ANSWER');
   PERFORM pg_temp.expect_error($q$INSERT INTO exchanges (question_message_id, answer_wa_id) VALUES (900100, '3EB0AGAIN')$q$, '23505');
   PERFORM pg_temp.expect_error($q$INSERT INTO exchanges (question_message_id) VALUES (900101)$q$, '23502');
+  INSERT INTO chunks (chat_id, first_sent_at, last_sent_at, message_count, text_hash, model, embedding)
+  VALUES (1, now(), now(), 1, 'h', 'm', array_fill(0.1, ARRAY[1024])::halfvec(1024));
+  PERFORM pg_temp.expect_error($q$INSERT INTO chunks (chat_id, first_sent_at, last_sent_at, message_count, text_hash, model, embedding) VALUES (1, now(), now(), 1, 'h', 'm', array_fill(0.1, ARRAY[3])::halfvec)$q$, '22000');
+  PERFORM pg_temp.expect_error($q$INSERT INTO chunks (chat_id, first_sent_at, last_sent_at, message_count, text_hash, model, embedding) VALUES (1, now(), now(), 0, 'h', 'm', array_fill(0.1, ARRAY[1024])::halfvec(1024))$q$, '23514');
+  INSERT INTO message_chunks (message_id, chunk_id) SELECT 900200, max(id) FROM chunks;
+  DELETE FROM chunks;
+  PERFORM 1 FROM message_chunks WHERE message_id = 900200;
+  ASSERT NOT FOUND, 'removing a chunk frees its messages to be indexed again';
 END
 $$;
 
