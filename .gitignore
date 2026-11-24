@@ -13,3 +13,5 @@ core-go/bin/
 docs/PHASES.md
 docs/SPEC.md
 docs/INFRA.md
+go.work
+go.work.sum
