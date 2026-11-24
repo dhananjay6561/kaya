@@ -19,6 +19,7 @@ describe("system prompt", () => {
     const prompt = systemPrompt(now, "UTC");
     assert.match(prompt, /cannot yet read their other chats, search the web/);
     assert.match(prompt, /do not see earlier messages/);
+    assert.match(prompt, /cannot check anything live/);
     assert.match(prompt, /Never claim to have done something you did not do/);
   });
 });
@@ -40,6 +41,44 @@ describe("WhatsApp formatting", () => {
   it("leaves code blocks alone and trims", () => {
     const code = "```\n**not bold**\n# not a heading\n```";
     assert.equal(toWhatsApp(`  **a**\n${code}\n**b**  `), `*a*\n${code}\n*b*`);
+  });
+
+  it("leaves code and words with underscores or stars in them alone", () => {
+    for (const text of [
+      "`__init__` and `f(**a, **b)` stay",
+      "my__var__name.py",
+      "a ** b and c ** d",
+      "lone ** here",
+      "```\n**not bold**\n# not a heading\n```",
+    ]) {
+      assert.equal(toWhatsApp(text), text);
+    }
+  });
+
+  it("flattens nested emphasis WhatsApp cannot show", () => {
+    assert.equal(toWhatsApp("***bold italic*** here"), "*_bold italic_* here");
+    assert.equal(toWhatsApp("## **Plan**"), "*Plan*");
+    assert.equal(toWhatsApp("## Title ##"), "*Title*");
+  });
+
+  it("does not take a hash in a title or a bare hash for a heading", () => {
+    assert.equal(toWhatsApp("### Learning C#"), "*Learning C#*");
+    assert.equal(toWhatsApp("#\n\nnot heading"), "#\n\nnot heading");
+  });
+
+  it("keeps brackets that belong to a link", () => {
+    assert.equal(
+      toWhatsApp("[wiki](https://en.wikipedia.org/wiki/Foo_(bar))"),
+      "wiki (https://en.wikipedia.org/wiki/Foo_(bar))",
+    );
+  });
+
+  it("stays fast on long runs of spaces and markers", () => {
+    const started = performance.now();
+    toWhatsApp(`${" ".repeat(30_000)}x${" ".repeat(30_000)}`);
+    toWhatsApp("**a".repeat(3_000));
+    toWhatsApp("__a".repeat(3_000));
+    assert.ok(performance.now() - started < 500);
   });
 
   it("drops the spaces Markdown uses for line breaks", () => {
@@ -87,7 +126,7 @@ describe("chat reply", () => {
       { llm: long, logger, timeZone: "UTC", maxReplyLength: 10 },
       signal,
     );
-    assert.equal(reply, `${"y".repeat(10)}…`);
+    assert.equal(reply, `${"y".repeat(10)}…\n\n(Cut short here. Ask for less, or for the rest.)`);
 
     const cut = {
       name: "cut",
@@ -100,7 +139,13 @@ describe("chat reply", () => {
     };
     assert.match(
       await chatReply("x", { llm: cut, logger, timeZone: "UTC" }, signal),
-      /^half an answer\n\n\(I ran out of room here\. Ask for less, or for the rest\.\)$/,
+      /^half an answer\n\n\(Cut short here\. Ask for less, or for the rest\.\)$/,
+    );
+
+    const empty = { ...cut, complete: async () => ({ ...(await cut.complete()), text: "" }) };
+    assert.equal(
+      await chatReply("x", { llm: empty, logger, timeZone: "UTC" }, signal),
+      "I ran out of room before I could answer. Try a narrower question.",
     );
   });
 });
