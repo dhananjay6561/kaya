@@ -5,9 +5,12 @@ import (
 	"encoding/json"
 	"errors"
 	"regexp"
+	"strings"
 	"sync"
 	"testing"
 	"time"
+
+	"github.com/jackc/pgx/v5"
 
 	"github.com/dhananjay6561/kaya/contracts"
 	"github.com/dhananjay6561/kaya/core/internal/gateway"
@@ -21,6 +24,8 @@ func TestRequestIDsMatchTheTypeScriptCore(t *testing.T) {
 	for key, want := range map[string]string{
 		"reply-to-42":          "00d3fe7d-6014-5f70-a92a-032150ef2316",
 		"command:3EB0ABC:chat": "1c646cd6-4298-5c4f-8dd5-0a343f8e6cbd",
+		"":                     "6e24e427-adb1-5221-96aa-22bc0087260d",
+		"नमस्ते 😀":             "5f971de5-9987-50e6-82f6-0707b619b088",
 	} {
 		if got := RequestIDFor(key); got != want {
 			t.Errorf("%q: got %s, want %s (what the TypeScript core made)", key, got, want)
@@ -369,5 +374,77 @@ func TestRefusesToSendUnlinkedStoppedOrEmpty(t *testing.T) {
 	}
 	if err := g.Check(bg); !errors.Is(err, ErrNotStarted) {
 		t.Fatalf("got %v", err)
+	}
+}
+
+func TestCommandsReachTheHandlerThroughTheGatewayEvents(t *testing.T) {
+	r := newInboxRig(t)
+	events := gateway.NewEvents(quiet)
+	g := NewGateway(GatewayOptions{
+		DB: r.core, Validator: validator(t), Results: events, Incoming: events, Logger: quiet, Poll: 10 * time.Millisecond,
+		Inbox: InboxOptions{Poll: time.Minute, RetryMin: 5 * time.Millisecond, IsUrgent: slash},
+	})
+	if err := g.Start(bg); err != nil {
+		t.Fatal(err)
+	}
+	defer g.Stop()
+	seen := make(chan IncomingMessage, 1)
+	g.OnMessage(func(_ context.Context, m IncomingMessage) (Handled, error) {
+		seen <- m
+		return Handled{AnswerID: "3EB0ANSWER"}, nil
+	})
+	typed := r.message(fixture{body: text("hello kaya")})
+	stored, err := contracts.NewEvent(contracts.EventMessageStored, typed)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var after gateway.AfterCommit
+	err = r.core.InTx(bg, func(tx pgx.Tx) error {
+		var err error
+		after, err = events.Handle(bg, tx, stored)
+		return err
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	after()
+	select {
+	case m := <-seen:
+		if m.ID != typed.WAID || m.Text != "hello kaya" {
+			t.Fatalf("got %+v", m)
+		}
+	case <-time.After(5 * time.Second):
+		t.Fatal("the command did not reach the handler without waiting for the poll")
+	}
+	eventually(t, "the exchange", func() bool {
+		return len(column(t, r.admin, "SELECT answer_wa_id FROM exchanges")) == 1
+	})
+}
+
+func TestAStopWhileAHandlerWaitsOnASendHandsTheCommandBack(t *testing.T) {
+	r := newInboxRig(t)
+	events := gateway.NewEvents(quiet)
+	g := NewGateway(GatewayOptions{
+		DB: r.core, Validator: validator(t), Results: events, Incoming: events, Logger: quiet, Poll: time.Minute,
+		Inbox: InboxOptions{Poll: 10 * time.Millisecond, RetryMin: 5 * time.Millisecond},
+	})
+	if err := g.Start(bg); err != nil {
+		t.Fatal(err)
+	}
+	sending := make(chan struct{})
+	g.OnMessage(func(ctx context.Context, m IncomingMessage) (Handled, error) {
+		close(sending)
+		_, err := g.Send(ctx, OutgoingMessage{IdempotencyKey: "answer:" + m.ID, Text: "thinking"}, SendOptions{})
+		return Handled{}, err
+	})
+	typed := r.message(fixture{body: text("hello")})
+	r.record(typed, slash)
+	<-sending
+	g.Stop()
+	if got := r.commands(); len(got) != 1 || !strings.HasSuffix(got[0], " pending") {
+		t.Fatalf("a stop must hand the command back, got %v", got)
+	}
+	if got := r.attempts(); got[0] != "0" {
+		t.Fatalf("the attempt must be given back, got %v", got)
 	}
 }

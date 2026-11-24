@@ -2,7 +2,9 @@ package channel
 
 import (
 	"context"
+	"errors"
 	"fmt"
+	"net"
 	"slices"
 	"strings"
 	"sync"
@@ -580,5 +582,119 @@ func TestNeverDropsAnUrgentCommandOnceTheCapIsReached(t *testing.T) {
 	eventually(t, "the plain one to be dropped", r.settled)
 	if got := states(r.commands()); !slices.Equal(got, []string{"done", "done", "failed over_cap", "done"}) {
 		t.Fatalf("got %v", got)
+	}
+}
+
+func TestFinishesACommandEvenWhenAStopLandsRightAfterItsHandler(t *testing.T) {
+	r := newInboxRig(t)
+	r.record(r.message(fixture{body: text("answered just before the stop")}), slash)
+	box := NewInbox(InboxOptions{DB: r.core, Logger: quiet, Poll: time.Minute, RetryMin: 5 * time.Millisecond})
+	stopped := make(chan struct{})
+	box.Start(func(context.Context, IncomingMessage) (Handled, error) {
+		go func() { box.Stop(); close(stopped) }()
+		time.Sleep(20 * time.Millisecond)
+		return Handled{AnswerID: "3EB0ANSWERED"}, nil
+	}, func() bool { return true })
+	<-stopped
+	if got := states(r.commands()); !slices.Equal(got, []string{"done"}) {
+		t.Fatalf("a finished command must be recorded as done, got %v", got)
+	}
+}
+
+func TestFailsANetworkErrorFromAHandlerWhileTheDatabaseIsUp(t *testing.T) {
+	r := newInboxRig(t)
+	r.record(r.message(fixture{body: text("fetch a dead host")}), slash)
+	r.record(r.message(fixture{body: text("ask a dead model")}), slash)
+	dial := &net.OpError{Op: "dial", Net: "tcp", Err: &net.DNSError{Err: "no such host", Name: "api.example.invalid"}}
+	var calls atomic.Int32
+	r.start(func(_ context.Context, m IncomingMessage) (Handled, error) {
+		calls.Add(1)
+		if strings.Contains(m.Text, "model") {
+			return Handled{}, fmt.Errorf("%w: %w", coded("unavailable"), dial)
+		}
+		return Handled{}, fmt.Errorf("get: %w", dial)
+	}, nil, nil)
+	eventually(t, "both to be settled", r.settled)
+	if got := states(r.commands()); !slices.Equal(got, []string{"failed handler_failed", "failed unavailable"}) || calls.Load() != 2 {
+		t.Fatalf("got %v after %d calls", got, calls.Load())
+	}
+}
+
+func TestStoresNoCodeForSeveralFailuresAndCountsAPanicAsOne(t *testing.T) {
+	r := newInboxRig(t)
+	r.record(r.message(fixture{body: text("two handlers fail")}), slash)
+	r.record(r.message(fixture{body: text("panics")}), slash)
+	r.start(func(_ context.Context, m IncomingMessage) (Handled, error) {
+		if strings.Contains(m.Text, "panics") {
+			return deliverTo(bg, []handlerEntry{{handler: func(context.Context, IncomingMessage) (Handled, error) { panic("bug") }}}, m)
+		}
+		return Handled{}, errors.Join(coded("no_answer"), coded("expired"))
+	}, nil, nil)
+	eventually(t, "both to be settled", r.settled)
+	if got := states(r.commands()); !slices.Equal(got, []string{"failed handler_failed", "failed handler_failed"}) {
+		t.Fatalf("got %v", got)
+	}
+}
+
+func TestStartAndStopRacingNeverHang(t *testing.T) {
+	r := newInboxRig(t)
+	box := NewInbox(InboxOptions{DB: r.core, Logger: quiet, Poll: 5 * time.Millisecond})
+	deliver := func(context.Context, IncomingMessage) (Handled, error) { return Handled{}, nil }
+	done := make(chan struct{})
+	go func() {
+		defer close(done)
+		for range 50 {
+			var wg sync.WaitGroup
+			wg.Go(func() { box.Start(deliver, func() bool { return true }) })
+			wg.Go(box.Stop)
+			wg.Wait()
+		}
+		box.Stop()
+	}()
+	select {
+	case <-done:
+	case <-time.After(20 * time.Second):
+		t.Fatal("start and stop hung")
+	}
+}
+
+func TestCutsADeliveryShortWhenTheWorkerLockIsLost(t *testing.T) {
+	r := newInboxRig(t)
+	r.record(r.message(fixture{body: text("long running")}), slash)
+	var running, most, calls atomic.Int32
+	entered := make(chan struct{}, 4)
+	r.start(func(ctx context.Context, _ IncomingMessage) (Handled, error) {
+		n := running.Add(1)
+		defer running.Add(-1)
+		if n > most.Load() {
+			most.Store(n)
+		}
+		if calls.Add(1) > 1 {
+			return Handled{}, nil
+		}
+		entered <- struct{}{}
+		<-ctx.Done()
+		return Handled{}, ctx.Err()
+	}, func(o *InboxOptions) { o.Poll = 10 * time.Millisecond }, nil)
+	<-entered
+	pids := column(t, r.admin, `SELECT pid::text FROM pg_locks
+		WHERE locktype = 'advisory' AND objid = $1
+		  AND database = (SELECT oid FROM pg_database WHERE datname = current_database())`, inboxLock)
+	if len(pids) != 1 {
+		t.Fatalf("want one lock holder, got %v", pids)
+	}
+	exec(t, r.admin, "SELECT pg_terminate_backend($1::int)", pids[0])
+	eventually(t, "the command to run again and finish", func() bool { return slices.Equal(states(r.commands()), []string{"done"}) })
+	if most.Load() != 1 || !slices.Equal(r.attempts(), []string{"1"}) {
+		t.Fatalf("most at once %d, attempts %v", most.Load(), r.attempts())
+	}
+}
+
+func TestTrimsLikeJavaScript(t *testing.T) {
+	if got := trimmed("\ufeff hi \u3000"); got != "hi" {
+		t.Fatalf("got %q", got)
+	}
+	if got := trimmed("\u0085hi"); got != "\u0085hi" {
+		t.Fatalf("JavaScript keeps U+0085, got %q", got)
 	}
 }

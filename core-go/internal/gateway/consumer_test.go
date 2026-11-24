@@ -458,3 +458,27 @@ func TestClosesItsListeningConnectionWhenItStops(t *testing.T) {
 		return len(r.strings("SELECT pid::text FROM pg_stat_activity WHERE datname = current_database() AND query LIKE 'LISTEN%' AND state <> 'idle in transaction (aborted)' AND application_name LIKE 'kaya-core%'")) == 0
 	})
 }
+
+func TestConsumerStartAndStopRacingNeverHang(t *testing.T) {
+	r := newRig(t)
+	c := NewConsumer(ConsumerOptions{
+		DB: r.core, Validator: validator(t), Logger: quiet, Handle: record,
+		PollInterval: 5 * time.Millisecond, RetryMin: 5 * time.Millisecond,
+	})
+	done := make(chan struct{})
+	go func() {
+		defer close(done)
+		for range 50 {
+			var wg sync.WaitGroup
+			wg.Go(func() { c.Start(context.Background()) })
+			wg.Go(c.Stop)
+			wg.Wait()
+		}
+		c.Stop()
+	}()
+	select {
+	case <-done:
+	case <-time.After(20 * time.Second):
+		t.Fatal("start and stop hung")
+	}
+}
