@@ -7,13 +7,17 @@ export {
   createGatewayChannel,
   type GatewayChannelDeps,
   GatewayNotLinkedError,
-  IdempotencyKeyReusedError,
   type IncomingEvents,
   requestIdFor,
   SendFailedError,
   type SendResults,
 } from "./gateway.js";
-export { ChannelNotStartedError, createStubChannel, type StubChannel } from "./stub.js";
+export {
+  ChannelNotStartedError,
+  createStubChannel,
+  IdempotencyKeyReusedError,
+  type StubChannel,
+} from "./stub.js";
 export type * from "./types.js";
 
 export function createChannel(

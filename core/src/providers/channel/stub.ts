@@ -11,7 +11,10 @@ import type {
 export type StubChannel = ChatChannel &
   Readonly<{
     sent: readonly OutgoingMessage[];
-    receive(text: string, options?: Readonly<{ sentAt?: Date }>): Promise<IncomingMessage>;
+    receive(
+      text: string,
+      options?: Readonly<{ sentAt?: Date; id?: string }>,
+    ): Promise<IncomingMessage>;
   }>;
 
 export class ChannelNotStartedError extends Error {
@@ -21,9 +24,16 @@ export class ChannelNotStartedError extends Error {
   }
 }
 
+export class IdempotencyKeyReusedError extends Error {
+  constructor(readonly requestId: string) {
+    super("this idempotency key was already used for a different message");
+    this.name = "IdempotencyKeyReusedError";
+  }
+}
+
 export function createStubChannel(): StubChannel {
   const sent: OutgoingMessage[] = [];
-  const byKey = new Map<string, SentMessage>();
+  const byKey = new Map<string, { result: SentMessage; message: OutgoingMessage }>();
   const handlers = new Set<MessageHandler>();
   let started = false;
 
@@ -49,22 +59,29 @@ export function createStubChannel(): StubChannel {
       assertStarted();
       if (message.idempotencyKey.trim() === "") throw new Error("idempotency key is empty");
       const earlier = byKey.get(message.idempotencyKey);
-      if (earlier) return earlier;
+      if (earlier) {
+        const textDiffers =
+          earlier.message.text.trim() !== message.text.trim() && !options.textMayChange;
+        if (textDiffers || earlier.message.replyTo !== message.replyTo) {
+          throw new IdempotencyKeyReusedError(message.idempotencyKey);
+        }
+        return earlier.result;
+      }
       if (message.text.trim() === "") throw new Error("message text is empty");
       sent.push(message);
       const result = { id: randomUUID(), sentAt: new Date() };
-      byKey.set(message.idempotencyKey, result);
+      byKey.set(message.idempotencyKey, { result, message });
       return result;
     },
     onMessage(handler: MessageHandler) {
       handlers.add(handler);
       return () => handlers.delete(handler);
     },
-    async receive(text: string, options: Readonly<{ sentAt?: Date }> = {}) {
+    async receive(text: string, options: Readonly<{ sentAt?: Date; id?: string }> = {}) {
       assertStarted();
       const now = new Date();
       const message: IncomingMessage = {
-        id: randomUUID(),
+        id: options.id ?? randomUUID(),
         text,
         sentAt: options.sentAt ?? now,
         receivedAt: now,
