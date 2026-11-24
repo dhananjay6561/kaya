@@ -82,6 +82,10 @@ contact, and it works with everything your WhatsApp account can see.
   budget set per model, so follow-ups work and the model can be swapped. Never your other chats.
   Timeouts, limited retries, and a plain notice in the chat when the model cannot answer; logs keep
   token counts, never text.
+- **A search index over your chats.** Text messages are grouped into short conversations, masked,
+  and embedded with Voyage `voyage-4` into Postgres with pgvector (HNSW, half-precision vectors),
+  in the background and again when a message is edited. `/status` shows how much is indexed.
+  Searching it comes next.
 - **Masking before the cloud.** Anything in a cloud model's context that you did not type has phone
   numbers, emails, OTPs, card and account numbers, Aadhaar, PAN, UPI ids and addresses replaced by
   placeholders like `[PHONE_1]`, which are put back in the answer before you see it. A local model
@@ -528,7 +532,7 @@ Status key: ✅ done · 🟨 in progress · ⬜ not started
 | 0. Foundation | Monorepo, config, Compose stack, migrations, logging, health, provider interfaces | ✅ |
 | 1. WhatsApp gateway | Contracts, pairing, live ingest, history sync, media, connection health, delivery to core and sending. Checked end to end against a real WhatsApp account. | ✅ |
 | 2. Talking to Kaya | Self-chat command channel and built-in commands `/help`, `/status`, `/pause`, `/resume`. Checked on a real account. | ✅ |
-| 3. Brain | Groq replies, lasting conversation memory, masking for cloud models (built), local embeddings, meaning-based search, Q&A with sources, tagging, summaries | 🟨 |
+| 3. Brain | Groq replies, lasting conversation memory, masking for cloud models, chat embeddings (built), search, meaning-based search, Q&A with sources, tagging, summaries | 🟨 |
 | 4. Agent loop and safety | Masking, context picking, tool calling, confirm-before-act, prompt-injection guard, usage tracking | ⬜ |
 | 5. Voice notes | Transcription, spoken commands | ⬜ |
 | 6. Sending as you | Messages to contacts and groups after confirmation, with rate limits | ⬜ |
