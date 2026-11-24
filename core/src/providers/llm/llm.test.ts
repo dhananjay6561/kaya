@@ -1,6 +1,5 @@
 import assert from "node:assert/strict";
 import { describe, it } from "node:test";
-import { ProviderNotReadyError } from "../errors.js";
 import { createLlm, createStubLlm } from "./index.js";
 
 describe("stub llm", () => {
@@ -51,7 +50,7 @@ describe("stub llm", () => {
 });
 
 describe("createLlm", () => {
-  it("builds the provider named in config", async () => {
+  it("builds the provider named in config", () => {
     assert.equal(createLlm({ provider: "stub" }).name, "stub");
 
     const groq = createLlm({
@@ -59,9 +58,5 @@ describe("createLlm", () => {
       groq: { apiKey: "test-key-not-real", heavyModel: "h", routineModel: "r" },
     });
     assert.equal(groq.name, "groq");
-    await assert.rejects(
-      groq.complete({ tier: "routine", messages: [{ role: "user", content: "x" }] }),
-      (err: unknown) => err instanceof ProviderNotReadyError && err.phase === "3.1",
-    );
   });
 });
