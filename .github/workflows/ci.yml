@@ -82,6 +82,7 @@ jobs:
             core-go/go.sum
             kit/go.sum
             contracts/go.sum
+            gateway/go.sum
       - uses: golangci/golangci-lint-action@ba0d7d2ec06a0ea1cb5fa41b2e4a3ab91d21278a # v9.3.0
         with:
           version: v2.15.0
@@ -95,6 +96,13 @@ jobs:
           version: v2.15.0
           working-directory: contracts
       - run: make test-core-go test-kit build-core-go
+      - name: every go module builds and is tidy on its own go.mod
+        run: |
+          for module in contracts kit gateway core-go; do
+            (cd "$module" && go build ./... && go mod tidy -diff)
+          done
+      - name: the go core image builds
+        run: docker build -f core-go/Dockerfile .
 
   compose:
     runs-on: ubuntu-latest
