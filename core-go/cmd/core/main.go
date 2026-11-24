@@ -3,7 +3,6 @@ package main
 
 import (
 	"context"
-	"errors"
 	"fmt"
 	"log/slog"
 	"net"
@@ -74,6 +73,11 @@ func loadConfig() (config.Config, error) {
 func run(cfg config.Config, logger *slog.Logger) error {
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer stop()
+	go func() {
+		<-ctx.Done()
+		logger.Info("core stopping")
+		stop()
+	}()
 
 	db, err := store.Open(cfg.DatabaseURL, store.WithAppName("kaya-core"))
 	if err != nil {
@@ -105,9 +109,6 @@ func run(cfg config.Config, logger *slog.Logger) error {
 	)
 	err = httpapi.Serve(ctx, httpapi.NewServer(handler, logger), ln, shutdownGrace)
 	logger.Info("core stopped")
-	if errors.Is(err, context.Canceled) {
-		return nil
-	}
 	return err
 }
 
