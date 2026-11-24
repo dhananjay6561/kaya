@@ -393,7 +393,7 @@ func TestCommandsReachTheHandlerThroughTheGatewayEvents(t *testing.T) {
 		seen <- m
 		return Handled{AnswerID: "3EB0ANSWER"}, nil
 	})
-	typed := r.message(fixture{body: text("hello kaya")})
+	typed := r.message(fixture{body: str("hello kaya")})
 	stored, err := contracts.NewEvent(contracts.EventMessageStored, typed)
 	if err != nil {
 		t.Fatal(err)
@@ -437,7 +437,7 @@ func TestAStopWhileAHandlerWaitsOnASendHandsTheCommandBack(t *testing.T) {
 		_, err := g.Send(ctx, OutgoingMessage{IdempotencyKey: "answer:" + m.ID, Text: "thinking"}, SendOptions{})
 		return Handled{}, err
 	})
-	typed := r.message(fixture{body: text("hello")})
+	typed := r.message(fixture{body: str("hello")})
 	r.record(typed, slash)
 	<-sending
 	g.Stop()

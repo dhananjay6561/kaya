@@ -70,8 +70,8 @@ type fixture struct {
 	sentAt    time.Time
 }
 
-func text(s string) *string { return &s }
-func no() *bool             { b := false; return &b }
+func str(s string) *string { return &s }
+func no() *bool            { b := false; return &b }
 
 func (r *inboxRig) message(f fixture) contracts.MessageStored {
 	r.t.Helper()
@@ -100,7 +100,7 @@ func (r *inboxRig) message(f fixture) contracts.MessageStored {
 		f.change = "new"
 	}
 	if f.body == nil {
-		f.body = text("do the thing")
+		f.body = str("do the thing")
 	}
 	var deletedAt *time.Time
 	if f.deleted {
@@ -204,7 +204,7 @@ func TestTakesNothingElse(t *testing.T) {
 		{"an old message from the history sync", r.message(fixture{source: "history"})},
 		{"an edit", r.message(fixture{change: "edited"})},
 		{"a deletion", r.message(fixture{change: "deleted"})},
-		{"a photo", r.message(fixture{kind: "image", body: text("a caption")})},
+		{"a photo", r.message(fixture{kind: "image", body: str("a caption")})},
 		{"a message deleted before it was looked at", r.message(fixture{deleted: true})},
 		{"someone else's words, forwarded by DJ", r.message(fixture{forwarded: true})},
 		{"a message from two days ago, handled now", r.message(fixture{sentAt: time.Now().Add(-48 * time.Hour)})},
@@ -242,8 +242,8 @@ func TestTakesNothingElse(t *testing.T) {
 func TestHandsCommandsOverOldestFirstOneAtATime(t *testing.T) {
 	r := newInboxRig(t)
 	sentAt := time.Now().Add(-5 * time.Minute).Truncate(time.Second)
-	first := r.message(fixture{body: text("  first  "), sentAt: sentAt})
-	second := r.message(fixture{body: text("second")})
+	first := r.message(fixture{body: str("  first  "), sentAt: sentAt})
+	second := r.message(fixture{body: str("second")})
 	r.record(first, slash)
 	r.record(second, slash)
 
@@ -281,7 +281,7 @@ func TestWakesForACommandRecordedWhileIdle(t *testing.T) {
 	seen := make(chan string, 1)
 	box := r.start(func(_ context.Context, m IncomingMessage) (Handled, error) { seen <- m.Text; return Handled{}, nil }, nil, nil)
 	time.Sleep(30 * time.Millisecond)
-	r.record(r.message(fixture{body: text("typed just now")}), slash)
+	r.record(r.message(fixture{body: str("typed just now")}), slash)
 	box.Wake()
 	select {
 	case <-seen:
@@ -317,10 +317,10 @@ func (c coded) ErrorCode() string { return string(c) }
 
 func TestMarksAFailedCommandAndCarriesOn(t *testing.T) {
 	r := newInboxRig(t)
-	bad := r.message(fixture{body: text("this one breaks")})
-	gone := r.message(fixture{body: text("deleted before its turn")})
-	good := r.message(fixture{body: text("this one works")})
-	weird := r.message(fixture{body: text("this one fails oddly")})
+	bad := r.message(fixture{body: str("this one breaks")})
+	gone := r.message(fixture{body: str("deleted before its turn")})
+	good := r.message(fixture{body: str("this one works")})
+	weird := r.message(fixture{body: str("this one fails oddly")})
 	for _, m := range []contracts.MessageStored{bad, gone, good, weird} {
 		r.record(m, slash)
 	}
@@ -344,7 +344,7 @@ func TestMarksAFailedCommandAndCarriesOn(t *testing.T) {
 func TestDropsCommandsThatComeFasterThanAPersonTypes(t *testing.T) {
 	r := newInboxRig(t)
 	for i := range 5 {
-		r.record(r.message(fixture{body: text(fmt.Sprintf("command %d", i))}), slash)
+		r.record(r.message(fixture{body: str(fmt.Sprintf("command %d", i))}), slash)
 	}
 	var mu sync.Mutex
 	var seen []string
@@ -366,9 +366,9 @@ func TestDropsCommandsThatComeFasterThanAPersonTypes(t *testing.T) {
 func TestRunsUrgentCommandsFirstAndNeverDropsThem(t *testing.T) {
 	r := newInboxRig(t)
 	for i := range 4 {
-		r.record(r.message(fixture{body: text(fmt.Sprintf("command %d", i))}), slash)
+		r.record(r.message(fixture{body: str(fmt.Sprintf("command %d", i))}), slash)
 	}
-	r.record(r.message(fixture{body: text("/pause")}), slash)
+	r.record(r.message(fixture{body: str("/pause")}), slash)
 	var mu sync.Mutex
 	var seen []string
 	r.start(func(_ context.Context, m IncomingMessage) (Handled, error) {
@@ -388,9 +388,9 @@ func TestRunsUrgentCommandsFirstAndNeverDropsThem(t *testing.T) {
 
 func TestKeepsTheExchangeAHandlerReports(t *testing.T) {
 	r := newInboxRig(t)
-	answered := r.message(fixture{body: text("a question")})
+	answered := r.message(fixture{body: str("a question")})
 	r.record(answered, slash)
-	r.record(r.message(fixture{body: text("/status")}), slash)
+	r.record(r.message(fixture{body: str("/status")}), slash)
 	r.start(func(_ context.Context, m IncomingMessage) (Handled, error) {
 		if m.Text == "a question" {
 			return Handled{AnswerID: "3EB0THEANSWER"}, nil
@@ -406,7 +406,7 @@ func TestKeepsTheExchangeAHandlerReports(t *testing.T) {
 
 func TestDecidesUrgencyWhenRecorded(t *testing.T) {
 	r := newInboxRig(t)
-	r.record(r.message(fixture{body: text("plain words")}), func(string) bool { return true })
+	r.record(r.message(fixture{body: str("plain words")}), func(string) bool { return true })
 	if got := column(t, r.admin, "SELECT urgent::text FROM commands"); !slices.Equal(got, []string{"true"}) {
 		t.Fatalf("got %v", got)
 	}
@@ -415,7 +415,7 @@ func TestDecidesUrgencyWhenRecorded(t *testing.T) {
 func TestRunsEachCommandInOneWorkerEvenWhenTwoAreStarted(t *testing.T) {
 	r := newInboxRig(t)
 	for i := range 6 {
-		r.record(r.message(fixture{body: text(fmt.Sprintf("command %d", i))}), slash)
+		r.record(r.message(fixture{body: str(fmt.Sprintf("command %d", i))}), slash)
 	}
 	var calls atomic.Int32
 	deliver := func(context.Context, IncomingMessage) (Handled, error) {
@@ -437,7 +437,7 @@ func TestRunsEachCommandInOneWorkerEvenWhenTwoAreStarted(t *testing.T) {
 
 func TestStopsAtOnceAndAnOrderlyStopNeverCountsAgainstTheCommand(t *testing.T) {
 	r := newInboxRig(t)
-	typed := r.message(fixture{body: text("waiting on a reply")})
+	typed := r.message(fixture{body: str("waiting on a reply")})
 	r.record(typed, slash)
 	for run := 1; run <= 7; run++ {
 		entered := make(chan struct{})
@@ -466,7 +466,7 @@ func TestStopsAtOnceAndAnOrderlyStopNeverCountsAgainstTheCommand(t *testing.T) {
 
 func TestGivesUpOnACommandStartedTooManyTimes(t *testing.T) {
 	r := newInboxRig(t)
-	r.record(r.message(fixture{body: text("crashes core every time")}), slash)
+	r.record(r.message(fixture{body: str("crashes core every time")}), slash)
 	exec(t, r.admin, "UPDATE commands SET attempts = 2")
 	var ran atomic.Bool
 	r.start(func(context.Context, IncomingMessage) (Handled, error) { ran.Store(true); return Handled{}, nil },
@@ -482,7 +482,7 @@ func TestGivesUpOnACommandStartedTooManyTimes(t *testing.T) {
 
 func TestLeavesTheCommandPendingWhenTheDatabaseGoesAwayAndFinishesItLater(t *testing.T) {
 	r := newInboxRig(t)
-	r.record(r.message(fixture{body: text("hello")}), slash)
+	r.record(r.message(fixture{body: str("hello")}), slash)
 	var calls atomic.Int32
 	r.start(func(context.Context, IncomingMessage) (Handled, error) {
 		if calls.Add(1) == 1 {
@@ -498,7 +498,7 @@ func TestLeavesTheCommandPendingWhenTheDatabaseGoesAwayAndFinishesItLater(t *tes
 
 func TestDeletesFinishedCommandsAfterAWhileAndKeepsTheUnfinished(t *testing.T) {
 	r := newInboxRig(t)
-	r.record(r.message(fixture{body: text("done long ago")}), slash)
+	r.record(r.message(fixture{body: str("done long ago")}), slash)
 	r.start(func(context.Context, IncomingMessage) (Handled, error) { return Handled{}, nil },
 		func(o *InboxOptions) {
 			o.Retention = time.Nanosecond
@@ -508,7 +508,7 @@ func TestDeletesFinishedCommandsAfterAWhileAndKeepsTheUnfinished(t *testing.T) {
 	eventually(t, "the finished command to be deleted", func() bool { return len(r.commands()) == 0 })
 	r.stop()
 
-	kept := r.message(fixture{body: text("still to do")})
+	kept := r.message(fixture{body: str("still to do")})
 	r.record(kept, slash)
 	r.start(func(context.Context, IncomingMessage) (Handled, error) { return Handled{}, nil },
 		func(o *InboxOptions) {
@@ -528,7 +528,7 @@ func TestTakesTheWorkerLockAgainAfterItsConnectionIsLost(t *testing.T) {
 	seen := make(chan string, 4)
 	box := r.start(func(_ context.Context, m IncomingMessage) (Handled, error) { seen <- m.Text; return Handled{}, nil },
 		func(o *InboxOptions) { o.Poll = 10 * time.Millisecond }, nil)
-	r.record(r.message(fixture{body: text("before")}), slash)
+	r.record(r.message(fixture{body: str("before")}), slash)
 	box.Wake()
 	<-seen
 	pids := column(t, r.admin, `SELECT pid::text FROM pg_locks
@@ -538,7 +538,7 @@ func TestTakesTheWorkerLockAgainAfterItsConnectionIsLost(t *testing.T) {
 		t.Fatalf("want one lock holder, got %v", pids)
 	}
 	exec(t, r.admin, "SELECT pg_terminate_backend($1::int)", pids[0])
-	r.record(r.message(fixture{body: text("after")}), slash)
+	r.record(r.message(fixture{body: str("after")}), slash)
 	box.Wake()
 	select {
 	case got := <-seen:
@@ -562,14 +562,14 @@ func TestNeverDropsAnUrgentCommandOnceTheCapIsReached(t *testing.T) {
 	box := r.start(func(_ context.Context, m IncomingMessage) (Handled, error) { seen <- m.Text; return Handled{}, nil },
 		func(o *InboxOptions) { o.MaxPerMinute = 2; o.Poll = 10 * time.Millisecond; o.IsUrgent = slash }, nil)
 	for i := range 2 {
-		r.record(r.message(fixture{body: text(fmt.Sprintf("command %d", i))}), slash)
+		r.record(r.message(fixture{body: str(fmt.Sprintf("command %d", i))}), slash)
 	}
 	box.Wake()
 	<-seen
 	<-seen
 	eventually(t, "the cap to be used up", r.settled)
-	r.record(r.message(fixture{body: text("plain")}), slash)
-	r.record(r.message(fixture{body: text("/pause")}), slash)
+	r.record(r.message(fixture{body: str("plain")}), slash)
+	r.record(r.message(fixture{body: str("/pause")}), slash)
 	box.Wake()
 	select {
 	case got := <-seen:
@@ -587,7 +587,7 @@ func TestNeverDropsAnUrgentCommandOnceTheCapIsReached(t *testing.T) {
 
 func TestFinishesACommandEvenWhenAStopLandsRightAfterItsHandler(t *testing.T) {
 	r := newInboxRig(t)
-	r.record(r.message(fixture{body: text("answered just before the stop")}), slash)
+	r.record(r.message(fixture{body: str("answered just before the stop")}), slash)
 	box := NewInbox(InboxOptions{DB: r.core, Logger: quiet, Poll: time.Minute, RetryMin: 5 * time.Millisecond})
 	stopped := make(chan struct{})
 	box.Start(func(context.Context, IncomingMessage) (Handled, error) {
@@ -603,8 +603,8 @@ func TestFinishesACommandEvenWhenAStopLandsRightAfterItsHandler(t *testing.T) {
 
 func TestFailsANetworkErrorFromAHandlerWhileTheDatabaseIsUp(t *testing.T) {
 	r := newInboxRig(t)
-	r.record(r.message(fixture{body: text("fetch a dead host")}), slash)
-	r.record(r.message(fixture{body: text("ask a dead model")}), slash)
+	r.record(r.message(fixture{body: str("fetch a dead host")}), slash)
+	r.record(r.message(fixture{body: str("ask a dead model")}), slash)
 	dial := &net.OpError{Op: "dial", Net: "tcp", Err: &net.DNSError{Err: "no such host", Name: "api.example.invalid"}}
 	var calls atomic.Int32
 	r.start(func(_ context.Context, m IncomingMessage) (Handled, error) {
@@ -622,8 +622,8 @@ func TestFailsANetworkErrorFromAHandlerWhileTheDatabaseIsUp(t *testing.T) {
 
 func TestStoresNoCodeForSeveralFailuresAndCountsAPanicAsOne(t *testing.T) {
 	r := newInboxRig(t)
-	r.record(r.message(fixture{body: text("two handlers fail")}), slash)
-	r.record(r.message(fixture{body: text("panics")}), slash)
+	r.record(r.message(fixture{body: str("two handlers fail")}), slash)
+	r.record(r.message(fixture{body: str("panics")}), slash)
 	r.start(func(_ context.Context, m IncomingMessage) (Handled, error) {
 		if strings.Contains(m.Text, "panics") {
 			return deliverTo(bg, []handlerEntry{{handler: func(context.Context, IncomingMessage) (Handled, error) { panic("bug") }}}, m)
@@ -660,7 +660,7 @@ func TestStartAndStopRacingNeverHang(t *testing.T) {
 
 func TestCutsADeliveryShortWhenTheWorkerLockIsLost(t *testing.T) {
 	r := newInboxRig(t)
-	r.record(r.message(fixture{body: text("long running")}), slash)
+	r.record(r.message(fixture{body: str("long running")}), slash)
 	var running, most, calls atomic.Int32
 	entered := make(chan struct{}, 4)
 	r.start(func(ctx context.Context, _ IncomingMessage) (Handled, error) {
@@ -687,14 +687,5 @@ func TestCutsADeliveryShortWhenTheWorkerLockIsLost(t *testing.T) {
 	eventually(t, "the command to run again and finish", func() bool { return slices.Equal(states(r.commands()), []string{"done"}) })
 	if most.Load() != 1 || !slices.Equal(r.attempts(), []string{"1"}) {
 		t.Fatalf("most at once %d, attempts %v", most.Load(), r.attempts())
-	}
-}
-
-func TestTrimsLikeJavaScript(t *testing.T) {
-	if got := trimmed("\ufeff hi \u3000"); got != "hi" {
-		t.Fatalf("got %q", got)
-	}
-	if got := trimmed("\u0085hi"); got != "\u0085hi" {
-		t.Fatalf("JavaScript keeps U+0085, got %q", got)
 	}
 }

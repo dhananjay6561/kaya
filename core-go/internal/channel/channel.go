@@ -6,6 +6,8 @@ import (
 	"context"
 	"errors"
 	"time"
+
+	"github.com/dhananjay6561/kaya/core/internal/text"
 )
 
 // IncomingMessage is something DJ typed to Kaya.
@@ -96,7 +98,7 @@ func (e *KeyReusedError) Error() string {
 }
 
 func checkOutgoing(m OutgoingMessage) error {
-	if trimmed(m.IdempotencyKey) == "" || trimmed(m.Text) == "" {
+	if text.Trim(m.IdempotencyKey) == "" || text.Trim(m.Text) == "" {
 		return ErrEmpty
 	}
 	return nil

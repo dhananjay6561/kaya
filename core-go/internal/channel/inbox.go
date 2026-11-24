@@ -9,6 +9,8 @@ import (
 	"sync"
 	"time"
 
+	"github.com/dhananjay6561/kaya/core/internal/text"
+
 	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgconn"
 
@@ -328,11 +330,11 @@ func (in *Inbox) step(ctx context.Context, lock *lockHolder, deliver Deliver, re
 		in.giveBackAttempt(row.id)
 		return false, err
 	}
-	text := ""
+	words := ""
 	if body != nil {
-		text = trimmed(*body)
+		words = text.Trim(*body)
 	}
-	if text == "" {
+	if words == "" {
 		return true, in.finish(db, row, "message_gone", "")
 	}
 
@@ -351,7 +353,7 @@ func (in *Inbox) step(ctx context.Context, lock *lockHolder, deliver Deliver, re
 	}
 
 	handled, err := in.deliverWatched(ctx, lock, deliver,
-		IncomingMessage{ID: row.waID, Text: text, SentAt: row.sentAt, ReceivedAt: row.createdAt})
+		IncomingMessage{ID: row.waID, Text: words, SentAt: row.sentAt, ReceivedAt: row.createdAt})
 	if err != nil {
 		switch {
 		case ctx.Err() != nil:

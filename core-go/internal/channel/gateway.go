@@ -10,6 +10,8 @@ import (
 	"sync"
 	"time"
 
+	"github.com/dhananjay6561/kaya/core/internal/text"
+
 	"github.com/jackc/pgx/v5"
 
 	"github.com/dhananjay6561/kaya/contracts"
@@ -241,7 +243,7 @@ func (g *Gateway) outcome(ctx context.Context, id string, m *OutgoingMessage, te
 		return nil, false, err
 	}
 	if m != nil {
-		textDiffers := deref(r.text) != trimmed(m.Text) && !textMayChange
+		textDiffers := deref(r.text) != text.Trim(m.Text) && !textMayChange
 		if textDiffers || deref(r.replyTo) != m.ReplyTo {
 			return nil, true, &KeyReusedError{RequestID: id}
 		}

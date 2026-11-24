@@ -6,9 +6,10 @@ import (
 	"fmt"
 	"runtime/debug"
 	"slices"
-	"strings"
 	"sync"
 	"time"
+
+	"github.com/dhananjay6561/kaya/core/internal/text"
 
 	"github.com/dhananjay6561/kaya/contracts"
 )
@@ -87,11 +88,11 @@ func (s *Stub) Send(ctx context.Context, m OutgoingMessage, o SendOptions) (Sent
 	if !s.started {
 		return SentMessage{}, ErrNotStarted
 	}
-	if trimmed(m.IdempotencyKey) == "" {
+	if text.Trim(m.IdempotencyKey) == "" {
 		return SentMessage{}, ErrEmpty
 	}
 	if earlier, ok := s.byKey[m.IdempotencyKey]; ok {
-		textDiffers := trimmed(earlier.message.Text) != trimmed(m.Text) && !o.TextMayChange
+		textDiffers := text.Trim(earlier.message.Text) != text.Trim(m.Text) && !o.TextMayChange
 		if textDiffers || earlier.message.ReplyTo != m.ReplyTo {
 			return SentMessage{}, &KeyReusedError{RequestID: m.IdempotencyKey}
 		}
@@ -197,16 +198,4 @@ func callHandler(ctx context.Context, h Handler, m IncomingMessage) (handled Han
 		}
 	}()
 	return h(ctx, m)
-}
-
-// trimmed cuts the same characters JavaScript's trim() does, so text and keys compare the same way
-// they did in the TypeScript core.
-func trimmed(s string) string { return strings.TrimFunc(s, isJSSpace) }
-
-func isJSSpace(r rune) bool {
-	switch r {
-	case '\t', '\n', '\v', '\f', '\r', ' ', 0x00a0, 0x1680, 0x2028, 0x2029, 0x202f, 0x205f, 0x3000, 0xfeff:
-		return true
-	}
-	return r >= 0x2000 && r <= 0x200a
 }
