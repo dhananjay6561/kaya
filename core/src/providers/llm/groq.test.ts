@@ -68,13 +68,17 @@ describe("groq", () => {
   });
 
   it("uses the heavy model with more room and effort, and passes the caller's limits", async () => {
-    const { llm, calls } = groq([() => ok("x")], { baseUrl: "http://localhost:9/v1/" });
+    const { llm, calls } = groq([() => ok("x"), () => ok("y")], {
+      baseUrl: "http://localhost:9/v1/",
+    });
     await llm.complete({ ...ask, tier: "heavy", maxTokens: 50, temperature: 0.2 });
+    await llm.complete({ ...ask, tier: "heavy", effort: "low" });
     assert.equal(calls[0]?.url, "http://localhost:9/v1/chat/completions");
     assert.equal(calls[0]?.body.model, "big-model");
     assert.equal(calls[0]?.body.max_completion_tokens, 50);
     assert.equal(calls[0]?.body.temperature, 0.2);
     assert.equal(calls[0]?.body.reasoning_effort, "medium");
+    assert.equal(calls[1]?.body.reasoning_effort, "low", "the caller can ask for less effort");
   });
 
   it("reports a cut-off answer and an empty one as they are", async () => {

@@ -9,6 +9,7 @@ import type {
   FinishReason,
   LlmProvider,
   ModelTier,
+  ReasoningEffort,
 } from "./types.js";
 
 export type GroqOptions = Readonly<{
@@ -21,7 +22,7 @@ export type GroqOptions = Readonly<{
   maxRetryWaitMs?: number;
 }>;
 
-const reasoningEffort: Record<ModelTier, "low" | "medium"> = { routine: "low", heavy: "medium" };
+const reasoningEffort: Record<ModelTier, ReasoningEffort> = { routine: "low", heavy: "medium" };
 const defaultMaxTokens: Record<ModelTier, number> = { routine: 1_024, heavy: 8_192 };
 const framingTokens = 4;
 const finishReasons = new Set<string>(["stop", "length", "tool_calls", "content_filter"]);
@@ -178,7 +179,7 @@ export function createGroqLlm(config: GroqConfig, options: GroqOptions = {}): Ll
         messages: request.messages,
         max_completion_tokens: request.maxTokens ?? defaultMaxTokens[request.tier],
         ...(request.temperature === undefined ? {} : { temperature: request.temperature }),
-        reasoning_effort: reasoningEffort[request.tier],
+        reasoning_effort: request.effort ?? reasoningEffort[request.tier],
         include_reasoning: false,
       });
 

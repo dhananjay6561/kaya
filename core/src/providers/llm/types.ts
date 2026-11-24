@@ -4,8 +4,11 @@ export type ChatMessage = Readonly<{ role: ChatRole; content: string }>;
 
 export type ModelTier = "routine" | "heavy";
 
+export type ReasoningEffort = "low" | "medium" | "high";
+
 export type CompletionRequest = Readonly<{
   tier: ModelTier;
+  effort?: ReasoningEffort;
   messages: readonly ChatMessage[];
   maxTokens?: number;
   temperature?: number;
