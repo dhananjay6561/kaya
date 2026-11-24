@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"log/slog"
+	"runtime/debug"
 	"sync"
 	"time"
 
@@ -70,34 +71,44 @@ func NewConsumer(o ConsumerOptions) *Consumer {
 	return &Consumer{o: o, wake: make(chan struct{}, 1)}
 }
 
-// Start begins draining and listening. It does nothing if the consumer is already running.
+// Start begins draining and listening. It does nothing if the consumer is already running, and
+// waits for a previous run to finish before starting a new one.
 func (c *Consumer) Start(parent context.Context) {
 	c.mu.Lock()
 	defer c.mu.Unlock()
 	if c.running {
 		return
 	}
+	if c.done != nil {
+		<-c.done
+	}
 	ctx, cancel := context.WithCancel(parent)
-	c.cancel, c.done, c.running = cancel, make(chan struct{}), true
+	done := make(chan struct{})
+	c.cancel, c.done, c.running = cancel, done, true
 	var wg sync.WaitGroup
 	wg.Go(func() { c.drain(ctx) })
 	wg.Go(func() { c.o.DB.Listen(ctx, channel, c.nudge) })
 	go func() {
 		wg.Wait()
-		close(c.done)
+		c.mu.Lock()
+		if c.done == done {
+			c.running = false
+		}
+		c.mu.Unlock()
+		close(done)
 	}()
 }
 
-// Stop ends both loops and waits for them, cutting short whatever they are doing.
+// Stop ends both loops and waits for them, cutting short whatever they are doing. Every caller
+// waits, however many call it.
 func (c *Consumer) Stop() {
 	c.mu.Lock()
-	if !c.running {
-		c.mu.Unlock()
+	cancel, done := c.cancel, c.done
+	c.running = false
+	c.mu.Unlock()
+	if cancel == nil {
 		return
 	}
-	c.running = false
-	cancel, done := c.cancel, c.done
-	c.mu.Unlock()
 	cancel()
 	<-done
 }
@@ -177,6 +188,15 @@ func (c *Consumer) purge(ctx context.Context) {
 	}
 }
 
+// setAside is what step's transaction returns when an event must be marked dead but the
+// transaction can no longer do it, because the handler left its connection unusable.
+type setAside struct {
+	seq    int64
+	reason string
+}
+
+func (e *setAside) Error() string { return "set aside: " + e.reason }
+
 func (c *Consumer) step(ctx context.Context) (handled bool, err error) {
 	var after AfterCommit
 	var seq int64
@@ -203,14 +223,9 @@ func (c *Consumer) step(ctx context.Context) (handled bool, err error) {
 			dead = "invalid_event"
 			c.o.Logger.Error("a gateway event does not fit the contract", "seq", seq, "problems", invalid.Problems)
 		} else {
-			after, err = c.handleSafely(ctx, tx, event)
+			after, dead, err = c.handleSafely(ctx, tx, seq, event)
 			if err != nil {
-				if store.IsConnectionError(err) || ctx.Err() != nil {
-					return err
-				}
-				dead, after = "handler_failed", nil
-				c.o.Logger.Error("a gateway event could not be handled and was set aside",
-					"seq", seq, "event_id", event.ID, "type", event.Type, logging.Err(err))
+				return err
 			}
 		}
 
@@ -221,8 +236,15 @@ func (c *Consumer) step(ctx context.Context) (handled bool, err error) {
 			_, err = tx.Exec(ctx,
 				"UPDATE gateway_events SET state = 'handled', finished_at = now() WHERE seq = $1", seq)
 		}
+		if err != nil && !store.IsConnectionError(err) && ctx.Err() == nil {
+			return &setAside{seq: seq, reason: "handler_failed"}
+		}
 		return err
 	})
+	var aside *setAside
+	if errors.As(err, &aside) {
+		return true, c.markDead(ctx, aside)
+	}
 	if err != nil {
 		return false, err
 	}
@@ -232,25 +254,57 @@ func (c *Consumer) step(ctx context.Context) (handled bool, err error) {
 	return handled, nil
 }
 
-// handleSafely runs the handler in a savepoint, so a failure undoes only what the handler wrote.
-func (c *Consumer) handleSafely(ctx context.Context, tx pgx.Tx, event contracts.Event) (after AfterCommit, err error) {
+// markDead records an event as dead in its own transaction, after the one that tried it failed.
+func (c *Consumer) markDead(ctx context.Context, aside *setAside) error {
+	_, err := c.o.DB.Exec(ctx,
+		"UPDATE gateway_events SET state = 'dead', error = $2, finished_at = now() WHERE seq = $1 AND state = 'pending'",
+		aside.seq, aside.reason)
+	return err
+}
+
+// handleSafely runs the handler in a savepoint. What happens next depends only on the handler's own
+// error: the database being away, or core stopping, means try the event again later; anything else
+// sets the event aside, undoing only what the handler wrote. If even that undo fails, the event is
+// set aside from a fresh transaction.
+func (c *Consumer) handleSafely(ctx context.Context, tx pgx.Tx, seq int64, event contracts.Event) (AfterCommit, string, error) {
 	inner, err := tx.Begin(ctx)
 	if err != nil {
-		return nil, err
+		return nil, "", err
 	}
+	after, handlerErr := c.callHandler(ctx, inner, event)
+	if handlerErr == nil {
+		if err := inner.Commit(ctx); err != nil {
+			if store.IsConnectionError(err) || ctx.Err() != nil {
+				return nil, "", err
+			}
+			c.o.Logger.Error("a gateway event's handler left its transaction unusable and was set aside",
+				"seq", seq, "event_id", event.ID, "type", event.Type, logging.Err(err))
+			return nil, "", &setAside{seq: seq, reason: "handler_failed"}
+		}
+		return after, "", nil
+	}
+	if ctx.Err() != nil || store.IsConnectionError(handlerErr) {
+		return nil, "", handlerErr
+	}
+	reason := "handler_failed"
+	if errors.Is(handlerErr, contracts.ErrInvalid) {
+		reason = "invalid_event"
+	}
+	c.o.Logger.Error("a gateway event could not be handled and was set aside",
+		"seq", seq, "event_id", event.ID, "type", event.Type, logging.Err(handlerErr))
+	if err := inner.Rollback(ctx); err != nil {
+		return nil, "", &setAside{seq: seq, reason: reason}
+	}
+	return nil, reason, nil
+}
+
+func (c *Consumer) callHandler(ctx context.Context, tx pgx.Tx, event contracts.Event) (after AfterCommit, err error) {
 	defer func() {
 		if p := recover(); p != nil {
-			after, err = nil, fmt.Errorf("handler panicked: %v", p)
+			after, err = nil, fmt.Errorf("handler panicked: %v\n%s", p, debug.Stack())
 		}
-		if err != nil {
-			if rollbackErr := inner.Rollback(ctx); rollbackErr != nil && store.IsConnectionError(rollbackErr) {
-				err = rollbackErr
-			}
-			return
-		}
-		err = inner.Commit(ctx)
 	}()
-	return c.o.Handle(ctx, inner, event)
+	return c.o.Handle(ctx, tx, event)
 }
 
 func (c *Consumer) runAfter(seq int64, after AfterCommit) {
