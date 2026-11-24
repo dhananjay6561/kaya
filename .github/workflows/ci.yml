@@ -64,6 +64,38 @@ jobs:
           working-directory: gateway
       - run: make test-gateway build-gateway
 
+  core-go:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    services:
+      postgres: *test-postgres
+    env:
+      TEST_DATABASE_URL: postgres://kaya:kaya@localhost:5432/kaya?sslmode=disable
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: actions/setup-go@d8cbb8045d7f43706b9177cceb36c1f91a6644d5 # v7.1.0
+        with:
+          go-version-file: core-go/go.mod
+          cache-dependency-path: |
+            core-go/go.sum
+            kit/go.sum
+            contracts/go.sum
+      - uses: golangci/golangci-lint-action@ba0d7d2ec06a0ea1cb5fa41b2e4a3ab91d21278a # v9.3.0
+        with:
+          version: v2.15.0
+          working-directory: core-go
+      - uses: golangci/golangci-lint-action@ba0d7d2ec06a0ea1cb5fa41b2e4a3ab91d21278a # v9.3.0
+        with:
+          version: v2.15.0
+          working-directory: kit
+      - uses: golangci/golangci-lint-action@ba0d7d2ec06a0ea1cb5fa41b2e4a3ab91d21278a # v9.3.0
+        with:
+          version: v2.15.0
+          working-directory: contracts
+      - run: make test-core-go test-kit build-core-go
+
   compose:
     runs-on: ubuntu-latest
     timeout-minutes: 15

@@ -21,7 +21,11 @@ updates:
         patterns: ["*"]
 
   - package-ecosystem: gomod
-    directory: /gateway
+    directories:
+      - /gateway
+      - /core-go
+      - /kit
+      - /contracts
     schedule:
       interval: weekly
     groups:
@@ -31,6 +35,7 @@ updates:
   - package-ecosystem: docker
     directories:
       - /core
+      - /core-go
       - /gateway
     schedule:
       interval: weekly

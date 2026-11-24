@@ -1,6 +1,7 @@
 .DEFAULT_GOAL := help
-.PHONY: help install dev dev-core dev-gateway lint lint-core lint-gateway format format-core \
-	format-gateway typecheck test test-core test-gateway build build-core build-gateway check clean \
+.PHONY: help install dev dev-core dev-gateway dev-core-go lint lint-core lint-gateway lint-core-go \
+	lint-kit format format-core format-gateway format-core-go typecheck test test-core test-gateway \
+	test-core-go test-kit build build-core build-gateway build-core-go check clean \
 	up down db logs ps pair pair-dev media send data-dirs migrate rollback migration test-db contracts
 
 GOLANGCI_LINT_VERSION := v2.15.0
@@ -15,6 +16,7 @@ help: ## list targets
 install: ## install dependencies for every service
 	npm ci
 	cd gateway && go mod download
+	cd core-go && go mod download
 
 dev: dev-core ## run core from source
 
@@ -24,7 +26,10 @@ dev-core: ## run core from source
 dev-gateway: ## run the gateway from source
 	cd gateway && go run ./cmd/gateway
 
-lint: lint-core lint-gateway ## lint and format-check everything
+dev-core-go: ## run the Go core from source
+	cd core-go && go run ./cmd/core
+
+lint: lint-core lint-gateway lint-core-go lint-kit ## lint and format-check everything
 
 lint-core: ## lint and format-check core
 	npm run lint
@@ -32,7 +37,14 @@ lint-core: ## lint and format-check core
 lint-gateway: ## lint and format-check the gateway
 	cd gateway && $(GOLANGCI_LINT) run ./...
 
-format: format-core format-gateway ## fix lint and formatting where possible
+lint-core-go: ## lint and format-check the Go core
+	cd core-go && $(GOLANGCI_LINT) run ./...
+
+lint-kit: ## lint and format-check the shared Go modules
+	cd kit && $(GOLANGCI_LINT) run ./...
+	cd contracts && $(GOLANGCI_LINT) run ./...
+
+format: format-core format-gateway format-core-go ## fix lint and formatting where possible
 
 format-core: ## fix core formatting
 	npm run format
@@ -40,10 +52,15 @@ format-core: ## fix core formatting
 format-gateway: ## fix gateway formatting
 	cd gateway && $(GOLANGCI_LINT) fmt ./...
 
+format-core-go: ## fix Go core and shared module formatting
+	cd core-go && $(GOLANGCI_LINT) fmt ./...
+	cd kit && $(GOLANGCI_LINT) fmt ./...
+	cd contracts && $(GOLANGCI_LINT) fmt ./...
+
 typecheck: ## type-check core (the gateway is checked by its build and lint)
 	npm run typecheck
 
-test: test-core test-gateway ## run every test suite
+test: test-core test-gateway test-core-go test-kit ## run every test suite
 
 test-core: ## run core tests
 	npm test
@@ -51,7 +68,14 @@ test-core: ## run core tests
 test-gateway: ## run gateway tests with the race detector
 	cd gateway && go test -race -count=1 ./...
 
-build: build-core build-gateway ## build every service
+test-core-go: ## run Go core tests with the race detector
+	cd core-go && go test -race -count=1 ./...
+
+test-kit: ## run the shared Go modules' tests with the race detector
+	cd kit && go test -race -count=1 ./...
+	cd contracts && go test -race -count=1 ./...
+
+build: build-core build-gateway build-core-go ## build every service
 
 build-core: ## build core into core/dist
 	npm run build
@@ -60,6 +84,10 @@ build-gateway: ## build the gateway into gateway/bin
 	cd gateway && CGO_ENABLED=0 go build -trimpath -ldflags "-s -w -X main.version=$(VERSION)" \
 		-o bin/gateway ./cmd/gateway
 
+build-core-go: ## build the Go core into core-go/bin
+	cd core-go && CGO_ENABLED=0 go build -trimpath -ldflags "-s -w -X main.version=$(VERSION)" \
+		-o bin/core ./cmd/core
+
 contracts: ## regenerate core's TypeScript types after changing contracts/schemas
 	npm run contracts:types -w @kaya/core
 	npm run format
@@ -67,7 +95,7 @@ contracts: ## regenerate core's TypeScript types after changing contracts/schema
 check: lint typecheck test build ## everything CI runs
 
 clean: ## remove build output
-	rm -rf core/dist gateway/bin
+	rm -rf core/dist gateway/bin core-go/bin
 
 data-dirs:
 	@mkdir -p "$(DATA_DIR)/postgres" "$(DATA_DIR)/core" "$(DATA_DIR)/gateway"

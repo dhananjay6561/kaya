@@ -7,6 +7,7 @@ browser-profile/
 dist/
 data/
 gateway/bin/
+core-go/bin/
 
 # Kept on the owner's machine, not in the public repo
 docs/PHASES.md
