@@ -4,6 +4,8 @@ import { createLogger } from "../../lib/logger.js";
 import { createStubLlm } from "../../providers/llm/index.js";
 import { chatReply, clipTo, systemPrompt, toWhatsApp } from "./chat.js";
 
+const q = (text: string) => ({ id: "3EB0Q", text, sentAt: now });
+
 const logger = createLogger({ level: "silent", service: "core", version: "test" });
 const now = new Date("2026-11-24T19:00:00Z");
 const signal = new AbortController().signal;
@@ -18,7 +20,7 @@ describe("system prompt", () => {
   it("says what Kaya cannot do yet, so it does not pretend", () => {
     const prompt = systemPrompt(now, "UTC");
     assert.match(prompt, /cannot yet read their other chats, search the web/);
-    assert.match(prompt, /do not see earlier messages/);
+    assert.match(prompt, /recent conversation in this chat, but not older messages/);
     assert.match(prompt, /cannot check anything live/);
     assert.match(prompt, /Never claim to have done something you did not do/);
   });
@@ -99,7 +101,7 @@ describe("chat reply", () => {
   it("asks the routine model with the system prompt and the message", async () => {
     const llm = createStubLlm({ reply: () => "**Hi!** I'm Kaya." });
     const reply = await chatReply(
-      "who are you?",
+      q("who are you?"),
       { llm, logger, timeZone: "UTC", now: () => now },
       signal,
     );
@@ -111,10 +113,59 @@ describe("chat reply", () => {
     assert.deepEqual(request?.messages[1], { role: "user", content: "who are you?" });
   });
 
+  it("carries the recent conversation, asked for the question being answered", async () => {
+    const llm = createStubLlm({ reply: () => "Namaste" });
+    const seen: string[] = [];
+    await chatReply(
+      q("and in Hindi?"),
+      {
+        llm,
+        logger,
+        timeZone: "UTC",
+        history: async (question) => {
+          seen.push(question.id);
+          return [{ question: "how do I say hello?", answer: "Hello.", at: now }];
+        },
+      },
+      signal,
+    );
+    assert.deepEqual(seen, ["3EB0Q"]);
+    assert.deepEqual(
+      llm.requests[0]?.messages.slice(1).map((m) => [m.role, m.content]),
+      [
+        ["user", "how do I say hello?"],
+        ["assistant", "Hello."],
+        ["user", "and in Hindi?"],
+      ],
+    );
+  });
+
+  it("fits the conversation to the model's budget", async () => {
+    const llm = createStubLlm({ reply: () => "ok", contextTokens: 1_000 });
+    const long = "x".repeat(2_000);
+    await chatReply(
+      q("next?"),
+      {
+        llm,
+        logger,
+        timeZone: "UTC",
+        history: async () => [
+          { question: long, answer: long, at: now },
+          { question: "short", answer: "reply", at: now },
+        ],
+      },
+      signal,
+    );
+    assert.deepEqual(
+      llm.requests[0]?.messages.slice(1).map((m) => m.content),
+      ["short", "reply", "next?"],
+    );
+  });
+
   it("says so when the model gives nothing back", async () => {
     const llm = createStubLlm({ reply: () => "   " });
     assert.equal(
-      await chatReply("x", { llm, logger, timeZone: "UTC" }, signal),
+      await chatReply(q("x"), { llm, logger, timeZone: "UTC" }, signal),
       "I had no answer to that. Try asking another way.",
     );
   });
@@ -122,7 +173,7 @@ describe("chat reply", () => {
   it("clips a long answer and marks one the model could not finish", async () => {
     const long = createStubLlm({ reply: () => "y".repeat(5_000) });
     const reply = await chatReply(
-      "x",
+      q("x"),
       { llm: long, logger, timeZone: "UTC", maxReplyLength: 10 },
       signal,
     );
@@ -130,6 +181,8 @@ describe("chat reply", () => {
 
     const cut = {
       name: "cut",
+      locality: "local" as const,
+      contextTokens: 4_000,
       complete: async () => ({
         text: "half an answer",
         model: "m",
@@ -138,13 +191,13 @@ describe("chat reply", () => {
       }),
     };
     assert.match(
-      await chatReply("x", { llm: cut, logger, timeZone: "UTC" }, signal),
+      await chatReply(q("x"), { llm: cut, logger, timeZone: "UTC" }, signal),
       /^half an answer\n\n\(Cut short here\. Ask for less, or for the rest\.\)$/,
     );
 
     const empty = { ...cut, complete: async () => ({ ...(await cut.complete()), text: "" }) };
     assert.equal(
-      await chatReply("x", { llm: empty, logger, timeZone: "UTC" }, signal),
+      await chatReply(q("x"), { llm: empty, logger, timeZone: "UTC" }, signal),
       "I ran out of room before I could answer. Try a narrower question.",
     );
   });

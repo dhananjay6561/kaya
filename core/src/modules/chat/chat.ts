@@ -1,10 +1,14 @@
 import type { Logger } from "../../lib/logger.js";
 import type { LlmProvider } from "../../providers/llm/index.js";
+import { buildContext, type Exchange } from "../context/index.js";
+
+export type Question = Readonly<{ id: string; text: string; sentAt: Date }>;
 
 export type ChatOptions = Readonly<{
   llm: LlmProvider;
   logger: Logger;
   timeZone: string;
+  history?: (question: Question) => Promise<readonly Exchange[]>;
   now?: () => Date;
   maxReplyLength?: number;
 }>;
@@ -27,10 +31,10 @@ export function systemPrompt(now: Date, timeZone: string): string {
   const date = `${parts.weekday} ${parts.day} ${parts.month} ${parts.year}, ${parts.hour}:${parts.minute}`;
   return [
     "You are Kaya, a personal assistant. The person you work for writes to you in their own WhatsApp chat, so every message you get is from them.",
-    "Answer briefly and directly, in the language they write in. Use short paragraphs or a few lines starting with '- '. No tables, no headings, no Markdown links.",
+    "Answer briefly and directly, in the language they write in, even when the question is about another language. Use short paragraphs or a few lines starting with '- '. No tables, no headings, no Markdown links.",
     "For emphasis use WhatsApp formatting: *bold* and _italic_.",
     "Your knowledge stops at your training date and you cannot check anything live; say so when a question depends on recent events, prices or news.",
-    "You answer each message on its own: you do not see earlier messages. You cannot yet read their other chats, search the web, open links or files, set reminders or do anything outside this reply. If they ask for one of those, say plainly that you can't do it yet. Never claim to have done something you did not do.",
+    "You see your recent conversation in this chat, but not older messages. You cannot yet read their other chats, search the web, open links or files, set reminders or do anything outside this reply. If they ask for one of those, say plainly that you can't do it yet. Never claim to have done something you did not do.",
     `It is now ${date} (${timeZone}).`,
   ].join("\n");
 }
@@ -71,20 +75,21 @@ export function clipTo(text: string, length: number): string {
 }
 
 export async function chatReply(
-  text: string,
+  question: Question,
   options: ChatOptions,
   signal: AbortSignal,
 ): Promise<string> {
   const now = options.now?.() ?? new Date();
+  const history = (await options.history?.(question)) ?? [];
+  const context = buildContext({
+    system: systemPrompt(now, options.timeZone),
+    history,
+    question: question.text,
+    budget: options.llm.contextTokens,
+  });
   const started = performance.now();
   const completion = await options.llm.complete(
-    {
-      tier: "routine",
-      messages: [
-        { role: "system", content: systemPrompt(now, options.timeZone) },
-        { role: "user", content: text },
-      ],
-    },
+    { tier: "routine", messages: context.messages },
     { signal },
   );
   options.logger.info(
@@ -93,6 +98,8 @@ export async function chatReply(
       finish_reason: completion.finishReason,
       input_tokens: completion.usage.inputTokens,
       output_tokens: completion.usage.outputTokens,
+      estimated_tokens: context.tokens,
+      exchanges: context.exchanges,
       ms: Math.round(performance.now() - started),
     },
     "the model answered",

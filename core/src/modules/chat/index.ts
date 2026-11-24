@@ -1,1 +1,8 @@
-export { type ChatOptions, chatReply, clipTo, systemPrompt, toWhatsApp } from "./chat.js";
+export {
+  type ChatOptions,
+  chatReply,
+  clipTo,
+  type Question,
+  systemPrompt,
+  toWhatsApp,
+} from "./chat.js";
