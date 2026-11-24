@@ -1,1 +1,6 @@
-export { createMaskSession, type MaskKind, type MaskSession } from "./masking.js";
+export {
+  createMaskSession,
+  type MaskKind,
+  type MaskOptions,
+  type MaskSession,
+} from "./masking.js";
