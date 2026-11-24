@@ -68,6 +68,11 @@ type rigOptions struct {
 	now    func() time.Time
 }
 
+// errAway is the rig's database outage; every other error is a handler's own.
+var errAway = errors.New("the database is away")
+
+func isAway(err error) bool { return errors.Is(err, errAway) }
+
 func newRig(t *testing.T, o rigOptions) *rig {
 	t.Helper()
 	r := &rig{t: t, ch: &watched{Stub: channel.NewStub(), fail: o.fail}, pause: &pause.Memory{}}
@@ -79,7 +84,7 @@ func newRig(t *testing.T, o rigOptions) *rig {
 			return ChatAnswer{Text: "You said: " + Clip(m.Text), Remember: true}, nil
 		}
 	}
-	r.stop = Start(Options{Channel: r.ch, Logger: quiet, Pause: r.pause, Status: o.status, Chat: o.chat, Now: o.now})
+	r.stop = Start(Options{Channel: r.ch, Logger: quiet, Pause: r.pause, Status: o.status, Chat: o.chat, Now: o.now, DatabaseAway: isAway})
 	if err := r.ch.Start(bg); err != nil {
 		t.Fatal(err)
 	}
@@ -445,11 +450,98 @@ func TestTellsDJWhenWorkingOutAnAnswerFails(t *testing.T) {
 }
 
 func TestSaysNothingWhenTheDatabaseIsAway(t *testing.T) {
-	away := &net.OpError{Op: "dial", Net: "tcp", Err: syscall.ECONNREFUSED}
+	away := fmt.Errorf("reading the status: %w", errAway)
 	r := newRig(t, rigOptions{status: func(context.Context) (string, error) { return "", away }})
 	out, err := r.say("/status", now)
-	if !errors.Is(err, away) || len(out) != 0 {
+	if !errors.Is(err, errAway) || len(out) != 0 {
 		t.Fatalf("got %q, %v", out, err)
+	}
+}
+
+func TestTellsDJWhenAnotherServiceIsUnreachable(t *testing.T) {
+	unreachable := &net.OpError{Op: "dial", Net: "tcp", Err: syscall.ECONNREFUSED}
+	r := newRig(t, rigOptions{chat: func(context.Context, channel.IncomingMessage) (ChatAnswer, error) {
+		return ChatAnswer{}, unreachable
+	}})
+	out, err := r.say("hello", now)
+	if !errors.Is(err, unreachable) {
+		t.Fatalf("got %v", err)
+	}
+	same(t, out, []string{"Something went wrong with that. Send /status to see how things stand."})
+}
+
+func TestNeedsToKnowWhenTheDatabaseIsAway(t *testing.T) {
+	defer func() {
+		if recover() == nil {
+			t.Fatal("starting without DatabaseAway must fail")
+		}
+	}()
+	Start(Options{Channel: channel.NewStub(), Logger: quiet, Pause: &pause.Memory{}})
+}
+
+func TestUsesTheKeysTheTypeScriptCoreUsed(t *testing.T) {
+	r := newRig(t, rigOptions{chat: func(_ context.Context, m channel.IncomingMessage) (ChatAnswer, error) {
+		switch m.Text {
+		case "canned":
+			return ChatAnswer{Text: "I had no answer to that."}, nil
+		case "fails":
+			return ChatAnswer{}, &llm.Error{Provider: "groq", Code: llm.Timeout}
+		}
+		return ChatAnswer{Text: "ok", Remember: true}, nil
+	}, fail: func(m channel.OutgoingMessage) error {
+		if m.Text == "ok" {
+			return &channel.SendFailedError{RequestID: "request-id", Code: "no_answer"}
+		}
+		return nil
+	}})
+	for _, c := range []struct {
+		text, id, key string
+		o             channel.ReceiveOptions
+	}{
+		{"/status", "3EB0A", "command:3EB0A:builtin:status", now},
+		{"/tasks", "3EB0B", "command:3EB0B:unknown:tasks", now},
+		{"/pause now", "3EB0C", "command:3EB0C:extra_text:pause", now},
+		{"canned", "3EB0D", "command:3EB0D:chat:canned", now},
+		{"fails", "3EB0E", "command:3EB0E:failed", now},
+		{"unsent", "3EB0F", "command:3EB0F:unanswered", now},
+		{"late", "3EB0G", "command:3EB0G", channel.ReceiveOptions{SentAt: ago(11 * time.Minute)}},
+	} {
+		c.o.ID = c.id
+		before := len(r.ch.sent())
+		_, _, _ = r.ch.Receive(bg, c.text, c.o)
+		sent := r.ch.sent()[before:]
+		if len(sent) != 1 || sent[0].IdempotencyKey != c.key || sent[0].ReplyTo != c.id {
+			t.Fatalf("%s: got %+v", c.text, sent)
+		}
+	}
+}
+
+func TestSendsTheTypeScriptCoresTexts(t *testing.T) {
+	r := newRig(t, rigOptions{})
+	help := "Commands:\n/help: this list\n/status: how Kaya is doing\n/pause: stop answering until /resume\n" +
+		"/resume: start answering again\nAnything else you send here goes to an AI model, which answers with " +
+		"your recent conversation in mind. It does not see your other chats yet."
+	same(t, r.answers("/help", now), []string{help})
+	same(t, r.answers("/pause", now), []string{"Paused. Until you send /resume I answer only slash commands, like /status."})
+	same(t, r.answers("/pause", now), []string{"Already paused. Send /resume to start again."})
+	same(t, r.answers("/help", now), []string{help + "\nI am paused: only slash commands get an answer."})
+	same(t, r.answers("/resume", now), []string{"Resumed. I am answering again."})
+	same(t, r.answers("/resume", now), []string{"I was not paused."})
+	same(t, r.answers("/nope", now), []string{"/nope is not a command I know. Send /help to see what I can do."})
+	same(t, r.answers("/", now), []string{"Send /help to see what I can do."})
+	same(t, r.answers("/pause 2h", now), []string{"/pause takes nothing after it, so nothing was done. Send just /pause."})
+
+	for code, want := range map[string]string{
+		llm.RateLimited:   "I have hit my limit with the AI service for now. Try again in a minute.",
+		llm.Auth:          "The AI service refused my key, so I could not answer. Check GROQ_API_KEY.",
+		llm.TooLong:       "That is too long for the AI service. Try a shorter message.",
+		llm.Misconfigured: "The AI service does not know a model I am set to use. Check GROQ_MODEL_HEAVY and GROQ_MODEL_ROUTINE.",
+		llm.Rejected:      "The AI service turned this message down. Try asking another way.",
+		llm.Timeout:       "The AI service is not answering right now. Try again in a bit.",
+	} {
+		if got := failureNotice(&llm.Error{Provider: "groq", Code: code}); got != want {
+			t.Errorf("%s: got %q", code, got)
+		}
 	}
 }
 
