@@ -1,6 +1,7 @@
 import type pg from "pg";
 import { type Connection, readConnection } from "../gateway/index.js";
 import type { PauseState, PauseSwitch } from "../pause/index.js";
+import type { IndexProgress } from "../search/index.js";
 
 export type Status = Readonly<{
   version: string;
@@ -11,6 +12,7 @@ export type Status = Readonly<{
   lastStoredAt?: Date;
   eventsWaiting: number;
   eventsDead: number;
+  searchIndex?: IndexProgress;
 }>;
 
 export type StatusSource = Readonly<{
@@ -18,11 +20,12 @@ export type StatusSource = Readonly<{
   pause: PauseSwitch;
   version: string;
   startedAt: Date;
+  searchIndex?: () => Promise<IndexProgress>;
 }>;
 
 export async function readStatus(source: StatusSource): Promise<Status> {
   const { pool } = source;
-  const [pause, connection, last, events] = await Promise.all([
+  const [pause, connection, last, events, searchIndex] = await Promise.all([
     source.pause.state(),
     readConnection(pool),
     pool.query<{ created_at: Date }>(
@@ -32,6 +35,7 @@ export async function readStatus(source: StatusSource): Promise<Status> {
       `SELECT (SELECT count(*)::int FROM gateway_events WHERE state = 'pending') AS waiting,
               (SELECT count(*)::int FROM gateway_events WHERE state = 'dead') AS dead`,
     ),
+    source.searchIndex?.(),
   ]);
   const lastStoredAt = last.rows[0]?.created_at;
   return Object.freeze({
@@ -43,6 +47,7 @@ export async function readStatus(source: StatusSource): Promise<Status> {
     ...(lastStoredAt ? { lastStoredAt } : {}),
     eventsWaiting: events.rows[0]?.waiting ?? 0,
     eventsDead: events.rows[0]?.dead ?? 0,
+    ...(searchIndex ? { searchIndex } : {}),
   });
 }
 
@@ -72,6 +77,13 @@ export function formatStatus(status: Status): string {
       ? `Last incoming message stored ${since(status.lastStoredAt)} ago.`
       : "No incoming messages stored yet.",
   ];
+  if (status.searchIndex && status.searchIndex.total > 0) {
+    const { indexed, total } = status.searchIndex;
+    const share = Math.floor((Math.min(indexed, total) / total) * 100);
+    lines.push(
+      `Search index: ${indexed.toLocaleString("en-IN")} of ${total.toLocaleString("en-IN")} messages (${share}%).`,
+    );
+  }
   if (status.eventsWaiting > 0) lines.push(`Events waiting for core: ${status.eventsWaiting}.`);
   if (status.eventsDead > 0) lines.push(`Events core gave up on: ${status.eventsDead}.`);
   return lines.join("\n");

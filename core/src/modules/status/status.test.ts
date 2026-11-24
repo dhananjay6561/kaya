@@ -67,6 +67,12 @@ describe("status text", () => {
     assert.match(text, /^Events core gave up on: 2\.$/m);
   });
 
+  it("says how much of the chat history is searchable", () => {
+    const text = formatStatus({ ...healthy, searchIndex: { indexed: 12_345, total: 100_787 } });
+    assert.match(text, /^Search index: 12,345 of 1,00,787 messages \(12%\)\.$/m);
+    assert.doesNotMatch(formatStatus(healthy), /Search index/);
+  });
+
   it("copes with a fresh install that has heard nothing yet", () => {
     const { connection: _c, lastStoredAt: _l, ...fresh } = healthy;
     const text = formatStatus(fresh);
