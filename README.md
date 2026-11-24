@@ -72,8 +72,11 @@ contact, and it works with everything your WhatsApp account can see.
   chat Kaya may write to is your own (`make send text="hello"`).
 - **A command channel in your own chat.** What you type in "Message yourself" is a command; every
   other message in every other chat is only data. Kaya tells its own replies from your messages, so
-  it never answers itself, and it does not act on a command it only gets to minutes late. For now
-  the one command is an echo.
+  it never answers itself, and it does not act on a command it only gets to minutes late.
+- **Built-in commands.** `/help` lists them, `/status` says whether Kaya is up and connected,
+  `/pause` stops every answer until `/resume`. The pause is kept in the database, so it holds
+  across restarts, and while paused Kaya still answers its slash commands. Anything else you type is
+  echoed back for now.
 - **Least-privilege database logins.** The gateway and core each have their own Postgres role.
   Core, the part that will talk to an LLM, can read chats but cannot see the WhatsApp session, its
   encryption keys, or the keys needed to fetch media.
@@ -89,8 +92,6 @@ contact, and it works with everything your WhatsApp account can see.
 
 In build order. Status for each stage is in the [roadmap](#project-status-and-roadmap).
 
-- Connection health events and delivery of events to core, plus the send API
-- Talk to Kaya in your "Message yourself" chat, with built-in commands like `/pause` and `/resume`
 - Ask questions about your chats and get sourced answers, with meaning-based search over pgvector,
   tagging and summaries
 - An agent loop with tools, confirm-before-act, masking of private details and a prompt-injection
@@ -517,7 +518,7 @@ Status key: ✅ done · 🟨 in progress · ⬜ not started
 |---|---|---|
 | 0. Foundation | Monorepo, config, Compose stack, migrations, logging, health, provider interfaces | ✅ |
 | 1. WhatsApp gateway | Contracts, pairing, live ingest, history sync, media, connection health, delivery to core and sending. Checked end to end against a real WhatsApp account. | ✅ |
-| 2. Talking to Kaya | Self-chat command channel (built), built-in commands | 🟨 |
+| 2. Talking to Kaya | Self-chat command channel (checked on a real account), built-in commands `/help`, `/status`, `/pause`, `/resume` (built) | 🟨 |
 | 3. Brain | Groq replies, embeddings, meaning-based search, Q&A with sources, tagging, summaries | ⬜ |
 | 4. Agent loop and safety | Masking, context picking, tool calling, confirm-before-act, prompt-injection guard, usage tracking | ⬜ |
 | 5. Voice notes | Transcription, spoken commands | ⬜ |
