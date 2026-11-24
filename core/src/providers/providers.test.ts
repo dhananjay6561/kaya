@@ -3,7 +3,11 @@ import { describe, it } from "node:test";
 import { loadConfig } from "../config/index.js";
 import { createProviders } from "./index.js";
 
-const base = { DATABASE_URL: "postgres://localhost:5432/kaya", CHAT_CHANNEL: "stub" };
+const base = {
+  DATABASE_URL: "postgres://localhost:5432/kaya",
+  CHAT_CHANNEL: "stub",
+  VOYAGE_API_KEY: "test-voyage-key-not-real",
+};
 
 describe("createProviders", () => {
   it("picks every provider from config, so swapping one is a config change", async () => {
@@ -13,7 +17,11 @@ describe("createProviders", () => {
       ["groq", "stub", "stub"],
     );
 
-    const stub = createProviders(loadConfig({ ...base, LLM_PROVIDER: "stub" }, "/"));
+    assert.equal(groq.embeddings.name, "voyage");
+    const stub = createProviders(
+      loadConfig({ ...base, LLM_PROVIDER: "stub", EMBEDDINGS_PROVIDER: "stub" }, "/"),
+    );
+    assert.equal(stub.embeddings.name, "stub");
     assert.equal(stub.llm.name, "stub");
     const reply = await stub.llm.complete({
       tier: "routine",

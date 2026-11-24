@@ -1,5 +1,6 @@
 import type { Config } from "../config/index.js";
 import { type ChatChannel, createChannel, type GatewayChannelDeps } from "./channel/index.js";
+import { createEmbeddings, type EmbeddingProvider } from "./embeddings/index.js";
 import { createLlm, type LlmProvider } from "./llm/index.js";
 import { createTelephony, type TelephonyProvider } from "./telephony/index.js";
 
@@ -7,6 +8,7 @@ export { ProviderNotReadyError } from "./errors.js";
 
 export type Providers = Readonly<{
   llm: LlmProvider;
+  embeddings: EmbeddingProvider;
   channel: ChatChannel;
   telephony: TelephonyProvider;
 }>;
@@ -14,11 +16,12 @@ export type Providers = Readonly<{
 export type ProviderDeps = Readonly<{ gateway?: GatewayChannelDeps }>;
 
 export function createProviders(
-  config: Pick<Config, "llm" | "channel" | "telephony">,
+  config: Pick<Config, "llm" | "embeddings" | "channel" | "telephony">,
   deps: ProviderDeps = {},
 ): Providers {
   return Object.freeze({
     llm: createLlm(config.llm),
+    embeddings: createEmbeddings(config.embeddings),
     channel: createChannel(config.channel, deps.gateway),
     telephony: createTelephony(config.telephony),
   });

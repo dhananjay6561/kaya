@@ -5,6 +5,7 @@ import { type Config, ConfigError, type GroqConfig, loadConfig } from "./config.
 const valid = {
   DATABASE_URL: "postgres://kaya:kaya@localhost:5432/kaya",
   GROQ_API_KEY: "test-key-not-real",
+  VOYAGE_API_KEY: "test-voyage-key-not-real",
 };
 
 function groqOf(config: Config): GroqConfig {
@@ -82,7 +83,12 @@ describe("loadConfig", () => {
 
   it("switches providers through config alone", () => {
     const config = loadConfig(
-      { DATABASE_URL: valid.DATABASE_URL, LLM_PROVIDER: "stub", CHAT_CHANNEL: "stub" },
+      {
+        DATABASE_URL: valid.DATABASE_URL,
+        LLM_PROVIDER: "stub",
+        EMBEDDINGS_PROVIDER: "stub",
+        CHAT_CHANNEL: "stub",
+      },
       "/base",
     );
     assert.deepEqual(config.llm, { provider: "stub" });
@@ -90,12 +96,9 @@ describe("loadConfig", () => {
   });
 
   it("needs GROQ_API_KEY only when the LLM provider is groq", () => {
-    assert.deepEqual(problemsFor({ DATABASE_URL: valid.DATABASE_URL, LLM_PROVIDER: "groq" }), [
-      "GROQ_API_KEY: required",
-    ]);
-    assert.doesNotThrow(() =>
-      loadConfig({ DATABASE_URL: valid.DATABASE_URL, LLM_PROVIDER: "stub" }, "/base"),
-    );
+    const base = { DATABASE_URL: valid.DATABASE_URL, EMBEDDINGS_PROVIDER: "stub" };
+    assert.deepEqual(problemsFor({ ...base, LLM_PROVIDER: "groq" }), ["GROQ_API_KEY: required"]);
+    assert.doesNotThrow(() => loadConfig({ ...base, LLM_PROVIDER: "stub" }, "/base"));
   });
 
   it("rejects unknown providers", () => {
@@ -115,13 +118,18 @@ describe("loadConfig", () => {
   });
 
   it("lists every missing required value at once", () => {
-    assert.deepEqual(problemsFor({}), ["DATABASE_URL: required", "GROQ_API_KEY: required"]);
+    assert.deepEqual(problemsFor({}), [
+      "DATABASE_URL: required",
+      "GROQ_API_KEY: required",
+      "VOYAGE_API_KEY: required",
+    ]);
   });
 
   it("treats empty values as missing", () => {
-    assert.deepEqual(problemsFor({ DATABASE_URL: "", GROQ_API_KEY: "" }), [
+    assert.deepEqual(problemsFor({ DATABASE_URL: "", GROQ_API_KEY: "", VOYAGE_API_KEY: "" }), [
       "DATABASE_URL: required",
       "GROQ_API_KEY: required",
+      "VOYAGE_API_KEY: required",
     ]);
   });
 
@@ -143,6 +151,26 @@ describe("loadConfig", () => {
   it("refuses a context budget too small to hold a question", () => {
     assert.deepEqual(problemsFor({ ...valid, GROQ_CONTEXT_TOKENS: "100" }), [
       "GROQ_CONTEXT_TOKENS: must be at least 500",
+    ]);
+  });
+
+  it("reads the embedding settings, and needs a Voyage key only for Voyage", () => {
+    const config = loadConfig(valid, "/base");
+    assert.deepEqual(config.embeddings, {
+      provider: "voyage",
+      voyage: { apiKey: "test-voyage-key-not-real", model: "voyage-4", dimensions: 1024 },
+    });
+    const { VOYAGE_API_KEY: _key, ...withoutKey } = valid;
+    assert.deepEqual(problemsFor(withoutKey), ["VOYAGE_API_KEY: required"]);
+    assert.deepEqual(
+      loadConfig(
+        { ...withoutKey, EMBEDDINGS_PROVIDER: "stub", EMBEDDING_DIMENSIONS: "512" },
+        "/base",
+      ).embeddings,
+      { provider: "stub", dimensions: 512 },
+    );
+    assert.deepEqual(problemsFor({ ...valid, EMBEDDING_DIMENSIONS: "300" }), [
+      "EMBEDDING_DIMENSIONS: must be 256, 512, 1024 or 2048",
     ]);
   });
 

@@ -1,6 +1,7 @@
 export {
   type Config,
   ConfigError,
+  type EmbeddingsConfig,
   type GroqConfig,
   type LlmConfig,
   loadConfig,

@@ -58,6 +58,18 @@ const schema = z.object({
       .min(500, { error: "must be at least 500" })
       .default(2_000),
   ),
+  EMBEDDINGS_PROVIDER: z.preprocess(optional, z.enum(["voyage", "stub"]).default("voyage")),
+  VOYAGE_API_KEY: z.preprocess(optional, z.string().optional()),
+  VOYAGE_MODEL: z.preprocess(optional, z.string().default("voyage-4")),
+  EMBEDDING_DIMENSIONS: z.preprocess(
+    optional,
+    z.coerce
+      .number({ error: "must be a number" })
+      .refine((n) => [256, 512, 1024, 2048].includes(n), {
+        error: "must be 256, 512, 1024 or 2048",
+      })
+      .default(1024),
+  ),
   CHAT_CHANNEL: z.preprocess(optional, z.enum(["gateway", "stub"]).default("gateway")),
   TELEPHONY_PROVIDER: z.preprocess(optional, z.enum(["stub"]).default("stub")),
 });
@@ -73,6 +85,11 @@ export type GroqConfig = Readonly<{
 
 export type LlmConfig = Readonly<{ provider: "groq"; groq: GroqConfig } | { provider: "stub" }>;
 
+export type EmbeddingsConfig = Readonly<
+  | { provider: "voyage"; voyage: Readonly<{ apiKey: string; model: string; dimensions: number }> }
+  | { provider: "stub"; dimensions: number }
+>;
+
 export type Config = Readonly<{
   logLevel: Env["LOG_LEVEL"];
   dataDir: string;
@@ -81,6 +98,7 @@ export type Config = Readonly<{
   timeZone: string;
   databaseUrl: string;
   llm: LlmConfig;
+  embeddings: EmbeddingsConfig;
   channel: Readonly<{ provider: Env["CHAT_CHANNEL"] }>;
   telephony: Readonly<{ provider: Env["TELEPHONY_PROVIDER"] }>;
 }>;
@@ -109,6 +127,10 @@ export function loadConfig(
   if (llmProvider === "groq" && optional(env.GROQ_API_KEY) === undefined) {
     problems.push("GROQ_API_KEY: required");
   }
+  const embeddingsProvider = optional(env.EMBEDDINGS_PROVIDER) ?? "voyage";
+  if (embeddingsProvider === "voyage" && optional(env.VOYAGE_API_KEY) === undefined) {
+    problems.push("VOYAGE_API_KEY: required");
+  }
   if (!result.success || problems.length > 0) throw new ConfigError(problems);
   const e = result.data;
   return Object.freeze({
@@ -119,8 +141,23 @@ export function loadConfig(
     timeZone: e.TIMEZONE,
     databaseUrl: e.DATABASE_URL,
     llm: llmConfig(e),
+    embeddings: embeddingsConfig(e),
     channel: Object.freeze({ provider: e.CHAT_CHANNEL }),
     telephony: Object.freeze({ provider: e.TELEPHONY_PROVIDER }),
+  });
+}
+
+function embeddingsConfig(e: Env): EmbeddingsConfig {
+  if (e.EMBEDDINGS_PROVIDER === "stub") {
+    return Object.freeze({ provider: "stub", dimensions: e.EMBEDDING_DIMENSIONS });
+  }
+  return Object.freeze({
+    provider: "voyage",
+    voyage: Object.freeze({
+      apiKey: e.VOYAGE_API_KEY ?? "",
+      model: e.VOYAGE_MODEL,
+      dimensions: e.EMBEDDING_DIMENSIONS,
+    }),
   });
 }
 
