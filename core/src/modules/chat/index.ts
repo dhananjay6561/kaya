@@ -1,4 +1,5 @@
 export {
+  type ChatAnswer,
   type ChatOptions,
   chatReply,
   clipTo,

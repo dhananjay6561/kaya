@@ -1,14 +1,13 @@
 import assert from "node:assert/strict";
 import { describe, it } from "node:test";
 import { createLogger } from "../../lib/logger.js";
-import { createStubLlm } from "../../providers/llm/index.js";
+import { createStubLlm, LlmError } from "../../providers/llm/index.js";
 import { chatReply, clipTo, systemPrompt, toWhatsApp } from "./chat.js";
-
-const q = (text: string) => ({ id: "3EB0Q", text, sentAt: now });
 
 const logger = createLogger({ level: "silent", service: "core", version: "test" });
 const now = new Date("2026-11-24T19:00:00Z");
 const signal = new AbortController().signal;
+const q = (text: string) => ({ id: "3EB0Q", text, sentAt: now });
 
 describe("system prompt", () => {
   it("gives the date and time where the owner is", () => {
@@ -105,7 +104,7 @@ describe("chat reply", () => {
       { llm, logger, timeZone: "UTC", now: () => now },
       signal,
     );
-    assert.equal(reply, "*Hi!* I'm Kaya.");
+    assert.deepEqual(reply, { text: "*Hi!* I'm Kaya.", remember: true });
     const request = llm.requests[0];
     assert.equal(request?.tier, "routine");
     assert.equal(request?.messages.length, 2);
@@ -164,10 +163,10 @@ describe("chat reply", () => {
 
   it("says so when the model gives nothing back", async () => {
     const llm = createStubLlm({ reply: () => "   " });
-    assert.equal(
-      await chatReply(q("x"), { llm, logger, timeZone: "UTC" }, signal),
-      "I had no answer to that. Try asking another way.",
-    );
+    assert.deepEqual(await chatReply(q("x"), { llm, logger, timeZone: "UTC" }, signal), {
+      text: "I had no answer to that. Try asking another way.",
+      remember: false,
+    });
   });
 
   it("clips a long answer and marks one the model could not finish", async () => {
@@ -177,12 +176,16 @@ describe("chat reply", () => {
       { llm: long, logger, timeZone: "UTC", maxReplyLength: 10 },
       signal,
     );
-    assert.equal(reply, `${"y".repeat(10)}…\n\n(Cut short here. Ask for less, or for the rest.)`);
+    assert.equal(
+      reply.text,
+      `${"y".repeat(10)}…\n\n(Cut short here. Ask for less, or for the rest.)`,
+    );
 
     const cut = {
       name: "cut",
       locality: "local" as const,
       contextTokens: 4_000,
+      countTokens: (text: string) => text.length,
       complete: async () => ({
         text: "half an answer",
         model: "m",
@@ -191,14 +194,65 @@ describe("chat reply", () => {
       }),
     };
     assert.match(
-      await chatReply(q("x"), { llm: cut, logger, timeZone: "UTC" }, signal),
+      (await chatReply(q("x"), { llm: cut, logger, timeZone: "UTC" }, signal)).text,
       /^half an answer\n\n\(Cut short here\. Ask for less, or for the rest\.\)$/,
     );
 
     const empty = { ...cut, complete: async () => ({ ...(await cut.complete()), text: "" }) };
-    assert.equal(
-      await chatReply(q("x"), { llm: empty, logger, timeZone: "UTC" }, signal),
-      "I ran out of room before I could answer. Try a narrower question.",
+    assert.deepEqual(await chatReply(q("x"), { llm: empty, logger, timeZone: "UTC" }, signal), {
+      text: "I ran out of room before I could answer. Try a narrower question.",
+      remember: false,
+    });
+  });
+
+  it("answers without the conversation when it cannot be read, but not when the db is away", async () => {
+    const llm = createStubLlm({ reply: () => "fine" });
+    const broken = async () => {
+      throw new Error("permission denied for table commands");
+    };
+    const reply = await chatReply(
+      q("hi"),
+      { llm, logger, timeZone: "UTC", history: broken },
+      signal,
     );
+    assert.equal(reply.text, "fine");
+    assert.equal(llm.requests[0]?.messages.length, 2);
+
+    const away = async () => {
+      throw Object.assign(new Error("connect ECONNREFUSED"), { code: "ECONNREFUSED" });
+    };
+    await assert.rejects(
+      chatReply(q("hi"), { llm, logger, timeZone: "UTC", history: away }, signal),
+      /ECONNREFUSED/,
+    );
+  });
+
+  it("asks again without the conversation when the model says the request is too long", async () => {
+    const sizes: number[] = [];
+    const llm = {
+      ...createStubLlm(),
+      complete: async (request: { messages: readonly unknown[] }) => {
+        sizes.push(request.messages.length);
+        if (request.messages.length > 2) throw new LlmError("groq", "too_long", { status: 413 });
+        return {
+          text: "short answer",
+          model: "m",
+          finishReason: "stop" as const,
+          usage: { inputTokens: 1, outputTokens: 1 },
+        };
+      },
+    };
+    const reply = await chatReply(
+      q("hi"),
+      {
+        llm,
+        logger,
+        timeZone: "UTC",
+        history: async () => [{ question: "old", answer: "older", at: now }],
+      },
+      signal,
+    );
+    assert.equal(reply.text, "short answer");
+    assert.deepEqual(sizes, [4, 2]);
   });
 });

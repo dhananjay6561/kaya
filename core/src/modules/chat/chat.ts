@@ -1,8 +1,12 @@
+import { isConnectionError } from "../../lib/db.js";
 import type { Logger } from "../../lib/logger.js";
-import type { LlmProvider } from "../../providers/llm/index.js";
+import { type Completion, LlmError, type LlmProvider } from "../../providers/llm/index.js";
 import { buildContext, type Exchange } from "../context/index.js";
 
 export type Question = Readonly<{ id: string; text: string; sentAt: Date }>;
+
+/** `remember` is false for a canned reply that should not become part of the conversation. */
+export type ChatAnswer = Readonly<{ text: string; remember: boolean }>;
 
 export type ChatOptions = Readonly<{
   llm: LlmProvider;
@@ -74,45 +78,78 @@ export function clipTo(text: string, length: number): string {
   return `${characters.slice(0, length).join("")}…`;
 }
 
+async function recentHistory(question: Question, options: ChatOptions) {
+  if (!options.history) return [];
+  try {
+    return await options.history(question);
+  } catch (err) {
+    if (isConnectionError(err)) throw err;
+    options.logger.warn({ err }, "could not read the conversation; answering without it");
+    return [];
+  }
+}
+
 export async function chatReply(
   question: Question,
   options: ChatOptions,
   signal: AbortSignal,
-): Promise<string> {
+): Promise<ChatAnswer> {
   const now = options.now?.() ?? new Date();
-  const history = (await options.history?.(question)) ?? [];
-  const context = buildContext({
-    system: systemPrompt(now, options.timeZone),
-    history,
-    question: question.text,
-    budget: options.llm.contextTokens,
-  });
-  const started = performance.now();
-  const completion = await options.llm.complete(
-    { tier: "routine", messages: context.messages },
-    { signal },
-  );
-  options.logger.info(
-    {
-      model: completion.model,
-      finish_reason: completion.finishReason,
-      input_tokens: completion.usage.inputTokens,
-      output_tokens: completion.usage.outputTokens,
-      estimated_tokens: context.tokens,
-      exchanges: context.exchanges,
-      ms: Math.round(performance.now() - started),
-    },
-    "the model answered",
-  );
+  const { llm } = options;
+  const ask = async (history: readonly Exchange[]) => {
+    const context = buildContext({
+      system: systemPrompt(now, options.timeZone),
+      history,
+      question: question.text,
+      budget: llm.contextTokens,
+      count: (text) => llm.countTokens(text),
+    });
+    const started = performance.now();
+    const completion = await llm.complete(
+      { tier: "routine", messages: context.messages },
+      { signal },
+    );
+    options.logger.info(
+      {
+        model: completion.model,
+        finish_reason: completion.finishReason,
+        input_tokens: completion.usage.inputTokens,
+        output_tokens: completion.usage.outputTokens,
+        counted_tokens: context.tokens,
+        exchanges: context.exchanges,
+        left_out: context.leftOut,
+        ms: Math.round(performance.now() - started),
+      },
+      "the model answered",
+    );
+    return completion;
+  };
+
+  const history = await recentHistory(question, options);
+  let completion: Completion;
+  try {
+    completion = await ask(history);
+  } catch (err) {
+    if (!(err instanceof LlmError) || err.code !== "too_long" || history.length === 0) throw err;
+    options.logger.warn("the request was too long with the conversation; asking without it");
+    completion = await ask([]);
+  }
+
   const answer = toWhatsApp(completion.text);
   const ranOut = completion.finishReason === "length";
   if (!answer) {
-    return ranOut
-      ? "I ran out of room before I could answer. Try a narrower question."
-      : "I had no answer to that. Try asking another way.";
+    return {
+      text: ranOut
+        ? "I ran out of room before I could answer. Try a narrower question."
+        : "I had no answer to that. Try asking another way.",
+      remember: false,
+    };
   }
   const limit = options.maxReplyLength ?? 8_000;
   const cut = Array.from(answer).length > limit;
   const reply = clipTo(answer, limit);
-  return ranOut || cut ? `${reply}\n\n(Cut short here. Ask for less, or for the rest.)` : reply;
+  return {
+    text: ranOut || cut ? `${reply}\n\n(Cut short here. Ask for less, or for the rest.)` : reply,
+    remember: true,
+  };
 }
