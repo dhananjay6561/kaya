@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import { describe, it } from "node:test";
-import { buildContext, type Exchange, shorten } from "./context.js";
+import { buildContext, type Exchange, howLongAgo, shorten } from "./context.js";
 
 const at = new Date("2026-11-24T10:00:00Z");
 const count = (text: string) => Array.from(text).length;
@@ -9,7 +9,12 @@ const exchange = (n: number, size = 10): Exchange => ({
   answer: `answer ${n} ${"a".repeat(size)}`,
   at,
 });
-const firstWords = (text: string) => text.split(" ").slice(0, 2).join(" ");
+const firstWords = (text: string) =>
+  text
+    .replace(/^\(sent [^)]*\) /, "")
+    .split(" ")
+    .slice(0, 2)
+    .join(" ");
 
 describe("shorten", () => {
   it("keeps the start and the end and cuts the middle", () => {
@@ -83,7 +88,8 @@ describe("context builder", () => {
     });
     assert.equal(built.exchanges, 1);
     const [, question, answer] = built.messages;
-    assert.ok(question?.content.startsWith("paste") && question.content.endsWith("end"));
+    assert.ok(question?.content.startsWith("(sent ") && question.content.includes("paste"));
+    assert.ok(question?.content.endsWith("end"));
     assert.equal(answer?.content, "summary here");
     assert.ok(built.tokens <= 600);
   });
@@ -119,6 +125,33 @@ describe("context builder", () => {
         return 1;
       },
     });
-    assert.ok(calls.includes("q") && calls.some((c) => c.startsWith("question 1")));
+    assert.ok(calls.includes("q") && calls.some((c) => c.includes("question 1")));
+  });
+});
+
+describe("how long ago", () => {
+  it("reads like a person would say it", () => {
+    const minute = 60_000;
+    assert.equal(howLongAgo(-5), "just now");
+    assert.equal(howLongAgo(30_000), "just now");
+    assert.equal(howLongAgo(5 * minute), "5 min ago");
+    assert.equal(howLongAgo(3 * 60 * minute), "3 h ago");
+    assert.equal(howLongAgo(26 * 60 * minute), "1 day ago");
+    assert.equal(howLongAgo(9 * 24 * 60 * minute), "9 days ago");
+  });
+
+  it("marks each earlier question with its age, but not the answers or the new question", () => {
+    const now = new Date(at.getTime() + 3 * 24 * 60 * 60_000);
+    const built = buildContext({
+      system: "s",
+      history: [exchange(1)],
+      question: "and today?",
+      budget: 10_000,
+      count,
+      now,
+    });
+    assert.match(built.messages[1]?.content ?? "", /^\(sent 3 days ago\) question 1/);
+    assert.match(built.messages[2]?.content ?? "", /^answer 1/);
+    assert.equal(built.messages[3]?.content, "and today?");
   });
 });

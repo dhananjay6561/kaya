@@ -10,7 +10,7 @@ export async function readConversation(
 ): Promise<Exchange[]> {
   const { rows } = await pool.query<{ question: string; answer: string; sent_at: Date }>(
     `SELECT q.body AS question, a.body AS answer, q.sent_at
-     FROM exchanges e
+     FROM (SELECT * FROM exchanges ORDER BY id DESC LIMIT $1 * 2) e
      JOIN messages q ON q.id = e.question_message_id
      JOIN messages a ON a.chat_id = q.chat_id AND a.wa_id = e.answer_wa_id AND a.from_me
      WHERE q.deleted_at IS NULL AND a.deleted_at IS NULL

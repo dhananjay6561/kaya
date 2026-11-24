@@ -71,6 +71,7 @@ describe("conversation", { skip: !testDatabaseUrl && "TEST_DATABASE_URL not set"
       answerDeleted?: boolean;
       editedAfter?: boolean;
       answerChat?: number;
+      answeredAt?: Date;
     } = {},
   ): Promise<void> {
     const n = ++seq;
@@ -91,7 +92,7 @@ describe("conversation", { skip: !testDatabaseUrl && "TEST_DATABASE_URL not set"
     );
     await testDb.admin.query(
       "INSERT INTO exchanges (question_message_id, answer_wa_id, created_at) VALUES ($1, $2, $3)",
-      [messageId, answerWaId, now],
+      [messageId, answerWaId, options.answeredAt ?? sentAt],
     );
   }
 
@@ -124,7 +125,7 @@ describe("conversation", { skip: !testDatabaseUrl && "TEST_DATABASE_URL not set"
     );
   });
 
-  it("drops an exchange whose question or answer was deleted, or whose question was edited later", async () => {
+  it("drops an exchange whose question or answer was deleted, or whose question was edited after it was answered", async () => {
     await asked("deleted question", ago(5 * minute), { questionDeleted: true });
     await asked("deleted answer", ago(4 * minute), { answerDeleted: true });
     await asked("edited afterwards", ago(3 * minute), { editedAfter: true });
@@ -133,6 +134,15 @@ describe("conversation", { skip: !testDatabaseUrl && "TEST_DATABASE_URL not set"
     assert.deepEqual(
       (await read()).map((e) => e.question),
       ["kept"],
+    );
+  });
+
+  it("keeps the order Kaya answered in, not the order WhatsApp stamped", async () => {
+    await asked("answered first", ago(1 * minute));
+    await asked("answered second, though sent earlier", ago(5 * minute));
+    assert.deepEqual(
+      (await read()).map((e) => e.question),
+      ["answered first", "answered second, though sent earlier"],
     );
   });
 
