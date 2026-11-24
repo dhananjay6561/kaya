@@ -29,6 +29,7 @@ describe("loadConfig", () => {
     assert.equal(config.logLevel, "info");
     assert.equal(config.port, 3000);
     assert.equal(config.listenHost, "127.0.0.1");
+    assert.equal(config.timeZone, "UTC");
     assert.equal(config.dataDir, "/base/data");
     assert.equal(groqOf(config).heavyModel, "openai/gpt-oss-120b");
     assert.equal(groqOf(config).routineModel, "openai/gpt-oss-20b");
@@ -44,6 +45,7 @@ describe("loadConfig", () => {
         CORE_PORT: "8080",
         LISTEN_HOST: "0.0.0.0",
         DATA_DIR: "/srv/kaya",
+        TIMEZONE: "Asia/Kolkata",
         GROQ_MODEL_HEAVY: "heavy",
         GROQ_MODEL_ROUTINE: "routine",
       },
@@ -53,6 +55,7 @@ describe("loadConfig", () => {
     assert.equal(config.port, 8080);
     assert.equal(config.listenHost, "0.0.0.0");
     assert.equal(config.dataDir, "/srv/kaya");
+    assert.equal(config.timeZone, "Asia/Kolkata");
     assert.equal(groqOf(config).heavyModel, "heavy");
     assert.equal(groqOf(config).routineModel, "routine");
   });
@@ -125,8 +128,10 @@ describe("loadConfig", () => {
       CORE_PORT: "70000",
       DATABASE_URL: "http://localhost/kaya",
       LOG_LEVEL: "loud",
+      TIMEZONE: "India/Delhi",
     });
-    assert.equal(problems.length, 3);
+    assert.equal(problems.length, 4);
+    assert.ok(problems.includes("TIMEZONE: must be an IANA time zone such as Asia/Kolkata"));
     assert.ok(problems.includes("CORE_PORT: must be between 1 and 65535"));
     assert.ok(problems.includes("DATABASE_URL: must be a postgres:// URL"));
     assert.ok(problems.some((p) => p.startsWith("LOG_LEVEL: ")));

@@ -110,6 +110,7 @@ services:
     environment:
       LOG_LEVEL: ${LOG_LEVEL:-info}
       CORE_PORT: ${CORE_PORT:-3000}
+      TIMEZONE: ${TIMEZONE:-}
       DATABASE_URL: postgres://kaya_core:${CORE_DB_PASSWORD:?set CORE_DB_PASSWORD in .env}@db:5432/${POSTGRES_DB:-kaya}
       LLM_PROVIDER: ${LLM_PROVIDER:-}
       GROQ_API_KEY: ${GROQ_API_KEY:-}

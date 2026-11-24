@@ -7,6 +7,15 @@ const portRange = { error: "must be between 1 and 65535" };
 
 const defaultLlmProvider = "groq";
 
+const isTimeZone = (zone: string) => {
+  try {
+    new Intl.DateTimeFormat("en", { timeZone: zone });
+    return true;
+  } catch {
+    return false;
+  }
+};
+
 const schema = z.object({
   LOG_LEVEL: z.preprocess(
     optional,
@@ -14,6 +23,13 @@ const schema = z.object({
   ),
   DATA_DIR: z.preprocess(optional, z.string().default("./data")),
   LISTEN_HOST: z.preprocess(optional, z.string().default("127.0.0.1")),
+  TIMEZONE: z.preprocess(
+    optional,
+    z
+      .string()
+      .refine(isTimeZone, { error: "must be an IANA time zone such as Asia/Kolkata" })
+      .default("UTC"),
+  ),
   CORE_PORT: z.preprocess(
     optional,
     z.coerce
@@ -49,6 +65,7 @@ export type Config = Readonly<{
   dataDir: string;
   listenHost: string;
   port: number;
+  timeZone: string;
   databaseUrl: string;
   llm: LlmConfig;
   channel: Readonly<{ provider: Env["CHAT_CHANNEL"] }>;
@@ -86,6 +103,7 @@ export function loadConfig(
     dataDir: resolve(baseDir, e.DATA_DIR),
     listenHost: e.LISTEN_HOST,
     port: e.CORE_PORT,
+    timeZone: e.TIMEZONE,
     databaseUrl: e.DATABASE_URL,
     llm: llmConfig(e),
     channel: Object.freeze({ provider: e.CHAT_CHANNEL }),
