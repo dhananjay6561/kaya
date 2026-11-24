@@ -50,13 +50,26 @@ const schema = z.object({
   GROQ_API_KEY: z.preprocess(optional, z.string().optional()),
   GROQ_MODEL_HEAVY: z.preprocess(optional, z.string().default("openai/gpt-oss-120b")),
   GROQ_MODEL_ROUTINE: z.preprocess(optional, z.string().default("openai/gpt-oss-20b")),
+  GROQ_CONTEXT_TOKENS: z.preprocess(
+    optional,
+    z.coerce
+      .number({ error: "must be a number" })
+      .int({ error: "must be a whole number" })
+      .min(500, { error: "must be at least 500" })
+      .default(4_000),
+  ),
   CHAT_CHANNEL: z.preprocess(optional, z.enum(["gateway", "stub"]).default("gateway")),
   TELEPHONY_PROVIDER: z.preprocess(optional, z.enum(["stub"]).default("stub")),
 });
 
 type Env = z.infer<typeof schema>;
 
-export type GroqConfig = Readonly<{ apiKey: string; heavyModel: string; routineModel: string }>;
+export type GroqConfig = Readonly<{
+  apiKey: string;
+  heavyModel: string;
+  routineModel: string;
+  contextTokens: number;
+}>;
 
 export type LlmConfig = Readonly<{ provider: "groq"; groq: GroqConfig } | { provider: "stub" }>;
 
@@ -119,6 +132,7 @@ function llmConfig(e: Env): LlmConfig {
       apiKey: e.GROQ_API_KEY ?? "",
       heavyModel: e.GROQ_MODEL_HEAVY,
       routineModel: e.GROQ_MODEL_ROUTINE,
+      contextTokens: e.GROQ_CONTEXT_TOKENS,
     }),
   });
 }

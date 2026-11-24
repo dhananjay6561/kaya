@@ -33,6 +33,7 @@ describe("loadConfig", () => {
     assert.equal(config.dataDir, "/base/data");
     assert.equal(groqOf(config).heavyModel, "openai/gpt-oss-120b");
     assert.equal(groqOf(config).routineModel, "openai/gpt-oss-20b");
+    assert.equal(groqOf(config).contextTokens, 4_000);
     assert.equal(config.channel.provider, "gateway");
     assert.equal(config.telephony.provider, "stub");
   });
@@ -48,6 +49,7 @@ describe("loadConfig", () => {
         TIMEZONE: "Asia/Kolkata",
         GROQ_MODEL_HEAVY: "heavy",
         GROQ_MODEL_ROUTINE: "routine",
+        GROQ_CONTEXT_TOKENS: "12000",
       },
       "/base",
     );
@@ -58,6 +60,7 @@ describe("loadConfig", () => {
     assert.equal(config.timeZone, "Asia/Kolkata");
     assert.equal(groqOf(config).heavyModel, "heavy");
     assert.equal(groqOf(config).routineModel, "routine");
+    assert.equal(groqOf(config).contextTokens, 12_000);
   });
 
   it("accepts postgresql:// URLs", () => {
@@ -135,6 +138,12 @@ describe("loadConfig", () => {
     assert.ok(problems.includes("CORE_PORT: must be between 1 and 65535"));
     assert.ok(problems.includes("DATABASE_URL: must be a postgres:// URL"));
     assert.ok(problems.some((p) => p.startsWith("LOG_LEVEL: ")));
+  });
+
+  it("refuses a context budget too small to hold a question", () => {
+    assert.deepEqual(problemsFor({ ...valid, GROQ_CONTEXT_TOKENS: "100" }), [
+      "GROQ_CONTEXT_TOKENS: must be at least 500",
+    ]);
   });
 
   it("rejects a port that isn't a number", () => {
