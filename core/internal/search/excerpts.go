@@ -6,6 +6,8 @@ import (
 	"slices"
 	"strings"
 	"time"
+	"unicode"
+	"unicode/utf8"
 
 	"github.com/jackc/pgx/v5"
 )
@@ -70,43 +72,92 @@ const contactName = `lower(CASE WHEN coalesce(c.saved_name, '') = '' AND coalesc
 	THEN coalesce(c.push_name, '') || ' ' || coalesce(c.business_name, '')
 	ELSE coalesce(c.saved_name, '') || ' ' || coalesce(c.first_name, '') END)`
 
-// people finds the contacts each name stands for, by trigram word similarity so a misspelling or
-// any script matches: up to perName contacts with a chat or a message, the closest names first and,
-// among names as close, the people DJ talked to most recently.
-func (s *Searcher) people(ctx context.Context, names []string) (best, all []int64, unknown []string, err error) {
-	return s.resolve(ctx, names, `
-		SELECT c.id FROM contacts c
-		WHERE lower($1) <% `+contactName+`
-		  AND (EXISTS (SELECT 1 FROM chats ch WHERE ch.contact_id = c.id)
-		       OR EXISTS (SELECT 1 FROM messages m WHERE m.sender_id = c.id))
-		ORDER BY round(word_similarity(lower($1), `+contactName+`)::numeric, 1) DESC,
-		         greatest((SELECT max(m.sent_at) FROM messages m WHERE m.sender_id = c.id),
-		                  (SELECT max(m.sent_at) FROM chats ch JOIN messages m ON m.chat_id = ch.id WHERE ch.contact_id = c.id)) DESC NULLS LAST,
-		         c.id
-		LIMIT $2`)
+// people finds the contacts each name stands for (never self, DJ's own chat with Kaya), up to
+// perName contacts with a chat or a message, the closest names first and, among names as close, the
+// people DJ talked to most recently. See match for how a name matches.
+func (s *Searcher) people(ctx context.Context, names []string, self int64) (best, all []int64, unknown []string, err error) {
+	return s.resolve(ctx, names, func(condition, similarity string) string {
+		return `
+			SELECT c.id FROM contacts c
+			WHERE ` + strings.ReplaceAll(condition, "NAME", contactName) + `
+			  AND (EXISTS (SELECT 1 FROM chats ch WHERE ch.contact_id = c.id)
+			       OR EXISTS (SELECT 1 FROM messages m WHERE m.sender_id = c.id))
+			  AND NOT EXISTS (SELECT 1 FROM chats sc WHERE sc.id = $3 AND sc.contact_id = c.id)
+			ORDER BY round((` + strings.ReplaceAll(similarity, "NAME", contactName) + `)::numeric, 1) DESC,
+			         greatest((SELECT max(m.sent_at) FROM messages m WHERE m.sender_id = c.id),
+			                  (SELECT max(m.sent_at) FROM chats ch JOIN messages m ON m.chat_id = ch.id WHERE ch.contact_id = c.id)) DESC NULLS LAST,
+			         c.id
+			LIMIT $2`
+	}, self)
 }
 
 // groups finds the group chats each name stands for, like people.
 func (s *Searcher) groups(ctx context.Context, names []string) (best, all []int64, unknown []string, err error) {
-	return s.resolve(ctx, names, `
-		SELECT ch.id FROM chats ch
-		WHERE ch.kind = 'group' AND lower($1) <% lower(coalesce(ch.name, ''))
-		ORDER BY round(word_similarity(lower($1), lower(coalesce(ch.name, '')))::numeric, 1) DESC,
-		         (SELECT max(m.sent_at) FROM messages m WHERE m.chat_id = ch.id) DESC NULLS LAST,
-		         ch.id
-		LIMIT $2`)
+	const groupName = `lower(coalesce(ch.name, ''))`
+	return s.resolve(ctx, names, func(condition, similarity string) string {
+		return `
+			SELECT ch.id FROM chats ch
+			WHERE ch.kind = 'group' AND ch.id <> $3 AND ` + strings.ReplaceAll(condition, "NAME", groupName) + `
+			ORDER BY round((` + strings.ReplaceAll(similarity, "NAME", groupName) + `)::numeric, 1) DESC,
+			         (SELECT max(m.sent_at) FROM messages m WHERE m.chat_id = ch.id) DESC NULLS LAST,
+			         ch.id
+			LIMIT $2`
+	}, 0)
 }
 
-func (s *Searcher) resolve(ctx context.Context, names []string, query string) (best, all []int64, unknown []string, err error) {
+// How a name is matched against the names of contacts and groups (NAME stands for the name
+// expression): a short name only as a whole word, so "Om" is not Omkar; a longer one by trigram
+// word similarity, so misspellings and any alphabet match; and, for a script written without
+// spaces, as part of a name, so 小明 finds 王小明.
+const (
+	wholeWord   = `lower($1) = ANY(regexp_split_to_array(NAME, '[[:space:][:punct:]]+'))`
+	similar     = `lower($1) <% NAME`
+	inside      = `strpos(NAME, lower($1)) > 0`
+	similarity  = `word_similarity(lower($1), NAME)`
+	exactly     = `1`
+	shortName   = 3
+	wordsOfName = 2
+)
+
+// resolve finds what each name stands for with the query query writes for a condition and an order
+// of similarity. A name made of several words that matches nothing as a whole is tried word by word
+// ("Priya Sharma" finds a contact saved as "Priya").
+func (s *Searcher) resolve(ctx context.Context, names []string, query func(condition, similarity string) string, self int64) (best, all []int64, unknown []string, err error) {
 	err = s.DB.InTx(ctx, func(tx pgx.Tx) error {
+		find := func(name string) ([]int64, error) {
+			ways := [][2]string{{similar, similarity}}
+			if len([]rune(name)) <= shortName {
+				ways = [][2]string{{wholeWord, exactly}}
+			}
+			if !isASCII(name) {
+				ways = append(ways, [2]string{inside, exactly})
+			}
+			for _, way := range ways {
+				rows, err := tx.Query(ctx, query(way[0], way[1]), name, perName, self)
+				if err != nil {
+					return nil, err
+				}
+				ids, err := pgx.CollectRows(rows, pgx.RowTo[int64])
+				if err != nil || len(ids) > 0 {
+					return ids, err
+				}
+			}
+			return nil, nil
+		}
 		for _, name := range names {
-			rows, err := tx.Query(ctx, query, name, perName)
+			ids, err := find(name)
 			if err != nil {
 				return err
 			}
-			ids, err := pgx.CollectRows(rows, pgx.RowTo[int64])
-			if err != nil {
-				return err
+			if words := strings.Fields(name); len(ids) == 0 && len(words) >= wordsOfName {
+				for _, w := range words {
+					if ids, err = find(w); err != nil || len(ids) > 0 {
+						break
+					}
+				}
+				if err != nil {
+					return err
+				}
 			}
 			if len(ids) == 0 {
 				unknown = append(unknown, name)
@@ -126,11 +177,31 @@ func (s *Searcher) resolve(ctx context.Context, names []string, query string) (b
 	return best, all, unknown, err
 }
 
-// cleanNames keeps up to MaxNames distinct names of a plan, each on one line and cut to maxNameLen.
+func isASCII(s string) bool {
+	for _, r := range s {
+		if r >= utf8.RuneSelf {
+			return false
+		}
+	}
+	return true
+}
+
+// clean is text a model wrote, on one line, without control characters, cut to limit.
+func clean(text string, limit int) string {
+	text = strings.Map(func(r rune) rune {
+		if unicode.IsControl(r) {
+			return ' '
+		}
+		return r
+	}, text)
+	return cut(oneLine(text), limit)
+}
+
+// cleanNames keeps up to MaxNames distinct names of a plan, each cleaned and cut to maxNameLen.
 func cleanNames(names []string) []string {
 	var out []string
 	for _, n := range names {
-		n = cut(oneLine(n), maxNameLen)
+		n = clean(n, maxNameLen)
 		if n != "" && len(out) < MaxNames && !slices.ContainsFunc(out, func(o string) bool { return strings.EqualFold(o, n) }) {
 			out = append(out, n)
 		}
@@ -170,7 +241,7 @@ func (s *Searcher) Excerpts(ctx context.Context, p Plan, limit int) (Found, erro
 	if limit <= 0 {
 		return Found{}, nil
 	}
-	query := cut(oneLine(p.Query), maxQueryLen)
+	query := clean(p.Query, maxQueryLen)
 	people, groups := cleanNames(p.People), cleanNames(p.Groups)
 	if query == "" {
 		query = strings.Join(append(slices.Clone(people), groups...), " ")
@@ -183,7 +254,7 @@ func (s *Searcher) Excerpts(ctx context.Context, p Plan, limit int) (Found, erro
 	if self != 0 {
 		window.ExcludeChatIDs = []int64{self}
 	}
-	bestContacts, contacts, unknownPeople, err := s.people(ctx, people)
+	bestContacts, contacts, unknownPeople, err := s.people(ctx, people, self)
 	if err != nil {
 		return Found{}, err
 	}
@@ -191,6 +262,18 @@ func (s *Searcher) Excerpts(ctx context.Context, p Plan, limit int) (Found, erro
 	if err != nil {
 		return Found{}, err
 	}
+	// A model may put a group among people or the other way round, so a name that matches neither
+	// kind it was given is looked for as the other.
+	moreChats, chatsToo, unknownPeople, err := s.groups(ctx, unknownPeople)
+	if err != nil {
+		return Found{}, err
+	}
+	moreContacts, contactsToo, unknownGroups, err := s.people(ctx, unknownGroups, self)
+	if err != nil {
+		return Found{}, err
+	}
+	bestContacts, contacts = merge(bestContacts, moreContacts), merge(contacts, contactsToo)
+	bestChats, chats = merge(bestChats, moreChats), merge(chats, chatsToo)
 	found := Found{Unknown: append(unknownPeople, unknownGroups...)}
 
 	type candidate struct {
@@ -295,6 +378,15 @@ func (s *Searcher) Excerpts(ctx context.Context, p Plan, limit int) (Found, erro
 		found.Excerpts = append(found.Excerpts, Excerpt{Hit: c.hit, Before: before, Newest: c.newest})
 	}
 	return found, nil
+}
+
+func merge(a, b []int64) []int64 {
+	for _, id := range b {
+		if !slices.Contains(a, id) {
+			a = append(a, id)
+		}
+	}
+	return a
 }
 
 // before is the text of the three messages before first in its chat, as the indexer reads it.
