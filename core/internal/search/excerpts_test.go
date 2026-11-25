@@ -3,6 +3,7 @@ package search
 import (
 	"fmt"
 	"slices"
+	"strings"
 	"testing"
 	"time"
 )
@@ -15,14 +16,6 @@ func excerptTitles(excerpts []Excerpt) []string {
 	return titles(hits)
 }
 
-func TestContentWordsKeepWhatMayBeANameAndDropTheRest(t *testing.T) {
-	got := contentWords("What did Rahul say about Saturday? kal Priya ne kya bola, College Gang mein. राहुल ने क्या कहा bhai yaar thanks")
-	want := []string{"rahul", "saturday", "priya", "college", "gang", "राहुल"}
-	if !slices.Equal(got, want) {
-		t.Fatalf("got %q, want %q", got, want)
-	}
-}
-
 // excerpter is a searcher whose bars suit the stub's word vectors, which are far apart unless the
 // texts share most of their words.
 func (r *rig) excerpter() *Searcher {
@@ -31,10 +24,85 @@ func (r *rig) excerpter() *Searcher {
 	return s
 }
 
-func TestExcerptsSearchTheChatsAQuestionNamesFirst(t *testing.T) {
+// contact makes a contact with a direct chat; saved and push may be empty.
+func (r *rig) contact(saved, push string) (contact, chat int64) {
+	r.t.Helper()
+	r.seq++
+	contact = r.one("SELECT contact_id_for(NULL, $1)", fmt.Sprintf("9198%08d@s.whatsapp.net", r.seq))
+	r.exec("UPDATE contacts SET saved_name = nullif($2, ''), push_name = nullif($3, '') WHERE id = $1", contact, saved, push)
+	chat = r.one("INSERT INTO chats (kind, contact_id) VALUES ('direct', $1) RETURNING id", contact)
+	return contact, chat
+}
+
+func (r *rig) excerpts(s *Searcher, p Plan) []Excerpt {
+	r.t.Helper()
+	found, err := s.Excerpts(bg, p, 3)
+	if err != nil {
+		r.t.Fatal(err)
+	}
+	return found.Excerpts
+}
+
+func TestPeopleAreFoundInAnyScriptDespiteTypos(t *testing.T) {
 	r := newRig(t)
-	priya := r.one("SELECT contact_id_for(NULL, '919111111111@s.whatsapp.net')")
-	r.exec("UPDATE contacts SET saved_name = 'Priya Sharma' WHERE id = $1", priya)
+	hindi, _ := r.contact("राहुल शर्मा", "")
+	teja, _ := r.contact("Tejashree Kulkarni", "")
+	tanaka, _ := r.contact("田中 太郎", "")
+	s := r.searcher()
+	for name, want := range map[string]int64{"राहुल": hindi, "tejashri": teja, "TEJASHREE": teja, "田中": tanaka} {
+		best, _, unknown, err := s.people(bg, []string{name})
+		if err != nil || !slices.Equal(best, []int64{want}) || unknown != nil {
+			t.Fatalf("%q: best %v, unknown %q, %v", name, best, unknown, err)
+		}
+	}
+	if best, _, unknown, err := s.people(bg, []string{"Zorawar"}); err != nil || best != nil || !slices.Equal(unknown, []string{"Zorawar"}) {
+		t.Fatalf("an unknown name: %v, %q, %v", best, unknown, err)
+	}
+}
+
+func TestPeopleMatchOnlySavedNamesAndPreferWhoDJTalksToMost(t *testing.T) {
+	r := newRig(t)
+	stuffed, _ := r.contact("Amit Office", "saturday plan party")
+	unsaved, _ := r.contact("", "Neha Saturday")
+	s := r.searcher()
+	best, _, _, err := s.people(bg, []string{"saturday"})
+	if err != nil || !slices.Equal(best, []int64{unsaved}) {
+		t.Fatalf("got %v, want only %d (not %d)", best, unsaved, stuffed)
+	}
+	gym, gymChat := r.contact("Rahul Gym", "")
+	r.say(r.direct, 9000, "old")
+	r.add(msg{chat: gymChat, sender: gym, ago: 60 * time.Minute, body: str("new")})
+	if best, all, _, err := s.people(bg, []string{"rahul"}); err != nil || !slices.Equal(best, []int64{gym}) || !slices.Equal(all, []int64{gym, r.rahul}) {
+		t.Fatalf("best %v, all %v, %v", best, all, err)
+	}
+	for i := range 6 {
+		r.contact(fmt.Sprintf("Rohit Kumar %d", i), "")
+	}
+	verma, _ := r.contact("Rohit Verma", "")
+	if best, all, _, err := s.people(bg, []string{"rohit verma"}); err != nil || best[0] != verma || len(all) > perName {
+		t.Fatalf("best %v, all %v, %v", best, all, err)
+	}
+}
+
+func TestGroupsAreFoundByTheirName(t *testing.T) {
+	r := newRig(t)
+	trip := r.groupNamed("Goa Trip 2026")
+	best, _, unknown, err := r.searcher().groups(bg, []string{"goa trip", "office"})
+	if err != nil || !slices.Equal(best, []int64{trip}) || !slices.Equal(unknown, []string{"office"}) {
+		t.Fatalf("best %v, unknown %q, %v", best, unknown, err)
+	}
+}
+
+func TestCleanNamesKeepsAFewDistinctShortNames(t *testing.T) {
+	got := cleanNames([]string{"Rahul", "rahul", " ", "a\nb", strings.Repeat("x", 200), "c", "d", "e", "f"})
+	if len(got) != MaxNames || got[0] != "Rahul" || got[1] != "a b" || len([]rune(got[2])) > maxNameLen+1 {
+		t.Fatalf("got %q", got)
+	}
+}
+
+func TestExcerptsSearchTheNamedChatsButNeverKayasOwn(t *testing.T) {
+	r := newRig(t)
+	priya, _ := r.contact("Priya Sharma", "")
 	gang := r.groupNamed("College Gang")
 	r.say(r.direct, 3000, "saturday plan is dinner at 7")
 	r.add(msg{chat: gang, sender: priya, ago: 2000 * time.Minute, body: str("saturday plan is a movie")})
@@ -42,49 +110,21 @@ func TestExcerptsSearchTheChatsAQuestionNamesFirst(t *testing.T) {
 	r.exchange(self, 1000, "saturday plan kya hai", "No idea.")
 	r.pass()
 	s := r.excerpter()
-	only := func(q string, want string) {
-		t.Helper()
-		hits, _, err := s.Excerpts(bg, q, "", 3)
-		if err != nil {
-			t.Fatal(err)
-		}
-		got := excerptTitles(hits)
-		if len(got) == 0 || got[0] != want {
-			t.Fatalf("%q: got %q, want %q first", q, got, want)
-		}
-		for _, h := range hits {
-			if h.ChatID == self {
-				t.Fatalf("%q: Kaya's own chat came back as an excerpt", q)
-			}
+	for _, c := range []struct {
+		p    Plan
+		want string
+	}{
+		{Plan{Query: "saturday plan", People: []string{"Rahul"}}, "Rahul: saturday plan is dinner at 7"},
+		{Plan{Query: "saturday plan", People: []string{"Priya"}}, "College Gang: saturday plan is a movie"},
+		{Plan{Query: "saturday plan", Groups: []string{"college gang"}}, "College Gang: saturday plan is a movie"},
+	} {
+		got := r.excerpts(s, c.p)
+		if !slices.Contains(excerptTitles(got), c.want) || slices.ContainsFunc(got, func(e Excerpt) bool { return e.ChatID == self }) {
+			t.Fatalf("%+v: got %q", c.p, excerptTitles(got))
 		}
 	}
-	only("what did Rahul say about the saturday plan", "Rahul: saturday plan is dinner at 7")
-	only("saturday plan from priya", "College Gang: saturday plan is a movie")
-	only("college gang saturday plan", "College Gang: saturday plan is a movie")
-	hits, _, err := s.Excerpts(bg, "saturday plan", "", 3)
-	if err != nil || len(hits) != 2 {
-		t.Fatalf("an unnamed question should search every chat but Kaya's: %q, %v", excerptTitles(hits), err)
-	}
-}
-
-func TestExcerptsFallBackToEveryChatWhenTheNamedOnesHaveNothing(t *testing.T) {
-	r := newRig(t)
-	other := r.groupNamed("Trip")
-	r.say(r.direct, 3000, "unrelated cricket score")
-	r.say(other, 3000, "the passport office visit is on monday")
-	r.pass()
-	hits, _, err := r.searcher().Excerpts(bg, "Rahul passport office visit monday", "", 3)
-	if err != nil || len(hits) == 0 || hits[0].Title != "Trip" {
-		t.Fatalf("got %q, %v", excerptTitles(hits), err)
-	}
-}
-
-func TestExcerptsHoldChunksToTheMeaningBar(t *testing.T) {
-	r := newRig(t)
-	r.say(r.direct, 3000, "ok see you")
-	r.pass()
-	if hits, _, err := r.searcher().Excerpts(bg, "what is the capital of peru", "", 3); err != nil || len(hits) != 0 {
-		t.Fatalf("an unrelated chunk was shown: %q, %v", excerptTitles(hits), err)
+	if got := r.excerpts(s, Plan{Query: "saturday plan"}); len(got) != 2 {
+		t.Fatalf("a plan naming nobody should search every chat but Kaya's: %q", excerptTitles(got))
 	}
 }
 
@@ -94,11 +134,18 @@ func TestExcerptsLeaveOutKayasOwnChatHoweverMuchOfItMatches(t *testing.T) {
 	for i := range 10 {
 		r.exchange(self, 5000-i*100, "what is the saturday plan", "No idea yet.")
 	}
+	r.add(msg{chat: self, fromMe: true, ago: 9000 * time.Minute, body: str("saturday plan note to self")})
 	r.say(r.direct, 3000, "the saturday plan is dinner at 7")
 	r.pass()
-	hits, searched, err := r.excerpter().Excerpts(bg, "what is the saturday plan", "", 3)
-	if err != nil || !searched || len(hits) != 1 || hits[0].ChatID != r.direct {
-		t.Fatalf("got %q, %v, %v", excerptTitles(hits), searched, err)
+	if got := r.excerpts(r.excerpter(), Plan{Query: "what is the saturday plan"}); len(got) != 1 || got[0].ChatID != r.direct {
+		t.Fatalf("got %q", excerptTitles(got))
+	}
+	r.exec("UPDATE connection_state SET own_jid = NULL")
+	if got := r.excerpts(r.excerpter(), Plan{Query: "what is the saturday plan", People: []string{"Me"}, Newest: true}); slices.ContainsFunc(got, func(e Excerpt) bool { return e.ChatID == self }) {
+		t.Fatalf("logged out: got %q", excerptTitles(got))
+	}
+	if got, err := r.recaller().Recall(bg, "saturday plan", nil, time.Time{}, 3); err != nil || len(got) == 0 {
+		t.Fatalf("recall while logged out: %q, %v", questions(got), err)
 	}
 }
 
@@ -108,44 +155,29 @@ func TestExcerptsLeaveOutNotesToSelfBeforeAnyExchange(t *testing.T) {
 	r.add(msg{chat: self, fromMe: true, ago: 3000 * time.Minute, body: str("saturday plan note to self")})
 	r.say(r.direct, 3000, "saturday plan is dinner")
 	r.pass()
-	hits, _, err := r.excerpter().Excerpts(bg, "saturday plan", "", 3)
-	if err != nil || len(hits) != 1 || hits[0].ChatID != r.direct {
-		t.Fatalf("got %q, %v", excerptTitles(hits), err)
+	if got := r.excerpts(r.excerpter(), Plan{Query: "saturday plan", Newest: true}); len(got) != 1 || got[0].ChatID != r.direct {
+		t.Fatalf("got %q", excerptTitles(got))
 	}
 }
 
-func TestExcerptsDoNotSearchAQuestionWithNothingInIt(t *testing.T) {
+func TestExcerptsFallBackToEveryChatAndReportUnknownNames(t *testing.T) {
 	r := newRig(t)
-	r.say(r.direct, 3000, "hi thanks")
+	trip := r.groupNamed("Trip")
+	r.say(r.direct, 3000, "unrelated cricket score")
+	r.say(trip, 3000, "the passport office visit is on monday")
 	r.pass()
-	if hits, searched, err := r.excerpter().Excerpts(bg, "hi, thanks!", "", 3); err != nil || searched || hits != nil {
-		t.Fatalf("got %q, %v, %v", excerptTitles(hits), searched, err)
+	found, err := r.searcher().Excerpts(bg, Plan{Query: "passport office visit monday", People: []string{"Rahul", "Zorawar"}}, 3)
+	if err != nil || len(found.Excerpts) == 0 || found.Excerpts[0].Title != "Trip" || !slices.Equal(found.Unknown, []string{"Zorawar"}) {
+		t.Fatalf("got %q, unknown %q, %v", excerptTitles(found.Excerpts), found.Unknown, err)
 	}
 }
 
-func TestNamedMatchesDevanagariAndRanksByWordsMatched(t *testing.T) {
+func TestExcerptsHoldChunksToTheMeaningBar(t *testing.T) {
 	r := newRig(t)
-	contact := func(phone, name string) int64 {
-		id := r.one("SELECT contact_id_for(NULL, $1)", phone+"@s.whatsapp.net")
-		r.exec("UPDATE contacts SET saved_name = $2 WHERE id = $1", id, name)
-		r.exec("INSERT INTO chats (kind, contact_id) VALUES ('direct', $1)", id)
-		return id
-	}
-	hindi := contact("919222222222", "राहुल शर्मा")
-	for i := range 25 {
-		contact(fmt.Sprintf("9193%09d", i), fmt.Sprintf("Rohit Kumar %d", i))
-	}
-	verma := contact("919444444444", "Rohit Verma")
-	r.one("SELECT contact_id_for(NULL, '919555555555@s.whatsapp.net')")
-	r.exec("UPDATE contacts SET saved_name = 'Rohit Verma Old' WHERE pn = '919555555555@s.whatsapp.net'")
-	s := r.searcher()
-	got, _, err := s.named(bg, contentWords("राहुल ने क्या कहा"))
-	if err != nil || !slices.Equal(got, []int64{hindi}) {
-		t.Fatalf("a Devanagari name: %v, %v", got, err)
-	}
-	got, _, err = s.named(bg, contentWords("what did rohit verma say about the flat"))
-	if err != nil || len(got) != 20 || got[0] != verma {
-		t.Fatalf("the best match was not first: %v, %v", got, err)
+	r.say(r.direct, 3000, "ok see you")
+	r.pass()
+	if got := r.excerpts(r.searcher(), Plan{Query: "what is the capital of peru"}); len(got) != 0 {
+		t.Fatalf("an unrelated chunk was shown: %q", excerptTitles(got))
 	}
 }
 
@@ -155,9 +187,9 @@ func TestExcerptsLetABetterAnswerBeatAChanceNameMatch(t *testing.T) {
 	r.say(football, 3000, "football practice saturday morning bring boots")
 	r.say(r.direct, 3000, "the party on saturday is at 9 pm")
 	r.pass()
-	hits, _, err := r.excerpter().Excerpts(bg, "what time is the party on saturday", "", 3)
-	if err != nil || len(hits) == 0 || hits[0].ChatID != r.direct {
-		t.Fatalf("got %q, %v", excerptTitles(hits), err)
+	got := r.excerpts(r.excerpter(), Plan{Query: "what time is the party on saturday", Groups: []string{"saturday"}})
+	if len(got) == 0 || got[0].ChatID != r.direct {
+		t.Fatalf("got %q", excerptTitles(got))
 	}
 }
 
@@ -166,9 +198,67 @@ func TestExcerptsCarryTheMessagesBeforeThem(t *testing.T) {
 	r.say(r.direct, 300, "bhai login code bhej do")
 	r.say(r.direct, 200, "482913 hai jaldi daal")
 	r.pass()
-	hits, _, err := r.excerpter().Excerpts(bg, "482913 jaldi daal", "", 1)
-	if err != nil || len(hits) != 1 || hits[0].Lines[0].Text != "482913 hai jaldi daal" || hits[0].Before != "bhai login code bhej do" {
-		t.Fatalf("got %+v, %v", hits, err)
+	found, err := r.excerpter().Excerpts(bg, Plan{Query: "482913 jaldi daal"}, 1)
+	if err != nil || len(found.Excerpts) != 1 || found.Excerpts[0].Lines[0].Text != "482913 hai jaldi daal" || found.Excerpts[0].Before != "bhai login code bhej do" {
+		t.Fatalf("got %+v, %v", found, err)
+	}
+}
+
+func TestExcerptsKeepToThePlansTime(t *testing.T) {
+	r := newRig(t)
+	r.say(r.direct, 9000, "dinner plan old")
+	r.say(r.group, 120, "dinner plan new")
+	r.pass()
+	got := r.excerpts(r.excerpter(), Plan{Query: "dinner plan", From: time.Now().Add(-3 * time.Hour)})
+	if len(got) != 1 || got[0].ChatID != r.group {
+		t.Fatalf("got %q", excerptTitles(got))
+	}
+}
+
+func TestExcerptsForTheNewestPutTheNewestChunksOfTheBestMatchFirst(t *testing.T) {
+	r := newRig(t)
+	teja, chat := r.contact("Tejashree", "")
+	r.add(msg{chat: chat, sender: teja, ago: 9000 * time.Minute, body: str("tejashree asked what happened are you fine")})
+	r.add(msg{chat: chat, sender: teja, ago: 3000 * time.Minute, body: str("can you send the notes")})
+	r.add(msg{chat: chat, sender: teja, ago: 600 * time.Minute, body: str("coming to college tomorrow?")})
+	r.say(r.direct, 300, "rahul is newer than all of them")
+	r.pass()
+	s := r.excerpter()
+	got := r.excerpts(s, Plan{Query: "what did tejashree ask", People: []string{"Tejashree"}, Newest: true})
+	if len(got) < 2 || got[0].Lines[0].Text != "coming to college tomorrow?" || got[1].Lines[0].Text != "can you send the notes" ||
+		!got[0].Newest || !got[1].Newest || len(got) > 2 && got[2].Newest {
+		t.Fatalf("got %q", excerptTitles(got))
+	}
+	got = r.excerpts(s, Plan{Query: "tejashree asked what happened are you fine", People: []string{"Tejashree"}})
+	if len(got) == 0 || got[0].Lines[0].Text != "tejashree asked what happened are you fine" || got[0].Newest {
+		t.Fatalf("a plan not asking for the newest: %q", excerptTitles(got))
+	}
+	got = r.excerpts(s, Plan{Query: "new messages", Newest: true})
+	if len(got) == 0 || got[0].ChatID != r.direct || !got[0].Newest {
+		t.Fatalf("the newest of every chat: %q", excerptTitles(got))
+	}
+	got = r.excerpts(s, Plan{Query: "new messages", People: []string{"Zorawar"}, Newest: true})
+	if slices.ContainsFunc(got, func(e Excerpt) bool { return e.Newest }) {
+		t.Fatalf("an unknown name brought the newest of every chat: %q", excerptTitles(got))
+	}
+}
+
+func TestExcerptsForTheNewestTakeAPersonAndAGroupTogether(t *testing.T) {
+	r := newRig(t)
+	priya, direct := r.contact("Priya", "")
+	gang := r.groupNamed("Priya Birthday")
+	other, otherChat := r.contact("Priyanka", "")
+	r.add(msg{chat: otherChat, sender: other, ago: 100 * time.Minute, body: str("priyanka is not priya")})
+	if _, all, _, err := r.searcher().people(bg, []string{"Priya"}); err != nil || !slices.Contains(all, other) {
+		t.Fatalf("priyanka should be a weaker match: %v, %v", all, err)
+	}
+	r.add(msg{chat: direct, sender: priya, ago: 9000 * time.Minute, body: str("oldest from priya")})
+	r.add(msg{chat: gang, sender: r.rahul, ago: 600 * time.Minute, body: str("newest in the group")})
+	r.add(msg{chat: direct, sender: priya, ago: 3000 * time.Minute, body: str("newer from priya")})
+	r.pass()
+	got := r.excerpts(r.excerpter(), Plan{Query: "priya", People: []string{"Priya"}, Groups: []string{"Priya Birthday"}, Newest: true})
+	if len(got) < 2 || got[0].Lines[0].Text != "newest in the group" || got[1].Lines[0].Text != "newer from priya" {
+		t.Fatalf("got %q", excerptTitles(got))
 	}
 }
 
@@ -200,224 +290,13 @@ func TestSendersNameThemselvesOnlyWithAMark(t *testing.T) {
 	}
 }
 
-func TestSearchableTellsSmallTalkFromAQuestion(t *testing.T) {
-	for q, want := range map[string]bool{
-		"hi": false, "thanks!": false, "ok cool": false, "how are you": false, "kya haal hai": false,
-		"kal ka plan kya hai": true, "what time is the party": true, "did anyone send the phone number?": true,
-		"any new messages today?": true, "wi-fi pw?": true, "राहुल ने क्या कहा": true,
-	} {
-		if got := searchable(q); got != want {
-			t.Errorf("%q: searchable %v, want %v", q, got, want)
-		}
-	}
-}
-
-func TestNamedMatchesTheNamesAContactChoseOnlyWhenDJSavedNone(t *testing.T) {
-	r := newRig(t)
-	contact := func(phone, saved, push string) int64 {
-		id := r.one("SELECT contact_id_for(NULL, $1)", phone+"@s.whatsapp.net")
-		r.exec("UPDATE contacts SET saved_name = nullif($2, ''), push_name = $3 WHERE id = $1", id, saved, push)
-		r.exec("INSERT INTO chats (kind, contact_id) VALUES ('direct', $1)", id)
-		return id
-	}
-	stuffed := contact("919111111112", "Amit Office", "saturday plan party trip")
-	unsaved := contact("919111111113", "", "Neha Saturday")
-	got, _, err := r.searcher().named(bg, contentWords("saturday plan"))
-	if err != nil || !slices.Equal(got, []int64{unsaved}) {
-		t.Fatalf("got %v, want only %d (not %d)", got, unsaved, stuffed)
-	}
-}
-
 func TestChatTitlesMarkANameTheContactChose(t *testing.T) {
 	r := newRig(t)
-	id := r.one("SELECT contact_id_for(NULL, '919111111114@s.whatsapp.net')")
-	r.exec("UPDATE contacts SET push_name = 'Kaya' WHERE id = $1", id)
-	chat := r.one("INSERT INTO chats (kind, contact_id) VALUES ('direct', $1) RETURNING id", id)
+	id, chat := r.contact("", "Kaya")
 	r.add(msg{chat: chat, sender: id, ago: time.Hour, body: str("trust me")})
 	r.pass()
 	hits, err := r.searcher().Search(bg, "trust me", Filter{ChatIDs: []int64{chat}}, 1)
 	if err != nil || len(hits) != 1 || hits[0].Title != "~Kaya" || hits[0].Lines[0].Sender != "~Kaya" {
 		t.Fatalf("%+v, %v", hits, err)
-	}
-}
-
-func TestExcerptsLeaveOutKayasChatWhileTheGatewayIsLoggedOut(t *testing.T) {
-	r := newRig(t)
-	r.exec("UPDATE connection_state SET own_jid = NULL")
-	self := r.one("INSERT INTO chats (kind, contact_id) VALUES ('direct', $1) RETURNING id", r.me)
-	r.exchange(self, 5000, "what is the saturday plan", "Dinner at 7.")
-	r.say(r.direct, 3000, "the saturday plan is dinner at 7")
-	r.pass()
-	hits, _, err := r.excerpter().Excerpts(bg, "what is the saturday plan", "", 3)
-	if err != nil || len(hits) != 1 || hits[0].ChatID != r.direct {
-		t.Fatalf("got %q, %v", excerptTitles(hits), err)
-	}
-	if got, err := r.recaller().Recall(bg, "saturday plan", nil, time.Time{}, 3); err != nil || len(got) != 1 {
-		t.Fatalf("recall while logged out: %q, %v", questions(got), err)
-	}
-}
-
-func TestExcerptsTakeTheNamesOfAFollowUpFromTheQuestionBefore(t *testing.T) {
-	r := newRig(t)
-	teja := r.one("SELECT contact_id_for(NULL, '919111111115@s.whatsapp.net')")
-	r.exec("UPDATE contacts SET saved_name = 'Tejashree' WHERE id = $1", teja)
-	chat := r.one("INSERT INTO chats (kind, contact_id) VALUES ('direct', $1) RETURNING id", teja)
-	r.add(msg{chat: chat, sender: teja, ago: 3000 * time.Minute, body: str("did you submit the assignment")})
-	r.say(r.direct, 3000, "did you submit the form")
-	r.pass()
-	s := r.excerpter()
-	s.ExcerptDistance = 0
-	hits, _, err := s.Excerpts(bg, "did you submit", "tejashree ne kya pucha", 3)
-	if err != nil || len(hits) != 1 || hits[0].ChatID != chat {
-		t.Fatalf("got %q, %v", excerptTitles(hits), err)
-	}
-	hits, _, err = s.Excerpts(bg, "rahul did you submit", "tejashree ne kya pucha", 3)
-	if err != nil || len(hits) != 1 || hits[0].ChatID != r.direct {
-		t.Fatalf("a question that names someone took the names before it: %q, %v", excerptTitles(hits), err)
-	}
-}
-
-func TestExcerptsAboutRecentMessagesPutTheNewestFirst(t *testing.T) {
-	r := newRig(t)
-	teja := r.one("SELECT contact_id_for(NULL, '919111111116@s.whatsapp.net')")
-	r.exec("UPDATE contacts SET saved_name = 'Tejashree' WHERE id = $1", teja)
-	chat := r.one("INSERT INTO chats (kind, contact_id) VALUES ('direct', $1) RETURNING id", teja)
-	r.add(msg{chat: chat, sender: teja, ago: 9000 * time.Minute, body: str("tejashree asked what happened are you fine")})
-	r.add(msg{chat: chat, sender: teja, ago: 3000 * time.Minute, body: str("can you send the notes")})
-	r.add(msg{chat: chat, sender: teja, ago: 600 * time.Minute, body: str("coming to college tomorrow?")})
-	r.pass()
-	s := r.excerpter()
-	hits, _, err := s.Excerpts(bg, "recentlykya pucha", "tejashree ne kya pucha", 3)
-	if err != nil || len(hits) < 2 || hits[0].Lines[0].Text != "coming to college tomorrow?" || hits[1].Lines[0].Text != "can you send the notes" {
-		t.Fatalf("got %q, %v", excerptTitles(hits), err)
-	}
-	hits, _, err = s.Excerpts(bg, "what did tejashree ask", "", 3)
-	if err != nil || len(hits) == 0 || hits[0].Lines[0].Text != "tejashree asked what happened are you fine" {
-		t.Fatalf("a question not about recent messages: %q, %v", excerptTitles(hits), err)
-	}
-}
-
-func TestRecentlyAndFollowUpsAreToldFromOrdinaryWords(t *testing.T) {
-	for q, want := range map[string]bool{
-		"recentlykya pucha": true, "what did she ask recently": true, "latest from rahul": true, "uska last message": true,
-		"abhi kya bola": true, "haal hi mein kya hua": true,
-		"what did rahul say last week": false, "at last": false, "recentre the map": false, "abhi tak bataya": false,
-		"blast": false, "abhishek": false,
-	} {
-		if got := recently.MatchString(q); got != want {
-			t.Errorf("recently %q: %v, want %v", q, got, want)
-		}
-	}
-	for q, want := range map[string]bool{
-		"recentlykya pucha": true, "and the notes?": true, "usne aur kya kaha bhai yaar": true,
-		"party saturday kab hai": false, "what is the capital of peru": false,
-	} {
-		if got := followsUp(q); got != want {
-			t.Errorf("followsUp %q: %v, want %v", q, got, want)
-		}
-	}
-}
-
-func TestExcerptsDoNotCarryAPersonIntoAnUnrelatedQuestion(t *testing.T) {
-	r := newRig(t)
-	teja := r.one("SELECT contact_id_for(NULL, '919111111117@s.whatsapp.net')")
-	r.exec("UPDATE contacts SET saved_name = 'Tejashree' WHERE id = $1", teja)
-	chat := r.one("INSERT INTO chats (kind, contact_id) VALUES ('direct', $1) RETURNING id", teja)
-	r.add(msg{chat: chat, sender: teja, ago: 3000 * time.Minute, body: str("tejashree pucha are you coming")})
-	r.add(msg{chat: chat, sender: teja, ago: 600 * time.Minute, body: str("send my 500 back")})
-	r.pass()
-	s := r.excerpter()
-	s.ExcerptDistance = 0
-	for _, q := range []string{"party saturday kab hai", "abhi party saturday kab hai"} {
-		if hits, _, err := s.Excerpts(bg, q, "tejashree ne kya pucha", 3); err != nil || len(hits) != 0 {
-			t.Fatalf("%q: got %q, %v", q, excerptTitles(hits), err)
-		}
-	}
-}
-
-func TestExcerptsAboutATopicKeepTheBestMatchFirstEvenWhenRecent(t *testing.T) {
-	r := newRig(t)
-	r.say(r.direct, 9000, "assignment deadline is friday submit before noon")
-	for i, text := range []string{"ok bro", "lol", "gm"} {
-		r.say(r.direct, 3000-i*1000, text)
-	}
-	r.pass()
-	s := r.excerpter()
-	for _, q := range []string{
-		"what did rahul say last week about the assignment deadline",
-		"rahul ne recently assignment deadline kya bataya",
-	} {
-		hits, _, err := s.Excerpts(bg, q, "", 3)
-		if err != nil || len(hits) == 0 || hits[0].Lines[0].Text != "assignment deadline is friday submit before noon" {
-			t.Fatalf("%q: got %q, %v", q, excerptTitles(hits), err)
-		}
-	}
-}
-
-func TestExcerptsAboutRecentMessagesNeverShowKayasOwnChat(t *testing.T) {
-	r := newRig(t)
-	r.exec("UPDATE contacts SET saved_name = 'Dhananjay' WHERE id = $1", r.me)
-	self := r.one("INSERT INTO chats (kind, contact_id) VALUES ('direct', $1) RETURNING id", r.me)
-	r.exchange(self, 60, "dhananjay recently", "Nothing.")
-	r.add(msg{chat: r.group, sender: r.rahul, ago: 3000 * time.Minute, body: str("dhananjay is coming")})
-	r.pass()
-	hits, _, err := r.excerpter().Excerpts(bg, "dhananjay recently", "", 3)
-	if err != nil || slices.ContainsFunc(hits, func(e Excerpt) bool { return e.ChatID == self }) {
-		t.Fatalf("got %q, %v", excerptTitles(hits), err)
-	}
-}
-
-func TestExcerptsAboutRecentMessagesTakeTheNewestOfAPersonAndAGroup(t *testing.T) {
-	r := newRig(t)
-	priya := r.one("SELECT contact_id_for(NULL, '919111111118@s.whatsapp.net')")
-	r.exec("UPDATE contacts SET saved_name = 'Priya' WHERE id = $1", priya)
-	direct := r.one("INSERT INTO chats (kind, contact_id) VALUES ('direct', $1) RETURNING id", priya)
-	gang := r.groupNamed("Priya Birthday")
-	r.add(msg{chat: direct, sender: priya, ago: 9000 * time.Minute, body: str("oldest from priya")})
-	r.add(msg{chat: gang, sender: r.rahul, ago: 600 * time.Minute, body: str("newest in the group")})
-	r.add(msg{chat: direct, sender: priya, ago: 3000 * time.Minute, body: str("newer from priya")})
-	r.pass()
-	hits, _, err := r.excerpter().Excerpts(bg, "priya recently", "", 3)
-	if err != nil || len(hits) < 2 || hits[0].Lines[0].Text != "newest in the group" || hits[1].Lines[0].Text != "newer from priya" {
-		t.Fatalf("got %q, %v", excerptTitles(hits), err)
-	}
-}
-
-func TestExcerptsAboutRecentMessagesTakeOnlyTheBestMatchingPerson(t *testing.T) {
-	r := newRig(t)
-	gym := r.one("SELECT contact_id_for(NULL, '919111111119@s.whatsapp.net')")
-	r.exec("UPDATE contacts SET saved_name = 'Gym Trainer', first_name = 'Rahul Gym Trainer' WHERE id = $1", gym)
-	gymChat := r.one("INSERT INTO chats (kind, contact_id) VALUES ('direct', $1) RETURNING id", gym)
-	r.say(r.direct, 9000, "from rahul himself")
-	r.add(msg{chat: gymChat, sender: gym, ago: 600 * time.Minute, body: str("leg day tomorrow")})
-	r.pass()
-	hits, _, err := r.excerpter().Excerpts(bg, "rahul recently", "", 3)
-	if err != nil || len(hits) == 0 || hits[0].ChatID != r.direct {
-		t.Fatalf("got %q, %v", excerptTitles(hits), err)
-	}
-}
-
-func TestExcerptsSearchEveryChatWithAFollowUpAlone(t *testing.T) {
-	r := newRig(t)
-	teja := r.one("SELECT contact_id_for(NULL, '919111111120@s.whatsapp.net')")
-	r.exec("UPDATE contacts SET saved_name = 'Tejashree' WHERE id = $1", teja)
-	r.say(r.direct, 3000, "the notes are ready")
-	r.pass()
-	s := r.excerpter()
-	distance := func(q string) float64 {
-		hits, err := s.Search(bg, q, Filter{ChatIDs: []int64{r.direct}}, 1)
-		if err != nil || len(hits) != 1 {
-			t.Fatalf("%v, %v", hits, err)
-		}
-		return hits[0].Distance
-	}
-	alone, joined := distance("and the notes?"), distance("tejashree ne kya pucha\nand the notes?")
-	if alone >= joined {
-		t.Fatalf("the stub does not tell them apart: %v, %v", alone, joined)
-	}
-	s.ExcerptDistance = (alone + joined) / 2
-	hits, _, err := s.Excerpts(bg, "and the notes?", "tejashree ne kya pucha", 3)
-	if err != nil || len(hits) != 1 || hits[0].ChatID != r.direct {
-		t.Fatalf("got %q, %v", excerptTitles(hits), err)
 	}
 }

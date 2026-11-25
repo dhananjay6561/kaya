@@ -3,10 +3,9 @@ package search
 import (
 	"context"
 	"errors"
-	"regexp"
 	"slices"
 	"strings"
-	"unicode"
+	"time"
 
 	"github.com/jackc/pgx/v5"
 )
@@ -23,108 +22,120 @@ const (
 // and unnamed results are merged.
 const namedBonus = 0.1
 
-// commonWords are words of a question that are never taken for a name or counted as its content,
-// though a contact may be called that: question words, pronouns, fillers, greetings and words that
-// people add to names in an address book, in English and Hinglish.
-var commonWords = map[string]bool{}
+// Limits on a plan, which a model writes: how many names it may give, how long each may be, and how
+// many contacts or groups one name may stand for.
+const (
+	MaxNames    = 5
+	maxNameLen  = 80
+	perName     = 3
+	maxQueryLen = 500
+)
 
-func init() {
-	for _, w := range strings.Fields(`what whats when where which who whom whose why how did does was were has have had the and but
-		for from with about said say says tell told ask asked any some this that there their they them she her him his
-		you your yours mine our are not can could would should will shall just only also very much more most anyone
-		someone something anything everyone everything mention mentioned remember thanks thank please pls okay hey hello
-		hii hiii cool nice good great yes yeah yep nope new old number num phone call called time times plan plans party
-		ignore last next first today yesterday tomorrow week weeks month months year years day days morning night evening
-		message messages msg msgs chat chats group groups sent send sending share shared talk talked talking discuss
-		kya kab kaha kahan kaun kisne kis kisko kyu kyun kaise kitna kitne kitni hai hain tha thi the hoga hogi bola boli
-		bole kahi baat bata batao bataya bataye bolo raha rahi rahe wala wali wale aur bhi abhi kal aaj parso mera meri
-		mere tera teri tere uska uski uske unka unki unke apna apni apne yeh woh voh wo ye isko usko inko unko mujhe tujhe
-		hum tum aap ka ki ke ko se me mein par pe tak liye bhai bhaiya yaar yar kuch nahi nhi haan han acha accha achha
-		thik theek recent recently latest lately newest pucha puchha poocha puchi puchhi likha likhi baare bare sab log logo koi kisi sir madam bro dude ji jee bhej bhejo bheja bheji diya diye kiya kiye kar karo
-		krna karna hua hui hue gaya gayi gaye dekh dekho suno sun क्या कहा कहाँ कहां कब कौन किसने किसको क्यों कैसे
-		कितना है हैं था थी थे और भी बोला बोली बोले बताया बताओ बताना मेरा मेरी तेरा उसका उसकी आज कल`) {
-		commonWords[w] = true
-	}
+// newest is how many of the latest chunks come first when a plan asks for the newest messages.
+const newest = 2
+
+// Plan is what to search DJ's other chats for, worked out from his question by a model, so the
+// search understands any language and any phrasing: what the question is about, the people and
+// groups it names (pronouns already resolved), whether it asks for the newest messages, and the
+// time it covers.
+type Plan struct {
+	Query  string
+	People []string
+	Groups []string
+	Newest bool
+	From   time.Time
+	To     time.Time
 }
 
-// smallTalk are words that alone give a question nothing to search the chats for.
-var smallTalk = map[string]bool{}
-
-func init() {
-	for _, w := range strings.Fields(`hi hii hiii hey hello helo yo sup thanks thank thx tysm ok okay okk cool nice good great
-		awesome yes yeah yep yup nope haan han acha accha achha theek thik bye gm gn morning night how are you doing kaise
-		kese ho hai tum aap kya haal whats what up hmm lol`) {
-		smallTalk[w] = true
-	}
+// Excerpt is a chunk found for a question, with the text of the messages just before it, which
+// masking needs to tell a code from any number.
+type Excerpt struct {
+	Hit
+	Before string
+	// Newest says the chunk is among the newest of the people or groups the plan names (or of all
+	// chats when it names none), put first because the question asked for the newest messages.
+	Newest bool
 }
 
-// searchable says whether question has anything to search the chats for: a word of two or more
-// characters that is not small talk.
-func searchable(question string) bool {
-	for _, w := range strings.FieldsFunc(strings.ToLower(question), notWordRune) {
-		if len([]rune(w)) >= 2 && !smallTalk[w] {
-			return true
-		}
-	}
-	return false
+// Found is what a search for a plan found, and the names in it that match no contact or group.
+type Found struct {
+	Excerpts []Excerpt
+	Unknown  []string
 }
 
-func notWordRune(r rune) bool {
-	return !unicode.IsLetter(r) && !unicode.IsDigit(r) && !unicode.Is(unicode.Mn, r) && !unicode.Is(unicode.Mc, r)
-}
-
-// contentWords are the words of a question that carry meaning: at least three characters (a mark
-// such as a Devanagari vowel sign counts with its letter) and not a common word.
-func contentWords(question string) []string {
-	var out []string
-	for _, w := range strings.FieldsFunc(strings.ToLower(question), notWordRune) {
-		if len([]rune(w)) >= 3 && !commonWords[w] && !slices.Contains(out, w) {
-			out = append(out, w)
-		}
-	}
-	return out
-}
-
-// contactNames are the names DJ saved for a contact or, only when he saved none, the ones they
-// chose for themselves, so nobody can steer the search toward their chats with a name full of
-// question words.
-const contactNames = `to_tsvector('simple', CASE WHEN coalesce(c.saved_name, '') = '' AND coalesce(c.first_name, '') = ''
+// contactName is the name DJ saved for a contact or, only when he saved none, the names they chose
+// for themselves, lower-cased, so nobody can steer the search toward their chats with a name of
+// their choosing. The trigram index on contacts is built on the same expression.
+const contactName = `lower(CASE WHEN coalesce(c.saved_name, '') = '' AND coalesce(c.first_name, '') = ''
 	THEN coalesce(c.push_name, '') || ' ' || coalesce(c.business_name, '')
 	ELSE coalesce(c.saved_name, '') || ' ' || coalesce(c.first_name, '') END)`
 
-// named finds who a question names: contacts with a chat or a message, and group chats, whose
-// names have the most of the question's words, at most 20 of each.
-func (s *Searcher) named(ctx context.Context, words []string) (contacts, chats []int64, err error) {
-	if len(words) == 0 {
-		return nil, nil, nil
-	}
-	query := strings.Join(words, " | ")
+// people finds the contacts each name stands for, by trigram word similarity so a misspelling or
+// any script matches: up to perName contacts with a chat or a message, the closest names first and,
+// among names as close, the people DJ talked to most recently.
+func (s *Searcher) people(ctx context.Context, names []string) (best, all []int64, unknown []string, err error) {
+	return s.resolve(ctx, names, `
+		SELECT c.id FROM contacts c
+		WHERE lower($1) <% `+contactName+`
+		  AND (EXISTS (SELECT 1 FROM chats ch WHERE ch.contact_id = c.id)
+		       OR EXISTS (SELECT 1 FROM messages m WHERE m.sender_id = c.id))
+		ORDER BY round(word_similarity(lower($1), `+contactName+`)::numeric, 1) DESC,
+		         greatest((SELECT max(m.sent_at) FROM messages m WHERE m.sender_id = c.id),
+		                  (SELECT max(m.sent_at) FROM chats ch JOIN messages m ON m.chat_id = ch.id WHERE ch.contact_id = c.id)) DESC NULLS LAST,
+		         c.id
+		LIMIT $2`)
+}
+
+// groups finds the group chats each name stands for, like people.
+func (s *Searcher) groups(ctx context.Context, names []string) (best, all []int64, unknown []string, err error) {
+	return s.resolve(ctx, names, `
+		SELECT ch.id FROM chats ch
+		WHERE ch.kind = 'group' AND lower($1) <% lower(coalesce(ch.name, ''))
+		ORDER BY round(word_similarity(lower($1), lower(coalesce(ch.name, '')))::numeric, 1) DESC,
+		         (SELECT max(m.sent_at) FROM messages m WHERE m.chat_id = ch.id) DESC NULLS LAST,
+		         ch.id
+		LIMIT $2`)
+}
+
+func (s *Searcher) resolve(ctx context.Context, names []string, query string) (best, all []int64, unknown []string, err error) {
 	err = s.DB.InTx(ctx, func(tx pgx.Tx) error {
-		rows, err := tx.Query(ctx, `
-			SELECT c.id FROM contacts c, to_tsquery('simple', $1) q
-			WHERE `+contactNames+` @@ q
-			  AND (EXISTS (SELECT 1 FROM chats ch WHERE ch.contact_id = c.id)
-			       OR EXISTS (SELECT 1 FROM messages m WHERE m.sender_id = c.id))
-			ORDER BY ts_rank(`+contactNames+`, q) DESC, c.id
-			LIMIT 20`, query)
-		if err != nil {
-			return err
+		for _, name := range names {
+			rows, err := tx.Query(ctx, query, name, perName)
+			if err != nil {
+				return err
+			}
+			ids, err := pgx.CollectRows(rows, pgx.RowTo[int64])
+			if err != nil {
+				return err
+			}
+			if len(ids) == 0 {
+				unknown = append(unknown, name)
+				continue
+			}
+			if !slices.Contains(best, ids[0]) {
+				best = append(best, ids[0])
+			}
+			for _, id := range ids {
+				if !slices.Contains(all, id) {
+					all = append(all, id)
+				}
+			}
 		}
-		if contacts, err = pgx.CollectRows(rows, pgx.RowTo[int64]); err != nil {
-			return err
-		}
-		rows, err = tx.Query(ctx, `
-			SELECT ch.id FROM chats ch, to_tsquery('simple', $1) q
-			WHERE ch.kind = 'group' AND to_tsvector('simple', coalesce(ch.name, '')) @@ q
-			ORDER BY ts_rank(to_tsvector('simple', coalesce(ch.name, '')), q) DESC, ch.id
-			LIMIT 20`, query)
-		if err != nil {
-			return err
-		}
-		chats, err = pgx.CollectRows(rows, pgx.RowTo[int64])
-		return err
+		return nil
 	})
-	return contacts, chats, err
+	return best, all, unknown, err
+}
+
+// cleanNames keeps up to MaxNames distinct names of a plan, each on one line and cut to maxNameLen.
+func cleanNames(names []string) []string {
+	var out []string
+	for _, n := range names {
+		n = cut(oneLine(n), maxNameLen)
+		if n != "" && len(out) < MaxNames && !slices.ContainsFunc(out, func(o string) bool { return strings.EqualFold(o, n) }) {
+			out = append(out, n)
+		}
+	}
+	return out
 }
 
 // selfChat is DJ's own chat with Kaya: the direct chat with the account the gateway is linked to
@@ -149,82 +160,46 @@ func (s *Searcher) selfChat(ctx context.Context) (int64, error) {
 	return id, err
 }
 
-// Excerpt is a chunk found for a question, with the text of the messages just before it, which
-// masking needs to tell a code from any number.
-type Excerpt struct {
-	Hit
-	Before string
-}
-
-// recently matches a question about the newest messages ("what did she ask recently", "latest",
-// "last message", "abhi kya bola"), also run into the next word as typed in a hurry
-// ("recentlykya"), but not "last week", "at last" or "abhi tak".
-var recently = regexp.MustCompile(`\brecent(?:ly|\b)|\blatest\b|\blately\b|\bnewest\b|\blast (?:message|messages|msg|msgs|text|baat|chat)\b|\babhi (?:kya|kuch)\b|\bhaal hi\b`)
-
-// cues are words that make a question lean on the one before it.
-var cues = map[string]bool{}
-
-func init() {
-	for _, w := range strings.Fields(`and also else then before after aur bhi phir fir pehle baad usne usko uski uska uske unhone
-		unko unki unka unke isne isko she he her him his they them`) {
-		cues[w] = true
-	}
-}
-
-// followsUp says whether question may be a follow-up to the one before it: a short question, or one
-// with a word that leans on what came before ("and", "usne") or asks about recent messages.
-func followsUp(question string) bool {
-	words := strings.FieldsFunc(strings.ToLower(question), notWordRune)
-	if len(words) <= 3 || recently.MatchString(strings.ToLower(question)) {
-		return true
-	}
-	return slices.ContainsFunc(words, func(w string) bool { return cues[w] })
-}
-
-// newest is how many of the latest chunks of the people or groups a question names come first when
-// it asks about recent messages.
-const newest = 2
-
 // Excerpts finds up to limit chunks of DJ's other chats (never his own chat with Kaya, which
-// Recall covers) that bear on question, best first, and says whether it searched: a question with
-// no words of substance ("hi", "thanks") is not searched. Chunks of the people or groups the
-// question names are searched alongside every chat, with a looser bar and a head start, so a name
-// that matches by chance cannot hide a better answer elsewhere; when it asks about recent
-// messages and has no topic of its own ("what did Priya say recently"), the newest chunks of the
-// person or group it names best come first. earlier is DJ's previous question when he asked it
-// moments ago: a question that names nobody and looks like a follow-up ("and recently?") takes
-// the names in earlier, and their chats are searched with both questions together.
-func (s *Searcher) Excerpts(ctx context.Context, question, earlier string, limit int) ([]Excerpt, bool, error) {
-	if limit <= 0 || !searchable(question) {
-		return nil, false, nil
+// Recall covers) for a plan, best first, within the plan's time. Chunks of the people and groups it
+// names are searched alongside every chat, with a looser bar and a head start, so a name that
+// matches by chance cannot hide a better answer elsewhere. When the plan asks for the newest
+// messages, the newest chunks of the best match for each name (or of all chats, when it names
+// nobody) come first, whatever they are about, since meaning cannot tell new from old.
+func (s *Searcher) Excerpts(ctx context.Context, p Plan, limit int) (Found, error) {
+	if limit <= 0 {
+		return Found{}, nil
 	}
-	words := contentWords(question)
+	query := cut(oneLine(p.Query), maxQueryLen)
+	people, groups := cleanNames(p.People), cleanNames(p.Groups)
+	if query == "" {
+		query = strings.Join(append(slices.Clone(people), groups...), " ")
+	}
 	self, err := s.selfChat(ctx)
 	if err != nil {
-		return nil, true, err
+		return Found{}, err
 	}
-	var exclude []int64
+	window := Filter{From: p.From, To: p.To}
 	if self != 0 {
-		exclude = []int64{self}
+		window.ExcludeChatIDs = []int64{self}
 	}
-	contacts, chats, err := s.named(ctx, words)
+	bestContacts, contacts, unknownPeople, err := s.people(ctx, people)
 	if err != nil {
-		return nil, true, err
+		return Found{}, err
 	}
-	namedQuery := question
-	if len(contacts)+len(chats) == 0 && strings.TrimSpace(earlier) != "" && followsUp(question) {
-		if contacts, chats, err = s.named(ctx, contentWords(earlier)); err != nil {
-			return nil, true, err
-		}
-		namedQuery = earlier + "\n" + question
+	bestChats, chats, unknownGroups, err := s.groups(ctx, groups)
+	if err != nil {
+		return Found{}, err
 	}
-	type found struct {
-		hit   Hit
-		score float64
+	found := Found{Unknown: append(unknownPeople, unknownGroups...)}
+
+	type candidate struct {
+		hit    Hit
+		score  float64
+		newest bool
 	}
-	best := map[int64]found{}
-	consider := func(query string, f Filter, bar, bonus float64) error {
-		f.ExcludeChatIDs = exclude
+	best := map[int64]candidate{}
+	consider := func(f Filter, bar, bonus float64) error {
 		hits, err := s.Search(ctx, query, f, limit+5)
 		if err != nil {
 			return err
@@ -234,53 +209,73 @@ func (s *Searcher) Excerpts(ctx context.Context, question, earlier string, limit
 				continue
 			}
 			if prev, ok := best[h.ChunkID]; !ok || h.Distance-bonus < prev.score {
-				best[h.ChunkID] = found{hit: h, score: h.Distance - bonus}
+				best[h.ChunkID] = candidate{hit: h, score: h.Distance - bonus}
 			}
 		}
 		return nil
 	}
-	if len(contacts) > 0 {
-		if err := consider(namedQuery, Filter{ContactIDs: contacts}, s.NamedDistance, namedBonus); err != nil {
-			return nil, true, err
-		}
-	}
-	if len(chats) > 0 {
-		if err := consider(namedQuery, Filter{ChatIDs: chats}, s.NamedDistance, namedBonus); err != nil {
-			return nil, true, err
-		}
-	}
-	if err := consider(question, Filter{}, s.ExcerptDistance, 0); err != nil {
-		return nil, true, err
-	}
-	topical, err := s.topical(ctx, words, contacts, chats)
-	if err != nil {
-		return nil, true, err
-	}
-	if recently.MatchString(strings.ToLower(question)) && len(contacts)+len(chats) > 0 && !topical {
-		var latest []Hit
-		for _, f := range []Filter{{ContactIDs: contacts[:min(1, len(contacts))]}, {ChatIDs: chats[:min(1, len(chats))]}} {
-			if len(f.ContactIDs)+len(f.ChatIDs) == 0 {
-				continue
+	if query != "" {
+		if len(contacts) > 0 {
+			f := window
+			f.ContactIDs = contacts
+			if err := consider(f, s.NamedDistance, namedBonus); err != nil {
+				return Found{}, err
 			}
-			f.ExcludeChatIDs = exclude
+		}
+		if len(chats) > 0 {
+			f := window
+			f.ChatIDs = chats
+			if err := consider(f, s.NamedDistance, namedBonus); err != nil {
+				return Found{}, err
+			}
+		}
+		if err := consider(window, s.ExcerptDistance, 0); err != nil {
+			return Found{}, err
+		}
+	}
+	if p.Newest {
+		var filters []Filter
+		for _, id := range bestContacts {
+			f := window
+			f.ContactIDs = []int64{id}
+			filters = append(filters, f)
+		}
+		if len(bestChats) > 0 {
+			f := window
+			f.ChatIDs = bestChats
+			filters = append(filters, f)
+		}
+		if len(people)+len(groups) == 0 {
+			filters = append(filters, window)
+		}
+		var latest []Hit
+		for _, f := range filters {
 			hits, err := s.Latest(ctx, f, newest)
 			if err != nil {
-				return nil, true, err
+				return Found{}, err
 			}
 			latest = append(latest, hits...)
 		}
 		slices.SortStableFunc(latest, func(a, b Hit) int {
 			return b.Lines[len(b.Lines)-1].SentAt.Compare(a.Lines[len(a.Lines)-1].SentAt)
 		})
-		for i, h := range latest[:min(newest, len(latest))] {
-			best[h.ChunkID] = found{hit: h, score: -10 + float64(i)}
+		taken := 0
+		for _, h := range latest {
+			if taken == newest {
+				break
+			}
+			if prev, ok := best[h.ChunkID]; ok && prev.newest {
+				continue
+			}
+			best[h.ChunkID] = candidate{hit: h, score: -10 + float64(taken), newest: true}
+			taken++
 		}
 	}
-	all := make([]found, 0, len(best))
-	for _, f := range best {
-		all = append(all, f)
+	all := make([]candidate, 0, len(best))
+	for _, c := range best {
+		all = append(all, c)
 	}
-	slices.SortFunc(all, func(a, b found) int {
+	slices.SortFunc(all, func(a, b candidate) int {
 		switch {
 		case a.score < b.score:
 			return -1
@@ -292,41 +287,14 @@ func (s *Searcher) Excerpts(ctx context.Context, question, earlier string, limit
 	if len(all) > limit {
 		all = all[:limit]
 	}
-	out := make([]Excerpt, len(all))
-	for i, f := range all {
-		before, err := s.before(ctx, f.hit.ChatID, f.hit.Lines[0])
+	for _, c := range all {
+		before, err := s.before(ctx, c.hit.ChatID, c.hit.Lines[0])
 		if err != nil {
-			return nil, true, err
+			return Found{}, err
 		}
-		out[i] = Excerpt{Hit: f.hit, Before: before}
+		found.Excerpts = append(found.Excerpts, Excerpt{Hit: c.hit, Before: before, Newest: c.newest})
 	}
-	return out, true, nil
-}
-
-// topical says whether the question's words say what it is about beyond who it names: a word that
-// is not part of the name of the best-matching contact or group, and does not ask for recent
-// messages.
-func (s *Searcher) topical(ctx context.Context, words []string, contacts, chats []int64) (bool, error) {
-	var names []string
-	if len(contacts) > 0 {
-		var name string
-		if err := s.DB.QueryRow(ctx, `
-			SELECT lower(concat_ws(' ', c.saved_name, c.first_name, c.push_name, c.business_name)) FROM contacts c WHERE c.id = $1`,
-			contacts[0]).Scan(&name); err != nil {
-			return false, err
-		}
-		names = append(names, strings.FieldsFunc(name, notWordRune)...)
-	}
-	if len(chats) > 0 {
-		var name string
-		if err := s.DB.QueryRow(ctx, `SELECT lower(coalesce(name, '')) FROM chats WHERE id = $1`, chats[0]).Scan(&name); err != nil {
-			return false, err
-		}
-		names = append(names, strings.FieldsFunc(name, notWordRune)...)
-	}
-	return slices.ContainsFunc(words, func(w string) bool {
-		return !slices.Contains(names, w) && !recently.MatchString(w) && !cues[w]
-	}), nil
+	return found, nil
 }
 
 // before is the text of the three messages before first in its chat, as the indexer reads it.
