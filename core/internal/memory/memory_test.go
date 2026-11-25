@@ -358,7 +358,7 @@ func TestBuildSaysWhenTheSearchFoundNothingOrFailed(t *testing.T) {
 		want     string
 	}{
 		{Searched, nil, "s\n\n" + nothingFound},
-		{Searched, []string{strings.Repeat("y", 2000)}, "s\n\n" + nothingFound},
+		{Searched, []string{strings.Repeat("y", 2000)}, "s\n\n" + didNotFit},
 		{SearchFailed, nil, "s\n\n" + searchFailed},
 		{DidNotFit, nil, "s\n\n" + didNotFit},
 		{NotSearched, nil, "s"},
@@ -367,6 +367,13 @@ func TestBuildSaysWhenTheSearchFoundNothingOrFailed(t *testing.T) {
 		if len(p.Messages) != 2 || p.Messages[0].Content != c.want || p.Excerpts != 0 || p.Tokens != counted(p) {
 			t.Fatalf("%v: %+v", c.search, p)
 		}
+	}
+}
+
+func TestBuildLeavesOutAStatusThatDoesNotFit(t *testing.T) {
+	p := Build(Input{System: "s", Question: "q", ChatSearch: SearchFailed, Budget: requestOverhead + 10, Count: count, Now: at})
+	if p.Messages[0].Content != "s" || p.Tokens > requestOverhead+10 {
+		t.Fatalf("%+v", p)
 	}
 }
 
@@ -380,7 +387,7 @@ func TestBuildKeepsExcerptsRecallAndHistoryWithinTheBudgetTogether(t *testing.T)
 	}
 	excerpts := []string{strings.Repeat("e", 120), strings.Repeat("f", 300), strings.Repeat("g", 60)}
 	together := false
-	for budget := 600; budget <= 4000; budget += 13 {
+	for budget := 400; budget <= 4000; budget += 13 {
 		p := Build(Input{
 			System: "system", History: history, Recalled: recalled, MaxRecalled: 3, RecallReserve: budget / 4,
 			Excerpts: excerpts, Tag: "t", ChatSearch: Searched, Question: "question", Budget: budget, Count: count, Now: at,

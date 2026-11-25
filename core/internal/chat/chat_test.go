@@ -712,7 +712,7 @@ func TestReplyTellsTheModelWhatTheChatSearchDid(t *testing.T) {
 		search func(context.Context, Question, string) ([]search.Excerpt, bool, error)
 		want   string
 	}{
-		{"found nothing", found(), "found nothing to show you"},
+		{"found nothing", found(), "found nothing for this question"},
 		{"failed", func(context.Context, Question, string) ([]search.Excerpt, bool, error) {
 			return nil, true, errors.New("voyage away")
 		}, "failed this time"},
@@ -821,7 +821,7 @@ func TestReplySearchesAFollowUpWithTheQuestionJustBefore(t *testing.T) {
 	if !slices.Equal(got, []string{"tejashree ne kya pucha", ""}) {
 		t.Fatalf("earlier %q", got)
 	}
-	if sys := stub.Requests()[0].Messages[0].Content; !strings.Contains(sys, "never say you cannot see or read them") {
+	if sys := stub.Requests()[0].Messages[0].Content; !strings.Contains(sys, "never say you cannot, even if") {
 		t.Fatalf("system:\n%s", sys)
 	}
 }
