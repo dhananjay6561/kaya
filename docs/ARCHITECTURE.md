@@ -33,6 +33,8 @@ kaya/
 │       ├── llm/            the Provider interface, Groq, the stub; o200k/ counts gpt-oss tokens
 │       ├── memory/         the conversation (exchanges) and the context package
 │       ├── chat/           system prompt, replies, WhatsApp formatting
+│       ├── embeddings/     the embeddings Provider interface, Voyage, the stub
+│       ├── search/         chunks of chat text and the indexer that keeps them embedded
 │       ├── masking/        placeholders for private details before a cloud model
 │       └── text/           text rules kept from the TypeScript core
 ├── gateway/                Go WhatsApp gateway (its own Go module)
@@ -170,8 +172,8 @@ Folders appear when a phase needs them; empty placeholders are not committed.
 - `gateway` writes contacts, chats, messages and reactions. It resolves every person through
   `contact_id_for()`, never by inserting into `contacts` directly. `core` reads them and owns
   everything it creates: today `commands` (its inbox of what DJ typed in his own chat, kept 30
-  days after it finishes), `exchanges` (the conversation memory, kept for good) and `pause_state`;
-  later tasks, jobs, pending actions and usage. Core's tables point at messages by id or WhatsApp
+  days after it finishes), `exchanges` (the conversation memory, kept for good), `pause_state`, and
+  the search index, `chunks` and `message_chunks`; later tasks, jobs, pending actions and usage. Core's tables point at messages by id or WhatsApp
   id, never by foreign key, because the chat tables belong to the gateway.
 - **Media.** A media message gets a `media` row (what the file is, and whether it is `remote`,
   `stored`, `expired` or `failed`) and, when it can be fetched, a `media_keys` row that only the
@@ -198,6 +200,17 @@ Folders appear when a phase needs them; empty placeholders are not committed.
   the gateway can read, and
   then acknowledged, so one bad message never blocks the rest and can be replayed after a fix.
   Storing the same message twice changes nothing and emits nothing.
+- **Search index.** One worker in core, under its own advisory lock, groups text messages (and
+  captions and poll questions) of one chat sent within 10 minutes into chunks of up to 30 messages
+  or 1,500 characters, once they are 10 minutes old by when they were sent and when they were
+  stored. Each chunk is written as the chat's name, the day and `time sender: text` lines, masked
+  for a cloud provider, embedded, and stored with a hash of its unmasked text and the model's name;
+  the text itself is never stored again. `message_chunks` keeps the `updated_at` each message was
+  read with, so an edit, a delete, a hard delete or a move to another chat is noticed even if it
+  landed during the call, and the chunk is made again only if its text changed. A message that
+  lands inside an existing chunk's time span makes that chunk again with it. A chunk the service
+  refuses is stored as skipped, a rate limit halves the batch and waits as asked, a refused key or
+  a write the database refuses stops indexing for 10 minutes, and it waits while Kaya is paused.
 - **History sync.** Each history chunk WhatsApp announces becomes a row in `history_jobs`, stored
   in the transaction that acknowledges the announcement. A single worker downloads the chunk,
   stores it in batches of at most 200 messages (a savepoint per message, so one bad message
@@ -226,6 +239,10 @@ Folders appear when a phase needs them; empty placeholders are not committed.
     fails because a dependency is down; it connects in the background, and the channel is a
     `/health` check like the db. Every handler sees every message; failures are collected and
     reported together.
+  - `embeddings` (`internal/embeddings`): `Embed()` turns up to `MaxBatch()` texts into 1024-long
+    vectors, as a `document` to store or a `query` to search with. Each provider names its model,
+    which is stored with every vector, and says whether it is a cloud service, so text is masked
+    before it leaves.
   - `telephony` comes with the phone-call stage: `PlaceCall()` to an E.164 number with a brief,
     and `GetCall()` for status and transcript. Until then `TELEPHONY_PROVIDER` only accepts `stub`.
   - Every outward action (`Send`, `PlaceCall`) takes a required idempotency key. A repeated key

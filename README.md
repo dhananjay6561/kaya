@@ -14,8 +14,8 @@ when a task needs one.
 > **Status: early development.** The WhatsApp side (pairing, message and history storage, media,
 > sending) and the command channel are built and checked on a real phone. In your own chat Kaya
 > already answers through Groq, remembers your conversation with it, and masks private details
-> before anything reaches the cloud. Answers from your other chats, tools and acting for you are on
-> the roadmap. See [Project status and roadmap](#project-status-and-roadmap).
+> before anything reaches the cloud. Your chats are being turned into a search index. Answers from
+> your other chats, tools and acting for you are on the roadmap. See [Project status and roadmap](#project-status-and-roadmap).
 
 ## Contents
 
@@ -87,6 +87,11 @@ contact, and it works with everything your WhatsApp account can see.
   numbers, emails, OTPs, card and account numbers, Aadhaar, PAN, UPI ids and addresses replaced by
   placeholders like `[PHONE_1]`, which are put back in the answer before you see it. A local model
   gets the text as it is.
+- **A search index of your chats.** Messages of one chat sent close together are grouped into
+  chunks and embedded by Voyage `voyage-4`, after masking (names go as they are), into pgvector in
+  your own database. Only a hash of each chunk's text is kept, never a second copy of it. Edits,
+  deletes and history that arrives late make the affected chunk again; `/status` shows how much of
+  your history is searchable. Searching it comes next.
 - **Least-privilege database logins.** The gateway and core each have their own Postgres role.
   Core, the part that will talk to an LLM, can read chats but cannot see the WhatsApp session, its
   encryption keys, or the keys needed to fetch media.
@@ -141,7 +146,8 @@ Most of the enforcement arrives with the agent stages. Some of it is already in 
 - Events between services carry row ids, never message text, so queues and logs never hold chat
   content.
 - Masking runs on everything sent to Groq that you did not type yourself, today Kaya's own past
-  answers, and only placeholders and per-kind counts ever appear in logs.
+  answers, and on every chunk of chat text sent to Voyage to be embedded. Contact and group names
+  go as they are. Only placeholders and per-kind counts ever appear in logs.
 - The gateway container gets only the settings it needs and never sees API keys. WhatsApp addresses
   and raw protocol messages are masked in its logs.
 
@@ -167,6 +173,7 @@ language with the best libraries for it, and they talk only through versioned co
 flowchart LR
     phone["Your phone<br/>WhatsApp"]
     llm["LLM provider<br/>Groq"]
+    embed["Embeddings<br/>Voyage"]
 
     subgraph host["Your machine, Docker Compose"]
         gateway["gateway<br/>Go, whatsmeow"]
@@ -188,6 +195,7 @@ flowchart LR
     db -->|"events, in order"| core
     core -->|"send requests via Postgres outbox"| gateway
     core -->|"masked context"| llm
+    core -->|"masked chunks"| embed
     core -.-> whisper
     core -.-> searxng
     core -.-> docs
@@ -200,7 +208,7 @@ flowchart LR
 
 *Figure 1. System architecture. Solid boxes and lines are built today: the gateway, core, Postgres,
 the migration step, events from the gateway to core, send requests from core to the gateway, and
-core asking Groq with masked context. Dashed boxes and lines are planned: the whisper, search, docs,
+core asking Groq with masked context and Voyage for vectors of masked chunks. Dashed boxes and lines are planned: the whisper, search, docs,
 browser and voice services.*
 
 ### How the gateway and core talk
@@ -334,6 +342,8 @@ erDiagram
     messages ||..o| exchanges : "is the question, no FK"
     messages ||..o| exchanges : "is the answer, by wa_id"
     send_requests ||..o| messages : "becomes, by wa_id"
+    messages ||..o| message_chunks : "is indexed in, no FK"
+    chunks ||--|{ message_chunks : "holds"
 
     commands {
         bigint id PK
@@ -352,6 +362,22 @@ erDiagram
         bigint question_message_id UK
         text answer_wa_id "Kaya's answer"
         timestamptz created_at
+    }
+    chunks {
+        bigint id PK
+        bigint chat_id
+        timestamptz first_sent_at
+        timestamptz last_sent_at
+        int message_count
+        text text_hash "of the text, never the text"
+        text model "voyage-4"
+        halfvec embedding "1024, HNSW cosine index"
+        text skipped "set when the service refused it"
+    }
+    message_chunks {
+        bigint message_id PK
+        bigint chunk_id FK
+        timestamptz message_updated_at "as read"
     }
     pause_state {
         boolean only_row PK "always one row"
@@ -382,7 +408,9 @@ erDiagram
     }
 ```
 
-*Figure 4. Core's tables and the two outboxes. `commands` is the inbox of what DJ typed in his own
+*Figure 4. Core's tables and the two outboxes. `chunks` and `message_chunks` are the search index:
+each chunk is a few messages of one chat embedded as one vector, and each indexed message points at
+its chunk. `commands` is the inbox of what DJ typed in his own
 chat; finished rows are deleted after 30 days. `exchanges` is the conversation memory, one row per
 question and answer, kept for good. `pause_state` holds `/pause`. `gateway_events` and
 `send_requests` are the queues between the services; handled and finished rows are deleted after 7
@@ -402,6 +430,7 @@ target instead of adding rows.
 | Database | Postgres 18 with pgvector, migrations with dbmate |
 | Contracts | JSON Schema 2020-12, validated with santhosh-tekuri/jsonschema in a shared Go module |
 | LLM | Groq behind a provider interface (`openai/gpt-oss-120b` and `openai/gpt-oss-20b`) |
+| Embeddings | Voyage `voyage-4` behind a provider interface, 1024 dimensions, stored as `halfvec` with an HNSW index |
 | Runtime | Docker Compose, distroless images, non-root, read-only root filesystem |
 | Quality | golangci-lint, `go test -race`, golden files from the TypeScript core, SQL schema tests, GitHub Actions |
 
