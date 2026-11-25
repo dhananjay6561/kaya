@@ -20,6 +20,19 @@ type Groq struct {
 	ContextTokens int
 }
 
+// Voyage holds the settings of the Voyage embeddings provider.
+type Voyage struct {
+	APIKey string
+	Model  string
+}
+
+// Embeddings names the embeddings provider and its settings. Vectors always have 1024 dimensions,
+// the size of the search index's column.
+type Embeddings struct {
+	Provider string
+	Voyage   Voyage
+}
+
 // LLM names the LLM provider and its settings.
 type LLM struct {
 	Provider string
@@ -35,6 +48,7 @@ type Config struct {
 	DatabaseURL string
 	TimeZone    string
 	LLM         LLM
+	Embeddings  Embeddings
 	Channel     string
 	Telephony   string
 }
@@ -79,6 +93,13 @@ func Load(getenv func(string) string, baseDir string) (Config, error) {
 				HeavyModel:    orDefault(getenv("GROQ_MODEL_HEAVY"), "openai/gpt-oss-120b"),
 				RoutineModel:  orDefault(getenv("GROQ_MODEL_ROUTINE"), "openai/gpt-oss-20b"),
 				ContextTokens: 2000,
+			},
+		},
+		Embeddings: Embeddings{
+			Provider: oneOf("EMBEDDINGS_PROVIDER", "voyage", "voyage", "stub"),
+			Voyage: Voyage{
+				APIKey: getenv("VOYAGE_API_KEY"),
+				Model:  orDefault(getenv("VOYAGE_MODEL"), "voyage-4"),
 			},
 		},
 		Channel:   oneOf("CHAT_CHANNEL", "gateway", "gateway", "stub"),
@@ -128,6 +149,9 @@ func Load(getenv func(string) string, baseDir string) (Config, error) {
 	}
 	if cfg.LLM.Provider == "groq" && cfg.LLM.Groq.APIKey == "" {
 		fail("GROQ_API_KEY", "required")
+	}
+	if cfg.Embeddings.Provider == "voyage" && cfg.Embeddings.Voyage.APIKey == "" {
+		fail("VOYAGE_API_KEY", "required")
 	}
 
 	if len(problems) > 0 {

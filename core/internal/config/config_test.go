@@ -9,8 +9,9 @@ import (
 )
 
 var valid = map[string]string{
-	"DATABASE_URL": "postgres://localhost:5432/kaya",
-	"GROQ_API_KEY": "test-key-not-real",
+	"DATABASE_URL":   "postgres://localhost:5432/kaya",
+	"GROQ_API_KEY":   "test-key-not-real",
+	"VOYAGE_API_KEY": "test-key-not-real",
 }
 
 func env(values map[string]string, extra ...string) func(string) string {
@@ -58,8 +59,9 @@ func TestDefaults(t *testing.T) {
 			RoutineModel:  "openai/gpt-oss-20b",
 			ContextTokens: 2000,
 		}},
-		Channel:   "gateway",
-		Telephony: "stub",
+		Channel:    "gateway",
+		Embeddings: Embeddings{Provider: "voyage", Voyage: Voyage{APIKey: "test-key-not-real", Model: "voyage-4"}},
+		Telephony:  "stub",
 	}
 	if cfg != want {
 		t.Fatalf("got %+v, want %+v", cfg, want)
@@ -94,14 +96,14 @@ func TestPrefersCoreDatabaseURL(t *testing.T) {
 }
 
 func TestSwitchesProvidersThroughConfig(t *testing.T) {
-	cfg := load(t, env(map[string]string{"DATABASE_URL": valid["DATABASE_URL"], "LLM_PROVIDER": "stub", "CHAT_CHANNEL": "stub"}))
+	cfg := load(t, env(map[string]string{"DATABASE_URL": valid["DATABASE_URL"], "LLM_PROVIDER": "stub", "CHAT_CHANNEL": "stub", "EMBEDDINGS_PROVIDER": "stub"}))
 	if cfg.LLM.Provider != "stub" || cfg.Channel != "stub" {
 		t.Fatalf("got %+v", cfg)
 	}
 }
 
 func TestGroqKeyOnlyForGroq(t *testing.T) {
-	base := map[string]string{"DATABASE_URL": valid["DATABASE_URL"]}
+	base := map[string]string{"DATABASE_URL": valid["DATABASE_URL"], "EMBEDDINGS_PROVIDER": "stub"}
 	if got := problems(t, env(base, "LLM_PROVIDER", "groq")); !slices.Equal(got, []string{"GROQ_API_KEY: required"}) {
 		t.Fatalf("got %v", got)
 	}
@@ -119,10 +121,10 @@ func TestRejectsUnknownProviders(t *testing.T) {
 
 func TestListsEveryMissingValueAtOnce(t *testing.T) {
 	got := problems(t, env(nil))
-	if !slices.Equal(got, []string{"DATABASE_URL: required", "GROQ_API_KEY: required"}) {
+	if !slices.Equal(got, []string{"DATABASE_URL: required", "GROQ_API_KEY: required", "VOYAGE_API_KEY: required"}) {
 		t.Fatalf("got %v", got)
 	}
-	if got := problems(t, env(map[string]string{"DATABASE_URL": "", "GROQ_API_KEY": ""})); len(got) != 2 {
+	if got := problems(t, env(map[string]string{"DATABASE_URL": "", "GROQ_API_KEY": "", "VOYAGE_API_KEY": ""})); len(got) != 3 {
 		t.Fatalf("empty values should count as missing: %v", got)
 	}
 }
@@ -191,5 +193,22 @@ func TestDatabaseURLsAreTrimmedAndSocketsAllowed(t *testing.T) {
 	}
 	if got := load(t, env(valid, "CORE_PORT", " 8080 ")).Port; got != 8080 {
 		t.Fatalf("got %d", got)
+	}
+}
+
+func TestNeedsAVoyageKeyOnlyForVoyage(t *testing.T) {
+	base := map[string]string{"DATABASE_URL": valid["DATABASE_URL"], "GROQ_API_KEY": "k"}
+	if got := problems(t, env(base)); !slices.Equal(got, []string{"VOYAGE_API_KEY: required"}) {
+		t.Fatalf("got %v", got)
+	}
+	cfg := load(t, env(base, "EMBEDDINGS_PROVIDER", "stub"))
+	if cfg.Embeddings.Provider != "stub" {
+		t.Fatalf("provider %q", cfg.Embeddings.Provider)
+	}
+	if got := problems(t, env(valid, "EMBEDDINGS_PROVIDER", "openai")); !slices.Equal(got, []string{"EMBEDDINGS_PROVIDER: must be one of voyage, stub"}) {
+		t.Fatalf("got %v", got)
+	}
+	if cfg := load(t, env(valid, "VOYAGE_MODEL", "voyage-4-large")); cfg.Embeddings.Voyage.Model != "voyage-4-large" {
+		t.Fatalf("model %q", cfg.Embeddings.Voyage.Model)
 	}
 }
