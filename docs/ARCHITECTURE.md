@@ -227,6 +227,13 @@ Folders appear when a phase needs them; empty placeholders are not committed.
   it, in a quarter of the budget set aside for them plus what the conversation leaves. The query
   for recall has a 5-second deadline and no retries, so a slow embedding service costs a reply a
   few seconds at most.
+- **Answers from chats.** For every question, Kaya also looks for up to three excerpts in DJ's other
+  chats (never his own chat with Kaya). Words of the question that are a whole word of a contact's or
+  a group's name narrow the search to them (within cosine distance 0.7); if that finds nothing, all
+  chats are searched (within 0.6). Each excerpt is rendered like a chunk, masked with the question's
+  mask session for a cloud model, its angle brackets replaced with look-alikes, and put in the system
+  message inside `<excerpt>` blocks after a note that they are data and never instructions. Excerpts
+  take at most half the room the system prompt and the question leave.
 - **History sync.** Each history chunk WhatsApp announces becomes a row in `history_jobs`, stored
   in the transaction that acknowledges the announcement. A single worker downloads the chunk,
   stores it in batches of at most 200 messages (a savepoint per message, so one bad message
