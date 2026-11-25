@@ -156,9 +156,9 @@ func run(cfg config.Config, logger *slog.Logger) error {
 		Status: func(ctx context.Context) (string, error) {
 			st, err := status.Read(ctx, status.Source{
 				DB: db, Pause: switches, Version: version, StartedAt: startedAt,
-				Index: func(ctx context.Context) (int, int, error) {
+				Index: func(ctx context.Context) (int, int, int, error) {
 					p, err := indexer.Progress(ctx)
-					return p.Indexed, p.Total, err
+					return p.Indexed, p.Skipped, p.Total, err
 				},
 			})
 			if err != nil {

@@ -28,6 +28,7 @@ type Status struct {
 	// Indexed and Searchable are how many messages are in the search index and could be; both zero
 	// when the index could not be read.
 	Indexed    int
+	Skipped    int
 	Searchable int
 }
 
@@ -38,7 +39,7 @@ type Source struct {
 	Version   string
 	StartedAt time.Time
 	// Index reports the search index's progress; nil leaves the line out.
-	Index func(ctx context.Context) (indexed, total int, err error)
+	Index func(ctx context.Context) (indexed, skipped, total int, err error)
 }
 
 // Read gathers the status.
@@ -66,8 +67,8 @@ func Read(ctx context.Context, src Source) (Status, error) {
 		return Status{}, err
 	}
 	if src.Index != nil {
-		if indexed, total, err := src.Index(ctx); err == nil {
-			st.Indexed, st.Searchable = indexed, total
+		if indexed, skipped, total, err := src.Index(ctx); err == nil {
+			st.Indexed, st.Skipped, st.Searchable = indexed, skipped, total
 		}
 	}
 	st.Now = time.Now()
@@ -112,7 +113,11 @@ func Format(st Status) string {
 		lines = append(lines, "No incoming messages stored yet.")
 	}
 	if st.Searchable > 0 {
-		lines = append(lines, fmt.Sprintf("Search index: %d of %d messages (%d%%).", st.Indexed, st.Searchable, st.Indexed*100/st.Searchable))
+		line := fmt.Sprintf("Search index: %d of %d messages (%d%%)", st.Indexed, st.Searchable, st.Indexed*100/st.Searchable)
+		if st.Skipped > 0 {
+			line += fmt.Sprintf(", %d the embedding service would not take", st.Skipped)
+		}
+		lines = append(lines, line+".")
 	}
 	if st.EventsWaiting > 0 {
 		lines = append(lines, fmt.Sprintf("Events waiting for core: %d.", st.EventsWaiting))

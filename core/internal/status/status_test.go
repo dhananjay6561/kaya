@@ -160,19 +160,21 @@ func TestShowsHowMuchOfTheHistoryIsSearchable(t *testing.T) {
 	st := healthy()
 	st.Indexed, st.Searchable = 98123, 102000
 	matches(t, Format(st), `^Search index: 98123 of 102000 messages \(96%\)\.$`)
+	st.Skipped = 12
+	matches(t, Format(st), `^Search index: 98123 of 102000 messages \(96%\), 12 the embedding service would not take\.$`)
 }
 
 func TestReadsTheIndexAndLeavesItOutWhenItCannot(t *testing.T) {
 	core, _ := testdb.MigratedPair(t, "kaya_core")
 	src := Source{
 		DB: core, Pause: &pause.Memory{}, Version: "test", StartedAt: time.Now(),
-		Index: func(context.Context) (int, int, error) { return 5, 8, nil },
+		Index: func(context.Context) (int, int, int, error) { return 5, 1, 8, nil },
 	}
 	st, err := Read(bg, src)
-	if err != nil || st.Indexed != 5 || st.Searchable != 8 {
+	if err != nil || st.Indexed != 5 || st.Skipped != 1 || st.Searchable != 8 {
 		t.Fatalf("got %+v, %v", st, err)
 	}
-	src.Index = func(context.Context) (int, int, error) { return 0, 0, errors.New("index away") }
+	src.Index = func(context.Context) (int, int, int, error) { return 0, 0, 0, errors.New("index away") }
 	if st, err := Read(bg, src); err != nil || st.Searchable != 0 {
 		t.Fatalf("a failing index broke the status: %+v, %v", st, err)
 	}
