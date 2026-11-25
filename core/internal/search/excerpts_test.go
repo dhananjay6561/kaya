@@ -296,3 +296,128 @@ func TestExcerptsAboutRecentMessagesPutTheNewestFirst(t *testing.T) {
 		t.Fatalf("a question not about recent messages: %q, %v", excerptTitles(hits), err)
 	}
 }
+
+func TestRecentlyAndFollowUpsAreToldFromOrdinaryWords(t *testing.T) {
+	for q, want := range map[string]bool{
+		"recentlykya pucha": true, "what did she ask recently": true, "latest from rahul": true, "uska last message": true,
+		"abhi kya bola": true, "haal hi mein kya hua": true,
+		"what did rahul say last week": false, "at last": false, "recentre the map": false, "abhi tak bataya": false,
+		"blast": false, "abhishek": false,
+	} {
+		if got := recently.MatchString(q); got != want {
+			t.Errorf("recently %q: %v, want %v", q, got, want)
+		}
+	}
+	for q, want := range map[string]bool{
+		"recentlykya pucha": true, "and the notes?": true, "usne aur kya kaha bhai yaar": true,
+		"party saturday kab hai": false, "what is the capital of peru": false,
+	} {
+		if got := followsUp(q); got != want {
+			t.Errorf("followsUp %q: %v, want %v", q, got, want)
+		}
+	}
+}
+
+func TestExcerptsDoNotCarryAPersonIntoAnUnrelatedQuestion(t *testing.T) {
+	r := newRig(t)
+	teja := r.one("SELECT contact_id_for(NULL, '919111111117@s.whatsapp.net')")
+	r.exec("UPDATE contacts SET saved_name = 'Tejashree' WHERE id = $1", teja)
+	chat := r.one("INSERT INTO chats (kind, contact_id) VALUES ('direct', $1) RETURNING id", teja)
+	r.add(msg{chat: chat, sender: teja, ago: 3000 * time.Minute, body: str("tejashree pucha are you coming")})
+	r.add(msg{chat: chat, sender: teja, ago: 600 * time.Minute, body: str("send my 500 back")})
+	r.pass()
+	s := r.excerpter()
+	s.ExcerptDistance = 0
+	for _, q := range []string{"party saturday kab hai", "abhi party saturday kab hai"} {
+		if hits, _, err := s.Excerpts(bg, q, "tejashree ne kya pucha", 3); err != nil || len(hits) != 0 {
+			t.Fatalf("%q: got %q, %v", q, excerptTitles(hits), err)
+		}
+	}
+}
+
+func TestExcerptsAboutATopicKeepTheBestMatchFirstEvenWhenRecent(t *testing.T) {
+	r := newRig(t)
+	r.say(r.direct, 9000, "assignment deadline is friday submit before noon")
+	for i, text := range []string{"ok bro", "lol", "gm"} {
+		r.say(r.direct, 3000-i*1000, text)
+	}
+	r.pass()
+	s := r.excerpter()
+	for _, q := range []string{
+		"what did rahul say last week about the assignment deadline",
+		"rahul ne recently assignment deadline kya bataya",
+	} {
+		hits, _, err := s.Excerpts(bg, q, "", 3)
+		if err != nil || len(hits) == 0 || hits[0].Lines[0].Text != "assignment deadline is friday submit before noon" {
+			t.Fatalf("%q: got %q, %v", q, excerptTitles(hits), err)
+		}
+	}
+}
+
+func TestExcerptsAboutRecentMessagesNeverShowKayasOwnChat(t *testing.T) {
+	r := newRig(t)
+	r.exec("UPDATE contacts SET saved_name = 'Dhananjay' WHERE id = $1", r.me)
+	self := r.one("INSERT INTO chats (kind, contact_id) VALUES ('direct', $1) RETURNING id", r.me)
+	r.exchange(self, 60, "dhananjay recently", "Nothing.")
+	r.add(msg{chat: r.group, sender: r.rahul, ago: 3000 * time.Minute, body: str("dhananjay is coming")})
+	r.pass()
+	hits, _, err := r.excerpter().Excerpts(bg, "dhananjay recently", "", 3)
+	if err != nil || slices.ContainsFunc(hits, func(e Excerpt) bool { return e.ChatID == self }) {
+		t.Fatalf("got %q, %v", excerptTitles(hits), err)
+	}
+}
+
+func TestExcerptsAboutRecentMessagesTakeTheNewestOfAPersonAndAGroup(t *testing.T) {
+	r := newRig(t)
+	priya := r.one("SELECT contact_id_for(NULL, '919111111118@s.whatsapp.net')")
+	r.exec("UPDATE contacts SET saved_name = 'Priya' WHERE id = $1", priya)
+	direct := r.one("INSERT INTO chats (kind, contact_id) VALUES ('direct', $1) RETURNING id", priya)
+	gang := r.groupNamed("Priya Birthday")
+	r.add(msg{chat: direct, sender: priya, ago: 9000 * time.Minute, body: str("oldest from priya")})
+	r.add(msg{chat: gang, sender: r.rahul, ago: 600 * time.Minute, body: str("newest in the group")})
+	r.add(msg{chat: direct, sender: priya, ago: 3000 * time.Minute, body: str("newer from priya")})
+	r.pass()
+	hits, _, err := r.excerpter().Excerpts(bg, "priya recently", "", 3)
+	if err != nil || len(hits) < 2 || hits[0].Lines[0].Text != "newest in the group" || hits[1].Lines[0].Text != "newer from priya" {
+		t.Fatalf("got %q, %v", excerptTitles(hits), err)
+	}
+}
+
+func TestExcerptsAboutRecentMessagesTakeOnlyTheBestMatchingPerson(t *testing.T) {
+	r := newRig(t)
+	gym := r.one("SELECT contact_id_for(NULL, '919111111119@s.whatsapp.net')")
+	r.exec("UPDATE contacts SET saved_name = 'Gym Trainer', first_name = 'Rahul Gym Trainer' WHERE id = $1", gym)
+	gymChat := r.one("INSERT INTO chats (kind, contact_id) VALUES ('direct', $1) RETURNING id", gym)
+	r.say(r.direct, 9000, "from rahul himself")
+	r.add(msg{chat: gymChat, sender: gym, ago: 600 * time.Minute, body: str("leg day tomorrow")})
+	r.pass()
+	hits, _, err := r.excerpter().Excerpts(bg, "rahul recently", "", 3)
+	if err != nil || len(hits) == 0 || hits[0].ChatID != r.direct {
+		t.Fatalf("got %q, %v", excerptTitles(hits), err)
+	}
+}
+
+func TestExcerptsSearchEveryChatWithAFollowUpAlone(t *testing.T) {
+	r := newRig(t)
+	teja := r.one("SELECT contact_id_for(NULL, '919111111120@s.whatsapp.net')")
+	r.exec("UPDATE contacts SET saved_name = 'Tejashree' WHERE id = $1", teja)
+	r.say(r.direct, 3000, "the notes are ready")
+	r.pass()
+	s := r.excerpter()
+	distance := func(q string) float64 {
+		hits, err := s.Search(bg, q, Filter{ChatIDs: []int64{r.direct}}, 1)
+		if err != nil || len(hits) != 1 {
+			t.Fatalf("%v, %v", hits, err)
+		}
+		return hits[0].Distance
+	}
+	alone, joined := distance("and the notes?"), distance("tejashree ne kya pucha\nand the notes?")
+	if alone >= joined {
+		t.Fatalf("the stub does not tell them apart: %v, %v", alone, joined)
+	}
+	s.ExcerptDistance = (alone + joined) / 2
+	hits, _, err := s.Excerpts(bg, "and the notes?", "tejashree ne kya pucha", 3)
+	if err != nil || len(hits) != 1 || hits[0].ChatID != r.direct {
+		t.Fatalf("got %q, %v", excerptTitles(hits), err)
+	}
+}
