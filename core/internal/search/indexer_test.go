@@ -591,3 +591,19 @@ func TestFollowsARealContactMerge(t *testing.T) {
 		t.Fatal("a merged-away message is still in the index")
 	}
 }
+
+func TestGoesStraightOnWhileThereIsABacklog(t *testing.T) {
+	r := newRig(t, func(o *IndexerOptions) { o.BatchMessages = 1; o.Poll = time.Hour })
+	for i := range 4 {
+		chat := r.one("INSERT INTO chats (kind, jid, name) VALUES ('group', $1, 'g') RETURNING id", fmt.Sprintf("12036300000000040%d@g.us", i))
+		r.say(chat, 90, "backlog")
+	}
+	r.ix.Start()
+	deadline := time.Now().Add(5 * time.Second)
+	for r.count("SELECT 1 FROM message_chunks") < 4 {
+		if time.Now().After(deadline) {
+			t.Fatalf("only %d of 4 indexed: it waited a poll between passes", r.count("SELECT 1 FROM message_chunks"))
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
+}

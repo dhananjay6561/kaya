@@ -160,9 +160,9 @@ func (ix *Indexer) run(ctx context.Context) {
 	delay := ix.o.RetryMin
 	failing := false
 	for ctx.Err() == nil {
+		n := 0
 		err := ix.lock.Hold(ctx)
 		if err == nil {
-			var n int
 			n, err = ix.pass(ctx)
 			if err == nil && n > 0 {
 				ix.o.Logger.Info("messages added to the search index", "messages", n)
@@ -178,7 +178,9 @@ func (ix *Indexer) run(ctx context.Context) {
 				ix.o.Logger.Info("indexing works again")
 			}
 			failing, delay = false, ix.o.RetryMin
-			ix.sleep(ctx, ix.o.Poll)
+			if n == 0 {
+				ix.sleep(ctx, ix.o.Poll)
+			}
 		case errors.Is(err, errPaused):
 			ix.sleep(ctx, ix.o.Poll)
 		case errors.Is(err, store.ErrLockBusy):
