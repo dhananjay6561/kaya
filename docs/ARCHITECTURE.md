@@ -31,7 +31,17 @@ kaya/
 │       └── lib/            small shared helpers
 ├── core-go/                the Go core that replaces core/ (its own Go module), until it moves to core/
 │   ├── cmd/core/           main package
-│   └── internal/           config, and one package per feature as it is ported
+│   └── internal/           one package per feature, ported with its tests:
+│       ├── config/         env loading and validation
+│       ├── gateway/        the event consumer (gateway_events)
+│       ├── channel/        DJ's own chat: the command inbox and sends through send_requests
+│       ├── commands/       slash commands and the rules for late and failed commands
+│       ├── pause/, status/ /pause and /resume, and /status
+│       ├── llm/            the Provider interface, Groq, the stub; o200k/ counts gpt-oss tokens
+│       ├── memory/         the conversation (exchanges) and the context package
+│       ├── chat/           system prompt, replies, WhatsApp formatting
+│       ├── masking/        placeholders for private details before a cloud model
+│       └── text/           text rules shared with the TypeScript core
 ├── gateway/                Go WhatsApp gateway (its own Go module)
 │   ├── cmd/gateway/        main package
 │   └── internal/           config, whatsapp, ingest, events, send, media, testdb
@@ -168,7 +178,10 @@ Folders appear when a phase needs them; empty placeholders are not committed.
   inside the schema.
 - `gateway` writes contacts, chats, messages and reactions. It resolves every person through
   `contact_id_for()`, never by inserting into `contacts` directly. `core` reads them and owns
-  everything it creates (tasks, jobs, pending actions, usage).
+  everything it creates: today `commands` (its inbox of what DJ typed in his own chat, kept 30
+  days after it finishes), `exchanges` (the conversation memory, kept for good) and `pause_state`;
+  later tasks, jobs, pending actions and usage. Core's tables point at messages by id or WhatsApp
+  id, never by foreign key, because the chat tables belong to the gateway.
 - **Media.** A media message gets a `media` row (what the file is, and whether it is `remote`,
   `stored`, `expired` or `failed`) and, when it can be fetched, a `media_keys` row that only the
   gateway can read. Nothing is downloaded unless a `media_requests` row asks for it; the gateway
@@ -229,6 +242,9 @@ Folders appear when a phase needs them; empty placeholders are not committed.
   - Every outward action (`send`, `placeCall`) takes a required `idempotencyKey`. A repeated key
     returns the first result and never acts twice. Stubs never report that an outward action
     happened.
+  - The Go core keeps the same shape: `internal/llm` holds the `Provider` interface, one file per
+    implementation (`groq.go`, `stub.go`) and `New`, which switches on the config value and fails
+    on an unknown one.
 - **Metrics (from stage 15):** every service exposes `GET /metrics` in Prometheus format on its
   existing HTTP port. Names start with `kaya_` and carry the unit (`kaya_ingest_delay_seconds`).
   Labels hold only small fixed sets (service, kind, state, outcome): never a JID, a name, a chat id
@@ -256,6 +272,11 @@ Folders appear when a phase needs them; empty placeholders are not committed.
   calls.
 - **Tests:** every phase ships tests for its logic. Anything touching the database is tested
   against a real Postgres. Tests use made-up data, never real chats.
+- **Parity while porting:** a Go package that replaces TypeScript is checked against golden files
+  that `make golden` (`core/scripts/golden.ts`) writes from the real TypeScript functions. The Go
+  tests read them without Node, CI regenerates them and fails on any difference, and they stay as
+  the spec once the TypeScript is deleted. A deliberate change of behaviour is made in both cores
+  and recorded in `DECISIONS.md`.
 - **Dependencies:** pinned exactly; updated through Dependabot PRs.
 - **Containers:** multi-stage builds, non-root user, read-only filesystem where possible.
 - **Commands:** `make lint`, `make test` and `make build` at the root cover every language.
