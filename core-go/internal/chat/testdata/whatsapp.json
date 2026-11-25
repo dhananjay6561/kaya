@@ -1,0 +1,1086 @@
+{
+"cases": [
+{"text":"This is **important** and __this__ too","want":"This is *important* and _this_ too"},
+{"text":"## Plan\nstep","want":"*Plan*\nstep"},
+{"text":"see [the docs](https://example.com/a)","want":"see the docs (https://example.com/a)"},
+{"text":"* one\n  + two","want":"- one\n  - two"},
+{"text":"  **a**\n```\n**not bold**\n# not a heading\n```\n**b**  ","want":"*a*\n```\n**not bold**\n# not a heading\n```\n*b*"},
+{"text":"`__init__` and `f(**a, **b)` stay","want":"`__init__` and `f(**a, **b)` stay"},
+{"text":"my__var__name.py","want":"my__var__name.py"},
+{"text":"a ** b and c ** d","want":"a ** b and c ** d"},
+{"text":"lone ** here","want":"lone ** here"},
+{"text":"***bold italic*** here","want":"*_bold italic_* here"},
+{"text":"***both***","want":"*_both_*"},
+{"text":"## **Plan**","want":"*Plan*"},
+{"text":"## Title ##","want":"*Title*"},
+{"text":"### Learning C#","want":"*Learning C#*"},
+{"text":"#\n\nnot heading","want":"#\n\nnot heading"},
+{"text":"[wiki](https://en.wikipedia.org/wiki/Foo_(bar))","want":"wiki (https://en.wikipedia.org/wiki/Foo_(bar))"},
+{"text":"see [docs](https://a.b/c))","want":"see docs (https://a.b/c))"},
+{"text":"- one  \n- two\t\nend","want":"- one\n- two\nend"},
+{"text":"*bold* _italic_ ~gone~","want":"*bold* _italic_ ~gone~"},
+{"text":"x**y**z","want":"x**y**z"},
+{"text":"**a** **b**","want":"*a* *b*"},
+{"text":"**a**b","want":"**a**b"},
+{"text":"a**b**","want":"a**b**"},
+{"text":"** a**","want":"** a**"},
+{"text":"**a **","want":"**a **"},
+{"text":"****","want":"****"},
+{"text":"**","want":"**"},
+{"text":"__a__","want":"_a_"},
+{"text":"_a_","want":"_a_"},
+{"text":"__a b__ c__d__","want":"_a b_ c__d__"},
+{"text":"**multi\nline**","want":"**multi\nline**"},
+{"text":"# Title\r\nbody","want":"*Title*\nbody"},
+{"text":"# Title\r\n**b**\r\n","want":"*Title*\n*b*"},
+{"text":"# Title body","want":"*Title* body"},
+{"text":"**a b**","want":"**a b**"},
+{"text":"# Title * item","want":"*Title* - item"},
+{"text":"line\r\n* item\r\n  + sub","want":"line\n- item\n  - sub"},
+{"text":"######## too many","want":"######## too many"},
+{"text":"####### seven","want":"####### seven"},
+{"text":"###### six","want":"*six*"},
+{"text":"#tag no space","want":"#tag no space"},
+{"text":" # indented heading","want":"*indented heading*"},
+{"text":"\t## tab heading\t","want":"*tab heading*"},
+{"text":"# a # b #","want":"*a # b*"},
+{"text":"# **bold** and __under__ __x","want":"*bold and under x*"},
+{"text":"[a](http://x.y)[b](https://z.w)","want":"a (http://x.y)b (https://z.w)"},
+{"text":"[a](ftp://x.y)","want":"[a](ftp://x.y)"},
+{"text":"[a b](https://x.y/a b)","want":"[a b](https://x.y/a b)"},
+{"text":"[](https://x.y)","want":"[](https://x.y)"},
+{"text":"[a](https://x.y))","want":"a (https://x.y))"},
+{"text":"[a](https://x.y)))","want":"a (https://x.y)))"},
+{"text":"[a]((https://x.y))","want":"[a]((https://x.y))"},
+{"text":"`code` **b** `more`","want":"`code` *b* `more`"},
+{"text":"``double`` **b**","want":"``double`` *b*"},
+{"text":"```\nunclosed **b**","want":"```\nunclosed *b*"},
+{"text":"```js\nx\n``` **b** ```y```","want":"```js\nx\n``` *b* ```y```"},
+{"text":"inline `a\nb` **c**","want":"inline `a\nb` *c*"},
+{"text":" **a** ","want":"*a*"},
+{"text":"**a**　","want":"*a*"},
+{"text":"﻿**a**","want":"*a*"},
+{"text":"  \n  \n","want":""},
+{"text":"trailing  \nnext","want":"trailing\nnext"},
+{"text":"**ab__cd__ef**","want":"*ab__cd__ef*"},
+{"text":"__**x**__","want":"_**x**_"},
+{"text":"**__x__**","want":"*__x__*"},
+{"text":"*_x_*","want":"*_x_*"},
+{"text":"**😀**","want":"*😀*"},
+{"text":"**क्ष**","want":"*क्ष*"},
+{"text":"1. one\n2. two","want":"1. one\n2. two"},
+{"text":"+ plus\n* star\n- dash","want":"- plus\n- star\n- dash"},
+{"text":"*not a bullet*","want":"*not a bullet*"},
+{"text":"* \n*\n+","want":"-\n*\n+"},
+{"text":"**a** **a** **a** **a** **a** **a** **a** **a** **a** **a** **a** **a** **a** **a** **a** **a** **a** **a** **a** **a** **a** **a** **a** **a** **a** **a** **a** **a** **a** **a** **a** **a** **a** **a** **a** **a** **a** **a** **a** **a** **a** **a** **a** **a** **a** **a** **a** **a** **a** **a** ","want":"*a* *a* *a* *a* *a* *a* *a* *a* *a* *a* *a* *a* *a* *a* *a* *a* *a* *a* *a* *a* *a* *a* *a* *a* *a* *a* *a* *a* *a* *a* *a* *a* *a* *a* *a* *a* *a* *a* *a* *a* *a* *a* *a* *a* *a* *a* *a* *a* *a* *a*"},
+{"text":"क)*https://a.b/c__\r\n## ****https://a.b/c_ b \r\n😀--","want":"क)*https://a.b/c__\n*https://a.b/c_ b*\n😀--"},
+{"text":"(`+ ","want":"(`+"},
+{"text":"-\r\n","want":"-"},
+{"text":"[`[\n)````_\n**## \t\r*","want":"[`[\n)````_\n**## \t\r*"},
+{"text":"\r\n()-~```-कhttps://a.b/c\t```","want":"()-~```-कhttps://a.b/c\t```"},
+{"text":" -* कhttps://a.b/c~__][## 😀\r-\n~\r\n-__","want":"-* कhttps://a.b/c~__][## 😀\r-\n~\n-__"},
+{"text":"## *]#😀*```````+a😀 ~__\r## ## ])","want":"*]#😀*```````+a😀 ~__\r*## ])*"},
+{"text":" \r","want":""},
+{"text":"**😀b__(b","want":"**😀b__(b"},
+{"text":"## \r\n_** https://a.b/c\r😀","want":"##\n_** https://a.b/c\r😀"},
+{"text":"**😀 [ *[b_https://a.b/c","want":"**😀 [ *[b_https://a.b/c"},
+{"text":"*😀a~)_## क","want":"*😀a~)_## क"},
+{"text":" 😀b__😀__## \r\n#~__ _*\r\n😀[https://a.b/c````__] ","want":"😀b__😀__##\n#~__ _*\n😀[https://a.b/c````__]"},
+{"text":"क## ___ \n#😀**+)+a```क😀\r\n ]]","want":"क## ___\n#😀**+)+a```क😀\n ]]"},
+{"text":"~*😀[`## ]]a ","want":"~*😀[`## ]]a"},
+{"text":"https://a.b/c```#😀_[😀(])(_```)#*_\t-`_","want":"https://a.b/c```#😀_[😀(])(_```)#*_\t-`_"},
+{"text":"[-* ","want":"[-*"},
+{"text":"## \t)~]   ([## #~~क😀]https://a.b/c ~😀__ ```","want":"*)~] *  ([## #~~क😀]https://a.b/c ~😀__ ```"},
+{"text":"```  `\r__)#😀(","want":"```  `\r__)#😀("},
+{"text":"## +[```## __ 😀\t\r\n`😀## )-]***https://a.b/c","want":"*+[```## * 😀\n`😀## )-]***https://a.b/c"},
+{"text":"\n**]]b)_ ","want":"**]]b)_"},
+{"text":"b)\r__##  __(`","want":"b)\r__##  __(`"},
+{"text":"_ #~b )\r#[```]","want":"_ #~b )\r#[```]"},
+{"text":"\r#~**+**_ क\r\n ( ]\t**( (`#`_","want":"#~**+**_ क\n ( ]\t**( (`#`_"},
+{"text":"*","want":"*"},
+{"text":"\t+(*https://a.b/chttps://a.b/c","want":"+(*https://a.b/chttps://a.b/c"},
+{"text":"~**#a+  (((\r\n","want":"~**#a+  ((("},
+{"text":"##]+","want":"##]+"},
+{"text":"*\r\n)\tb","want":"*\n)\tb"},
+{"text":" a","want":"a"},
+{"text":"## ](https://a.b/c \t _\t*","want":"*](https://a.b/c \t _\t*"},
+{"text":")```\r\n \t\r\n*~--[ b #bhttps://a.b/c**` [https://a.b/cक\r\n","want":")```\n\n*~--[ b #bhttps://a.b/c**` [https://a.b/cक"},
+{"text":"__`b_```## ","want":"__`b_```##"},
+{"text":"````\na~\n\n(`\r\n\n(b## -__(+","want":"````\na~\n\n(`\n\n(b## -__(+"},
+{"text":"*___ ])https://a.b/c- )😀\t)***## -( (https://a.b/c ","want":"*___ ])https://a.b/c- )😀\t)***## -( (https://a.b/c"},
+{"text":"https://a.b/c* ]\ta`* ]+*)-``` \t~","want":"https://a.b/c* ]\ta`* ]+*)-``` \t~"},
+{"text":"+``` #[**😀~**\n\r+```https://a.b/c-","want":"+``` #[**😀~**\n\r+```https://a.b/c-"},
+{"text":"~ __ ## #\n##  _[## __😀","want":"~ __ ## #\n##  _[## __😀"},
+{"text":"## __*#_[\t\t\n`+","want":"*#_[*\n`+"},
+{"text":"b# +b#~a\t*\r","want":"b# +b#~a\t*"},
+{"text":"__*a\r\r```\t**क \r\n~https://a.b/c ","want":"__*a\r\r```\t**क\n~https://a.b/c"},
+{"text":"a_😀[**()~```-_[","want":"a_😀[**()~```-_["},
+{"text":"*#**\thttps://a.b/chttps://a.b/c ```\nhttps://a.b/c \r\n[-)```(~*-## **b","want":"*#**\thttps://a.b/chttps://a.b/c ```\nhttps://a.b/c\n[-)```(~*-## **b"},
+{"text":"-**]## ]\n____\n* `` ","want":"-**]## ]\n____\n- ``"},
+{"text":"b**)https://a.b/c]\t\nक`## ~","want":"b**)https://a.b/c]\nक`## ~"},
+{"text":"https://a.b/c#😀 __([)+```क\na ## \r\n````)- ","want":"https://a.b/c#😀 __([)+```क\na ##\n````)-"},
+{"text":"`__\r]_*\r\n## ]  \r\t__+ab_(","want":"`__\r]_*\n*] * \r\t__+ab_("},
+{"text":"[क-","want":"[क-"},
+{"text":"a","want":"a"},
+{"text":"https://a.b/c_क\thttps://a.b/c~+#\thttps://a.b/c  ","want":"https://a.b/c_क\thttps://a.b/c~+#\thttps://a.b/c"},
+{"text":"#]a__ \r\n**","want":"#]a__\n**"},
+{"text":"* [# ]```","want":"* [# ]```"},
+{"text":"#a##[` - )## b\r]_`_ \r(","want":"#a##[` - )## b\r]_`_ \r("},
+{"text":"😀[\r\n","want":"😀["},
+{"text":"__https://a.b/c(])]+ __","want":"__https://a.b/c(])]+ __"},
+{"text":"+~)https://a.b/c__क\r`+````-+(``*__ ]😀[+","want":"+~)https://a.b/c__क\r`+````-+(``*__ ]😀[+"},
+{"text":"#])\n*)","want":"#])\n*)"},
+{"text":"-__( _#b-","want":"-__( _#b-"},
+{"text":"__+**__क#__\r\n(_😀b## )https://a.b/c]_https://a.b/c","want":"_+**_क#__\n(_😀b## )https://a.b/c]_https://a.b/c"},
+{"text":"\r ab## a__)a## ","want":"ab## a__)a##"},
+{"text":")]\n]__))_```__ 😀_[\r__(😀~ * ","want":")]\n]_))_```_ 😀_[\r__(😀~ *"},
+{"text":"[a\r)\r ","want":"[a\r)"},
+{"text":"__## `__\r***\r _\r\n [\n😀]😀aa\r## ","want":"_## `_\r***\r _\n [\n😀]😀aa\r##"},
+{"text":"(~","want":"(~"},
+{"text":"*\r    +_ ## \r\n ** https://a.b/c]]~```\n","want":"*\r    +_ ##\n ** https://a.b/c]]~```"},
+{"text":"https://a.b/c(\r\n\r\n_(\n**`*-\r## +a- +__क\r","want":"https://a.b/c(\n\n_(\n**`*-\r*+a- +क*"},
+{"text":"_(  \n\r\n  --","want":"_(\n\n  --"},
+{"text":"```-+\r\n## a+\n][ b+__(","want":"```-+\n*a+*\n][ b+__("},
+{"text":"b```## __\rb *- \t😀a__😀-) `## ]a😀","want":"b```## __\rb *- \t😀a__😀-) `*]a😀*"},
+{"text":"क[\n😀+~😀)) 😀__😀\r\n~`-https://a.b/c__**(","want":"क[\n😀+~😀)) 😀__😀\n~`-https://a.b/c__**("},
+{"text":"[  __-]## #~b[https://a.b/c[ https://a.b/c\r\nhttps://a.b/c\t(~)__****","want":"[  __-]## #~b[https://a.b/c[ https://a.b/c\nhttps://a.b/c\t(~)__****"},
+{"text":"+```## -~ ## + - *क","want":"+```## -~ *+ -* *क"},
+{"text":"~__ ) bb** a)-b`` ","want":"~__ ) bb** a)-b``"},
+{"text":"\r## b```+_+**\r\n)-*[\t😀क(**\r\n😀## ##  _","want":"*b```+_+*\n)-*[\t😀क(**\n😀## ##  _"},
+{"text":"*😀https://a.b/c\n~]b`_]`","want":"*😀https://a.b/c\n~]b`_]`"},
+{"text":" \n```😀__\r\n https://a.b/c(~","want":"```😀__\n https://a.b/c(~"},
+{"text":"😀[\t\t+😀*","want":"😀[\t\t+😀*"},
+{"text":"\r\n*\t_\n*~","want":"- _\n*~"},
+{"text":"``` \t\tb -","want":"``` \t\tb -"},
+{"text":"```aक*+कhttps://a.b/c😀```#)\r\t`-","want":"```aक*+कhttps://a.b/c😀```#)\r\t`-"},
+{"text":"*]-\r\n_( )] [```😀_([aa__","want":"*]-\n_( )] [```😀_([aa__"},
+{"text":"a ____()#~-https://a.b/c","want":"a ____()#~-https://a.b/c"},
+{"text":"`b \r-[## ~## \r\n## ]_😀","want":"`b \r-[## ~##\n*]_😀*"},
+{"text":"]b()[\r\n\n]]\ra  😀**https://a.b/chttps://a.b/c\r\n😀***\r","want":"]b()[\n\n]]\ra  😀**https://a.b/chttps://a.b/c\n😀***"},
+{"text":"\rक+  क(**\t-\n]`\r[  ~)#","want":"क+  क(**\t-\n]`\r[  ~)#"},
+{"text":"**\t(+**`\n__+😀 ","want":"**\t(+**`\n__+😀"},
+{"text":" -b`__~  ((  ```]_ ","want":"-b`__~  ((  ```]_"},
+{"text":"* (","want":"* ("},
+{"text":" b\n\n]\t# ~`##ab\t#b~a","want":"b\n\n]\t# ~`##ab\t#b~a"},
+{"text":"#### #_\n](]https://a.b/c**😀__#","want":"*#_*\n](]https://a.b/c**😀__#"},
+{"text":"]\t","want":"]"},
+{"text":"__\n\t`)*(__*","want":"__\n\t`)*(__*"},
+{"text":"- ]```**😀a+```\r~[__ #*#\r\n\r","want":"- ]```**😀a+```\r~[__ #*#"},
+{"text":"  _```###  `(b]____b]","want":"_```###  `(b]____b]"},
+{"text":"\r b","want":"b"},
+{"text":"]😀+**+]_ **```+``````https://a.b/c```[","want":"]😀+**+]_ **```+``````https://a.b/c```["},
+{"text":"https://a.b/c#😀*)_https://a.b/cb_https://a.b/c_[\n[  ```**","want":"https://a.b/c#😀*)_https://a.b/cb_https://a.b/c_[\n[  ```**"},
+{"text":"\r\n#`+ -https://a.b/c","want":"#`+ -https://a.b/c"},
+{"text":"\n  )_```https://a.b/c__\n____\r\n)\n``","want":")_```https://a.b/c__\n____\n)\n``"},
+{"text":"___","want":"___"},
+{"text":" **)``` ## क\n__## +\n","want":"**)``` ## क\n__## +"},
+{"text":"```\rhttps://a.b/c_https://a.b/c _ #https://a.b/c 😀+\tba","want":"```\rhttps://a.b/c_https://a.b/c _ #https://a.b/c 😀+\tba"},
+{"text":"]a]## ```~)क```]a__ [[","want":"]a]## ```~)क```]a__ [["},
+{"text":" क_#😀~(]`(~ __a","want":"क_#😀~(]`(~ __a"},
+{"text":"`\r\n*\tb\r**`__(]~__ ","want":"`\n- b\r**`_(]~_"},
+{"text":"😀कb**]*## \r )`## \r\n#```https://a.b/c```~#a*😀+https://a.b/c","want":"😀कb**]*## \r )`##\n#```https://a.b/c```~#a*😀+https://a.b/c"},
+{"text":"\t`","want":"`"},
+{"text":"*__*`````` https://a.b/c#aa## (**-\r\n__\r","want":"*__*`````` https://a.b/c#aa## (**-\n__"},
+{"text":"~** _ +(\t#","want":"~** _ +(\t#"},
+{"text":"[क _b```https://a.b/c_","want":"[क _b```https://a.b/c_"},
+{"text":"#*```__","want":"#*```__"},
+{"text":")~~*]\r\n","want":")~~*]"},
+{"text":"(\t__```]## \n** -~b\t## **क[","want":"(\t__```]##\n** -~b\t## **क["},
+{"text":"a`  **++b~","want":"a`  **++b~"},
+{"text":"क\n)a+\n-","want":"क\n)a+\n-"},
+{"text":"https://a.b/c😀__[_ _\r\n- \t\r\n\r## #\t(```https://a.b/c","want":"https://a.b/c😀__[_ _\n-\n\r*#\t(```https://a.b/c*"},
+{"text":"a)(_\r (+aaa\r]  😀","want":"a)(_\r (+aaa\r]  😀"},
+{"text":"*","want":"*"},
+{"text":"] ```\n\r\n **\r* https://a.b/c","want":"] ```\n\n **\r* https://a.b/c"},
+{"text":" 😀(# https://a.b/c`_\n)https://a.b/chttps://a.b/c__","want":"😀(# https://a.b/c`_\n)https://a.b/chttps://a.b/c__"},
+{"text":"## \tक+ https://a.b/c```__```~क_```b[]https://a.b/c\n\r+ https://a.b/c ","want":"*क+ https://a.b/c*```__```~क_```b[]https://a.b/c\n\r+ https://a.b/c"},
+{"text":"-```","want":"-```"},
+{"text":"]+क","want":"]+क"},
+{"text":"___~\rक)\r\n [*😀*https://a.b/c ~)\t**\n\r","want":"___~\rक)\n [*😀*https://a.b/c ~)\t**"},
+{"text":"(\r\n__https://a.b/c`##  _## ","want":"(\n__https://a.b/c`##  _##"},
+{"text":"#https://a.b/c## \t~क ","want":"#https://a.b/c## \t~क"},
+{"text":"a## b_क __## **#** \r\n[#_\r]","want":"a## b_क __## *#*\n[#_\r]"},
+{"text":"[*😀","want":"[*😀"},
+{"text":"\t****(\n","want":"****("},
+{"text":"\n#)__  ) \n","want":"#)__  )"},
+{"text":" ]**])) __~__क","want":"]**])) _~_क"},
+{"text":"*(\nhttps://a.b/c(`","want":"*(\nhttps://a.b/c(`"},
+{"text":"## ***","want":"**"},
+{"text":"~_ _","want":"~_ _"},
+{"text":"~","want":"~"},
+{"text":"a\r(😀*(\r-\nक-#\t __","want":"a\r(😀*(\r-\nक-#\t __"},
+{"text":"```*+][a*b+\t()[_  #_[__ \t```","want":"```*+][a*b+\t()[_  #_[__ \t```"},
+{"text":"#\r\r\n😀`😀b[+```~","want":"#\n😀`😀b[+```~"},
+{"text":"\r😀\n","want":"😀"},
+{"text":"_","want":"_"},
+{"text":"\t","want":""},
+{"text":"😀***","want":"😀***"},
+{"text":"```\n\n)## ~😀#` *[","want":"```\n\n)## ~😀#` *["},
+{"text":"a```)[)😀\r-\n##  b\r\n```) https://a.b/c*## #`b(","want":"a```)[)😀\r-\n##  b\n```) https://a.b/c*## #`b("},
+{"text":"\r\n(aa\n\n ## \r\n","want":"(aa\n\n ##"},
+{"text":"*``` ~`a😀__## ## )bकक`\r","want":"*``` ~`a😀__## ## )bकक`"},
+{"text":"  -क+ \r-\r_*`#","want":"-क+ \r-\r_*`#"},
+{"text":"]#`___** *]https://a.b/c +`\t_ #*bhttps://a.b/c## ","want":"]#`___** *]https://a.b/c +`\t_ #*bhttps://a.b/c##"},
+{"text":"+","want":"+"},
+{"text":" +\r\n## क#\t __`\ta__https://a.b/c😀","want":"+\n*क#\t `\tahttps://a.b/c😀*"},
+{"text":"__\tकa+_( ```","want":"__\tकa+_( ```"},
+{"text":"+))_~","want":"+))_~"},
+{"text":"b+ )~~\nhttps://a.b/c","want":"b+ )~~\nhttps://a.b/c"},
+{"text":"\n\r[**## *\r\t\r","want":"[**## *"},
+{"text":"a(```])https://a.b/c(*b_ )*https://a.b/c","want":"a(```])https://a.b/c(*b_ )*https://a.b/c"},
+{"text":"क","want":"क"},
+{"text":"`]```क\n\n *`]*[-## https://a.b/c*-#[\r ","want":"`]```क\n\n *`]*[-## https://a.b/c*-#["},
+{"text":"\r\n#*-b\r\n\r\n __\r**```क~)","want":"#*-b\n\n __\r**```क~)"},
+{"text":"`[__## ##_```-`a","want":"`[__## ##_```-`a"},
+{"text":"[ `## \r\n__+]``` `*\r~ __\nक (","want":"[ `##\n__+]``` `*\r~ __\nक ("},
+{"text":"(~## ```\r) ```+ ___bक #","want":"(~## ```\r) ```+ ___bक #"},
+{"text":"https://a.b/c\r]]\n( ~\nhttps://a.b/c## \r**  \r\n😀 \r\n [\r\r~","want":"https://a.b/c\r]]\n( ~\nhttps://a.b/c## \r**\n😀\n [\r\r~"},
+{"text":"\r\r\n *]`","want":"*]`"},
+{"text":"\t-*b```[```**https://a.b/c]https://a.b/cb~क#__😀~\r\na)","want":"-*b```[```**https://a.b/c]https://a.b/cb~क#__😀~\na)"},
+{"text":"😀-## )`++ahttps://a.b/c#)-a[😀*","want":"😀-## )`++ahttps://a.b/c#)-a[😀*"},
+{"text":"```**\r\n(😀","want":"```**\n(😀"},
+{"text":"## **\r\n  😀😀https://a.b/c-  ","want":"**\n  😀😀https://a.b/c-"},
+{"text":"```https://a.b/c +(` ## _]","want":"```https://a.b/c +(`*_]*"},
+{"text":"\n[[+\r++**]","want":"[[+\r++**]"},
+{"text":"+#__a__[#😀 b","want":"+#_a_[#😀 b"},
+{"text":"(\r \t****`_https://a.b/cahttps://a.b/c__## ]_~ __ __","want":"(\r \t****`_https://a.b/cahttps://a.b/c__## ]_~ __ __"},
+{"text":"\r+b(~[","want":"+b(~["},
+{"text":" -+**\n___(b+]```😀\t\t[https://a.b/c\r\n https://a.b/c\n*","want":"-+**\n___(b+]```😀\t\t[https://a.b/c\n https://a.b/c\n*"},
+{"text":"😀  \r**[_b\t))**😀","want":"😀  \r*[_b\t))*😀"},
+{"text":"**\t(\t~ )## __ )[","want":"**\t(\t~ )## __ )["},
+{"text":"**  )``````😀\n]- https://a.b/c\n**  +)\n(\nhttps://a.b/c","want":"**  )``````😀\n]- https://a.b/c\n**  +)\n(\nhttps://a.b/c"},
+{"text":"😀```a]-*- ","want":"😀```a]-*-"},
+{"text":"\r\n[\n😀~]*","want":"[\n😀~]*"},
+{"text":"_```क~😀]~ *]b[ \r\n \r😀```[```\t+","want":"_```क~😀]~ *]b[\n \r😀```[```\t+"},
+{"text":"abhttps://a.b/chttps://a.b/c```[\t]क","want":"abhttps://a.b/chttps://a.b/c```[\t]क"},
+{"text":"`b","want":"`b"},
+{"text":"\thttps://a.b/ca( __-## `क_\n#","want":"https://a.b/ca( __-## `क_\n#"},
+{"text":"\r\n\n😀 ____**+* \r`]","want":"😀 ____**+* \r`]"},
+{"text":" `_()क\t ~~\r**😀__a**😀b](+* ]","want":"`_()क\t ~~\r*😀__a*😀b](+* ]"},
+{"text":" `__` क## [[a","want":"`__` क## [[a"},
+{"text":"*_ ","want":"*_"},
+{"text":"[)])-#","want":"[)])-#"},
+{"text":"#b__[_## +a~\r _+\t__[)-","want":"#b__[_## +a~\r _+\t__[)-"},
+{"text":"**a","want":"**a"},
+{"text":"#  ```*#b_-(कa** ","want":"#  ```*#b_-(कa**"},
+{"text":"  `~https://a.b/cक`*)😀 `","want":"`~https://a.b/cक`*)😀 `"},
+{"text":"+\r**___#(*","want":"+\r**___#(*"},
+{"text":" [\r```__]_+][*## (\n## b","want":"[\r```__]_+][*## (\n*b*"},
+{"text":"`https://a.b/c])~क)\t-(","want":"`https://a.b/c])~क)\t-("},
+{"text":"~((#(a\t__","want":"~((#(a\t__"},
+{"text":"+(\r\n`\n\r*~\thttps://a.b/cकbक## a\n\n","want":"+(\n`\n\r*~\thttps://a.b/cकbक## a"},
+{"text":"-","want":"-"},
+{"text":"]https://a.b/c#- #_*\nhttps://a.b/c__b]## -\t#कaaक+__]","want":"]https://a.b/c#- #_*\nhttps://a.b/c__b]## -\t#कaaक+__]"},
+{"text":"क_*\n**~\rक _][","want":"क_*\n**~\rक _]["},
+{"text":")😀+  ]","want":")😀+  ]"},
+{"text":"`\r+_https://a.b/c(+ ```**## _","want":"`\r+_https://a.b/c(+ ```**## _"},
+{"text":"]\r\na ","want":"]\na"},
+{"text":"]","want":"]"},
+{"text":"\r\n))]\t\n## 😀 - क-baa\r\n**~ https://a.b/c","want":"))]\n*😀 -* क-baa\n**~ https://a.b/c"},
+{"text":"~\r\rb- #\r  ] \n```https://a.b/c\t```","want":"~\r\rb- #\r  ]\n```https://a.b/c\t```"},
+{"text":"\n*\r## \r\n** ### +(`]  ]~","want":"*\r##\n** *+(`]  ]~*"},
+{"text":"__#)\r\n]ab [## \tbhttps://a.b/c[__क~)-","want":"__#)\n]ab [## \tbhttps://a.b/c[__क~)-"},
+{"text":"#( ```#😀 __## \t~-https://a.b/c\r\nक+b","want":"#( ```#😀 __## \t~-https://a.b/c\nक+b"},
+{"text":"https://a.b/c\r\r**] \r```` [] \r```#[ \t_ ~","want":"https://a.b/c\r\r**] \r```` [] \r```#[ \t_ ~"},
+{"text":"(( ","want":"(("},
+{"text":"___\n-~ _]___) ```]क**~bकhttps://a.b/c","want":"___\n-~ _]___) ```]क**~bकhttps://a.b/c"},
+{"text":" ","want":""},
+{"text":"(__~","want":"(__~"},
+{"text":"\r\n-","want":"-"},
+{"text":"*https://a.b/c_क(([ ]\ra#\rhttps://a.b/c 😀 ## \rhttps://a.b/c *क\n","want":"*https://a.b/c_क(([ ]\ra#\rhttps://a.b/c 😀 ## \rhttps://a.b/c *क"},
+{"text":"https://a.b/c~a_\n(] a-\n`b😀](-क(\rक ","want":"https://a.b/c~a_\n(] a-\n`b😀](-क(\rक"},
+{"text":"https://a.b/c`)a]\r\n[( `https://a.b/c[]## [https://a.b/c*~(\r\n[","want":"https://a.b/c`)a]\n[( `https://a.b/c[]## [https://a.b/c*~(\n["},
+{"text":"b)\r*+ ]+","want":"b)\r*+ ]+"},
+{"text":"\n \r","want":""},
+{"text":"क \t)#","want":"क \t)#"},
+{"text":"😀😀(~```https://a.b/c```` कhttps://a.b/c-","want":"😀😀(~```https://a.b/c```` कhttps://a.b/c-"},
+{"text":"__([https://a.b/c😀क`(","want":"__([https://a.b/c😀क`("},
+{"text":"#\nक😀\t]https://a.b/c\ra -  (++)https://a.b/c(~[_ ","want":"#\nक😀\t]https://a.b/c\ra -  (++)https://a.b/c(~[_"},
+{"text":"`https://a.b/c-**__\n__\n\t*a  \n## `\n**😀","want":"`https://a.b/c-**__\n__\n\t*a\n*`*\n**😀"},
+{"text":"\r\n*#\t\t[\t -\n~__","want":"*#\t\t[\t -\n~__"},
+{"text":"bhttps://a.b/c#`bbaabकa]`](___\t`) #~","want":"bhttps://a.b/c#`bbaabकa]`](___\t`) #~"},
+{"text":" a\taक((_)aa","want":"a\taक((_)aa"},
+{"text":"## b` `*","want":"*b*` `*"},
+{"text":" 😀##  ","want":"😀##"},
+{"text":"(\r \r[~)## \n\r","want":"(\r \r[~)##"},
+{"text":"**\r#``` #```\r\nb]क__\r\n ","want":"**\r#``` #```\nb]क__"},
+{"text":"#_b**```_#😀https://a.b/c\t__a++`b\r\r\r`_~**https://a.b/c","want":"#_b**```_#😀https://a.b/c\t__a++`b\r\r\r`_~**https://a.b/c"},
+{"text":"`]#__ [_#` **a#)क`~","want":"`]#__ [_#` **a#)क`~"},
+{"text":"```__क]~ -#\r\n","want":"```__क]~ -#"},
+{"text":"```#````+`\t+`#\t__b#~","want":"```#````+`\t+`#\t__b#~"},
+{"text":"(https://a.b/c```","want":"(https://a.b/c```"},
+{"text":"```**ahttps://a.b/c``` https://a.b/c","want":"```**ahttps://a.b/c``` https://a.b/c"},
+{"text":"~__**## **https://a.b/c#-*\rhttps://a.b/c**","want":"~__**## **https://a.b/c#-*\rhttps://a.b/c**"},
+{"text":"\n )**\r\n## _-## ","want":")**\n*_-##*"},
+{"text":"\r\nhttps://a.b/c*) #~## _\thttps://a.b/c+ _ bक ~__","want":"https://a.b/c*) #~## _\thttps://a.b/c+ _ bक ~__"},
+{"text":"]😀__)__\n-[https://a.b/c-`)_ ### +","want":"]😀_)_\n-[https://a.b/c-`)_ *+*"},
+{"text":"क\n*## #b```\r\n#__😀```b## __# [`\n a(😀","want":"क\n*## #b```\n#__😀```b## __# [`\n a(😀"},
+{"text":"क__क~b~**```\tक\t😀)~b","want":"क__क~b~**```\tक\t😀)~b"},
+{"text":"]*\r\n```(\t\n)\r\n+\n\n\r```` **~ (a\r\n\r\n","want":"]*\n```(\n)\n+\n\n\r```` **~ (a"},
+{"text":"\n","want":""},
+{"text":"क```_ b\r\n-\t*","want":"क```_ b\n-\t*"},
+{"text":"__ )😀a#__~-\r ````\r  )*b*","want":"__ )😀a#__~-\r ````\r  )*b*"},
+{"text":"+ +```#b## * __","want":"- +```#b## * __"},
+{"text":"#कhttps://a.b/c__b***😀https://a.b/c https://a.b/c","want":"#कhttps://a.b/c__b***😀https://a.b/c https://a.b/c"},
+{"text":"क *bhttps://a.b/c+-#- क# ][~\rhttps://a.b/c+*-+क","want":"क *bhttps://a.b/c+-#- क# ][~\rhttps://a.b/c+*-+क"},
+{"text":")-","want":")-"},
+{"text":"\r\t \n😀कaक_\t😀_\r\n**😀b- ## **```## ````","want":"😀कaक_\t😀_\n**😀b- **```## ````"},
+{"text":"bhttps://a.b/ca`[ b*-  \n \tb[a","want":"bhttps://a.b/ca`[ b*-\n \tb[a"},
+{"text":"https://a.b/chttps://a.b/cकa😀## aa[]\n)## )a`\t+क **```","want":"https://a.b/chttps://a.b/cकa😀## aa[]\n)## )a`\t+क **```"},
+{"text":"~","want":"~"},
+{"text":"~*_** 😀\n## \r\n]]क \r","want":"~*_** 😀\n##\n]]क"},
+{"text":"aक\r\n+_","want":"aक\n+_"},
+{"text":"```__ https://a.b/c__ab_\r\n(😀_## ","want":"```__ https://a.b/c__ab_\n(😀_##"},
+{"text":"क```+_ ","want":"क```+_"},
+{"text":")#[(\t```\r(__]```)https://a.b/c[😀-ba#(~+","want":")#[(\t```\r(__]```)https://a.b/c[😀-ba#(~+"},
+{"text":"_**#[\t]कhttps://a.b/c\n+## )-~_कhttps://a.b/c```\n**+]","want":"_**#[\t]कhttps://a.b/c\n+## )-~_कhttps://a.b/c```\n**+]"},
+{"text":"[_((https://a.b/cकa)__~क\r```\nhttps://a.b/c-]_**https://a.b/c **","want":"[_((https://a.b/cकa)__~क\r```\nhttps://a.b/c-]_**https://a.b/c **"},
+{"text":"]**]```__**-[_____*_b`(a😀 ","want":"]**]```__**-[_____*_b`(a😀"},
+{"text":"- __** क__`कa #- # [\r -**## ","want":"- _** क_`कa #- # [\r -**##"},
+{"text":")* *\r\n+https://a.b/chttps://a.b/c__","want":")* *\n+https://a.b/chttps://a.b/c__"},
+{"text":"-","want":"-"},
+{"text":" ## `_\r\n+## -_+\n[_+\n-","want":"*`_*\n+## -_+\n[_+\n-"},
+{"text":"b ## - __क*+)_` ```😀[ `","want":"b ## - __क*+)_` ```😀[ `"},
+{"text":"aaa(\r\n\r~क]a~`-)\r\n[#","want":"aaa(\n\r~क]a~`-)\n[#"},
+{"text":"a]```a*https://a.b/c**##  \r)","want":"a]```a*https://a.b/c**##  \r)"},
+{"text":"~b-]\t  ****-\r\nb__ ","want":"~b-]\t  ****-\nb__"},
+{"text":"](+ ~क\r\n+))_***]#क","want":"](+ ~क\n+))_***]#क"},
+{"text":"*क[😀aa__*++-#__ [**😀-~क\r","want":"*क[😀aa__*++-#__ [**😀-~क"},
+{"text":"`https://a.b/cb# ]_**```","want":"`https://a.b/cb# ]_**```"},
+{"text":"a](__~","want":"a](__~"},
+{"text":"_ `b)\r\n `https://a.b/c[क____a \r__\r\n\r\n#क-( ","want":"_ `b)\n `https://a.b/c[क____a \r__\n\n#क-("},
+{"text":"a \nhttps://a.b/c 😀(\n\t#","want":"a\nhttps://a.b/c 😀(\n\t#"},
+{"text":"a ```\r\t *`\r[`[","want":"a ```\r\t *`\r[`["},
+{"text":"_\r(~a\r\n***\tक**https://a.b/c~ ~```\r\n\rb__]]\n","want":"_\r(~a\n***\tक**https://a.b/c~ ~```\n\rb__]]"},
+{"text":"```**  (b`+\t# \t","want":"```**  (b`- #"},
+{"text":" a\t","want":"a"},
+{"text":"\r\n क\r\n`[[)``` (_\n\r\nab","want":"क\n`[[)``` (_\n\nab"},
+{"text":"]\r~`\ra \r\n```\r\n```**[ ","want":"]\r~`\ra\n```\n```**["},
+{"text":" \tbhttps://a.b/c#__+__\r","want":"bhttps://a.b/c#_+_"},
+{"text":"~क","want":"~क"},
+{"text":"__**+😀+__a)## क क","want":"__**+😀+__a)## क क"},
+{"text":"]```*😀\r  [\r**","want":"]```*😀\r  [\r**"},
+{"text":"😀\n]-(```\r\nक\r\n***[_#+)*\t\r\na-+]","want":"😀\n]-(```\nक\n***[_#+)*\na-+]"},
+{"text":"**`[+```","want":"**`[+```"},
+{"text":"#~ https://a.b/c`_[_\t)```*#]https://a.b/c## ]```+","want":"#~ https://a.b/c`_[_\t)```*#]https://a.b/c## ]```+"},
+{"text":"https://a.b/c ## \t😀b` ","want":"https://a.b/c ## \t😀b`"},
+{"text":"a__`*## b**\r\n## ~\r\nक_\r\n[)+क**https://a.b/c","want":"a__`*## b**\n*~*\nक_\n[)+क**https://a.b/c"},
+{"text":"```कaa `***b*## ]__","want":"```कaa `***b*## ]__"},
+{"text":"[a## a\r\n क **+*[\n ]*","want":"[a## a\n क **+*[\n ]*"},
+{"text":"```","want":"```"},
+{"text":"## ~ __\n-#","want":"*~ *\n-#"},
+{"text":"\r~ [__\t]\r\n`_","want":"~ [__\t]\n`_"},
+{"text":"क\n__क````_### (#*```","want":"क\n__क````_### (#*```"},
+{"text":"#]कa *😀( )##  ```~#\r","want":"#]कa *😀( )##  ```~#"},
+{"text":"  ]+```` ","want":"]+````"},
+{"text":"😀\r\n[\t क## \r\n+ ```\r`-\r\n😀[## ~https://a.b/c[**-```","want":"😀\n[\t क##\n- ```\r`-\n😀[## ~https://a.b/c[**-```"},
+{"text":" ) \n\t(\t[]\r\n** https://a.b/cb`[```a**```+b)\n","want":")\n\t(\t[]\n** https://a.b/cb`[```a**```+b)"},
+{"text":"``` [\r\n\r`## ## [\r\n*```[ b` ","want":"``` [\n\r`## ## [\n*```[ b`"},
+{"text":"( 😀)https://a.b/cक**_## ~- ) 😀 (","want":"( 😀)https://a.b/cक**_## ~- ) 😀 ("},
+{"text":"```## https://a.b/c  +[__**","want":"```## https://a.b/c  +[__**"},
+{"text":"\t## b","want":"*b*"},
+{"text":"😀)__*","want":"😀)__*"},
+{"text":")-**+(a\t","want":")-**+(a"},
+{"text":"क[ \r\n\t*😀b+ (_\t+#\t__[\n","want":"क[\n\t*😀b+ (_\t+#\t__["},
+{"text":"## ## \r\n+ [_ a+#क\r*(https://a.b/c]__\n-_","want":"*##*\n+ [_ a+#क\r*(https://a.b/c]__\n-_"},
+{"text":"```[~https://a.b/c**\r\n\t _\r\r\n\r\n\n+)\t \n [-___","want":"```[~https://a.b/c**\n\t _\n\n\n+)\n [-___"},
+{"text":"_क+]\t+","want":"_क+]\t+"},
+{"text":" ","want":""},
+{"text":"\tकb*  b😀a##  क*क#","want":"कb*  b😀a##  क*क#"},
+{"text":"\r]\n\r\nb__[)","want":"]\n\nb__[)"},
+{"text":" b~-b## \n https://a.b/c\n\r\n+[ ## +]😀 \r\n  ## ","want":"b~-b##\n https://a.b/c\n\n+[ *+]😀*\n  ##"},
+{"text":" \r\n**_","want":"**_"},
+{"text":"😀[https://a.b/c~*#\t**~__\r\n ##  [```b#","want":"😀[https://a.b/c~*#\t**~__\n ##  [```b#"},
+{"text":"[b\r\n b** \r\r\n__## ```*#~+ahttps://a.b/c\r\n-","want":"[b\n b**\n__## ```*#~+ahttps://a.b/c\n-"},
+{"text":"कa \r","want":"कa"},
+{"text":"`_\r[😀https://a.b/c(https://a.b/c~+ (#\n## ~\rक ~*)\t","want":"`_\r[😀https://a.b/c(https://a.b/c~+ (#\n*~*\rक ~*)"},
+{"text":"#__https://a.b/c [**#","want":"#__https://a.b/c [**#"},
+{"text":"+]क*😀]```**https://a.b/c[~``` `","want":"+]क*😀]```**https://a.b/c[~``` `"},
+{"text":"\r\n#``` \r\n## ~```\tक\r~ (\t__\n\t","want":"#```\n## ~```\tक\r~ (\t__"},
+{"text":"##  \n-```\n**https://a.b/c)\r_## [```_)b\n`","want":"- *\n-```\n**https://a.b/c)\r_## [```_)b\n`"},
+{"text":"क\t-])`[ [(😀ahttps://a.b/c","want":"क\t-])`[ [(😀ahttps://a.b/c"},
+{"text":"https://a.b/c_~ ~\t```😀 क~- \t\r\n\r","want":"https://a.b/c_~ ~\t```😀 क~-"},
+{"text":"\n [[  https://a.b/c\nhttps://a.b/c\r\n#https://a.b/c","want":"[[  https://a.b/c\nhttps://a.b/c\n#https://a.b/c"},
+{"text":" ## _(~*\n```क* __https://a.b/c\r\n## [) #a]https://a.b/c","want":"*_(~*\n```क* __https://a.b/c\n*[)* #a]https://a.b/c"},
+{"text":"] -  (`)ab ","want":"] -  (`)ab"},
+{"text":"## ]\n## ](#a","want":"*]*\n*](#a*"},
+{"text":"**","want":"**"},
+{"text":"\t ```https://a.b/c_","want":"```https://a.b/c_"},
+{"text":"\r\n__\r-b[😀","want":"__\r-b[😀"},
+{"text":"\n~https://a.b/c +*]]https://a.b/c ++\r\n ","want":"~https://a.b/c +*]]https://a.b/c ++"},
+{"text":"_`_\r(*+a`]]   )```**b(~]😀","want":"_`_\r(*+a`]]   )```**b(~]😀"},
+{"text":"`)https://a.b/c","want":"`)https://a.b/c"},
+{"text":") ~\n #(__","want":") ~\n #(__"},
+{"text":" __bhttps://a.b/c`~b*)b_a\r\nhttps://a.b/c# \t\r\n\r(a","want":"__bhttps://a.b/c`~b*)b_a\nhttps://a.b/c#\n\r(a"},
+{"text":"*  _","want":"*  _"},
+{"text":"]~a","want":"]~a"},
+{"text":"```\t*https://a.b/c#(b\r\n## _`_`","want":"```\t*https://a.b/c#(b\n*_*`_`"},
+{"text":")https://a.b/c## **a~]b😀\n","want":")https://a.b/c## **a~]b😀"},
+{"text":"*  😀## ## ","want":"- 😀## ##"},
+{"text":"+_[__## b _b**```~","want":"+_[__## b _b**```~"},
+{"text":"\n`**\r]क(","want":"`**\r]क("},
+{"text":"*)-b  +😀+_\rb( ```\r\n(]😀","want":"*)-b  +😀+_\rb( ```\n(]😀"},
+{"text":")(ahttps://a.b/c#-+bक -aahttps://a.b/c```__#😀]+~😀)","want":")(ahttps://a.b/c#-+bक -aahttps://a.b/c```__#😀]+~😀)"},
+{"text":"(~## __https://a.b/chttps://a.b/c##  ","want":"(~## __https://a.b/chttps://a.b/c##"},
+{"text":"\n## \r__*[ _https://a.b/c-","want":"## \r__*[ _https://a.b/c-"},
+{"text":"\n[`क😀_","want":"[`क😀_"},
+{"text":"\t \r) -a__\r\n+https://a.b/c**~","want":") -a__\n+https://a.b/c**~"},
+{"text":"https://a.b/c`__`+]](क)+\tक","want":"https://a.b/c`__`+]](क)+\tक"},
+{"text":"\ra(*a## +😀# \ta- _~*__``","want":"a(*a## +😀# \ta- _~*__``"},
+{"text":"(https://a.b/c`\r\n]b` https://a.b/c😀😀+~\nbक😀","want":"(https://a.b/c`\n]b` https://a.b/c😀😀+~\nbक😀"},
+{"text":"``````]  😀~`````","want":"``````]  😀~`````"},
+{"text":"_~क😀__ ```(+)_\r\n","want":"_~क😀__ ```(+)_"},
+{"text":"_(\r\n\r","want":"_("},
+{"text":"**#\n#\t+aक","want":"**#\n*+aक*"},
+{"text":" \r__##  b\r","want":"__##  b"},
+{"text":"]b[\r\nhttps://a.b/c\t\rhttps://a.b/c__~ a","want":"]b[\nhttps://a.b/c\t\rhttps://a.b/c__~ a"},
+{"text":"a\t\rhttps://a.b/c+\n","want":"a\t\rhttps://a.b/c+"},
+{"text":"__\r\n#__+(😀__ ","want":"__\n#_+(😀_"},
+{"text":"b\t# ~क","want":"b\t# ~क"},
+{"text":"b[#~\n \n\r","want":"b[#~"},
+{"text":"**_https://a.b/c+https://a.b/c_\r\n** 😀#😀##\r+# \t\r~","want":"**_https://a.b/c+https://a.b/c_\n** 😀#😀##\r+# \t\r~"},
+{"text":"~~]","want":"~~]"},
+{"text":"~**`*)_😀-","want":"~**`*)_😀-"},
+{"text":"https://a.b/chttps://a.b/cक+(**https://a.b/c`","want":"https://a.b/chttps://a.b/cक+(**https://a.b/c`"},
+{"text":"a`~] **b[क* \n","want":"a`~] **b[क*"},
+{"text":"*\n+ +__(```क","want":"*\n+ +__(```क"},
+{"text":")(#(\t**```+(__```","want":")(#(\t**```+(__```"},
+{"text":"# *`-","want":"*`-*"},
+{"text":"## [","want":"*[*"},
+{"text":")https://a.b/c  ~**\r\n\n#क+-😀क**]","want":")https://a.b/c  ~**\n\n#क+-😀क**]"},
+{"text":"\r\n````#*\r","want":"````#*"},
+{"text":" ## `https://a.b/c","want":"*`https://a.b/c*"},
+{"text":"(\r\n## )https://a.b/c)\ta","want":"(\n*)https://a.b/c)\ta*"},
+{"text":"😀\r","want":"😀"},
+{"text":"\r\na-(\r\n_)##  *``` `\r\n*#","want":"a-(\n_)##  *``` `\n*#"},
+{"text":"```","want":"```"},
+{"text":" b\t[#**~\n__😀## a\r--(- **\r\n","want":"b\t[#**~\n__😀## a\r--(- **"},
+{"text":" कa😀`~)https://a.b/ca","want":"कa😀`~)https://a.b/ca"},
+{"text":"~ \n https://a.b/c_ *```````","want":"~\n https://a.b/c_ *```````"},
+{"text":")#a \r *-++[# https://a.b/ca","want":")#a \r *-++[# https://a.b/ca"},
+{"text":"+\r```#~~\tकa[+\t_https://a.b/c~#😀**-[__😀-","want":"+\r```#~~\tकa[+\t_https://a.b/c~#😀**-[__😀-"},
+{"text":"😀\ra\r\n`\r\n#-__##  *\r\n~😀_[*😀```**--","want":"😀\ra\n`\n#-__##  *\n~😀_[*😀```**--"},
+{"text":" )\t😀क a**[]\r\n(**😀https://a.b/c## [  ```## ] ","want":")\t😀क a**[]\n(**😀https://a.b/c## [  ```## ]"},
+{"text":"\n\r  \n\tb) \t-_https://a.b/c-~  ","want":"b) \t-_https://a.b/c-~"},
+{"text":"\t\thttps://a.b/c\r\n\t","want":"https://a.b/c"},
+{"text":"😀\t\r b-[## https://a.b/c\t+]`()aa_)]*b","want":"😀\t\r b-[## https://a.b/c\t+]`()aa_)]*b"},
+{"text":" b~+~[😀__","want":"b~+~[😀__"},
+{"text":"__*) ) [**__## \r(a## ","want":"_*) ) [**_## \r(a##"},
+{"text":"b- 😀 https://a.b/c**## 😀`😀 b**~```\t\na)https://a.b/c","want":"b- 😀 https://a.b/c**## 😀`😀 b**~```\na)https://a.b/c"},
+{"text":"\r\n+\r\n_[क b**## ","want":"+\n_[क b**##"},
+{"text":"\r\n +\n","want":"+"},
+{"text":"_😀b\r\n````\t)__**(__b ## ]\r\n #","want":"_😀b\n````\t)__**(__b ## ]\n #"},
+{"text":" \n\t\n]__#__\t\r\r\nhttps://a.b/c#(#https://a.b/c_क- ]","want":"]_#_\nhttps://a.b/c#(#https://a.b/c_क- ]"},
+{"text":"\t-https://a.b/c__## #https://a.b/c😀#[","want":"-https://a.b/c__## #https://a.b/c😀#["},
+{"text":" ## #\na__**#\tb-b(*https://a.b/c__https://a.b/c","want":"*#*\na__**#\tb-b(*https://a.b/c__https://a.b/c"},
+{"text":"- ## ","want":"- ##"},
+{"text":"a~ _[\t## ```~","want":"a~ _[\t## ```~"},
+{"text":"\t*)https://a.b/c\r\n `","want":"*)https://a.b/c\n `"},
+{"text":" कa~\r_\n\r\nbhttps://a.b/c  ","want":"कa~\r_\n\nbhttps://a.b/c"},
+{"text":"😀* (\r\n😀```]\r*\n *+\r\n-`#]a~`)#","want":"😀* (\n😀```]\r*\n *+\n-`#]a~`)#"},
+{"text":"__]#b**😀____#\r\n```a#(😀(** _## `\t-क","want":"_]#b**😀___#\n```a#(😀(** _## `\t-क"},
+{"text":"~[+**😀## \r**## -**😀-\ra(a``` __\r","want":"~[+**😀## \r*## -*😀-\ra(a``` __"},
+{"text":")","want":")"},
+{"text":"क\r\n😀# __(a+\t]😀a\r **a ```__```b+","want":"क\n😀# __(a+\t]😀a\r **a ```__```b+"},
+{"text":"[\r\n__","want":"[\n__"},
+{"text":"`]**\t_\na[**[```","want":"`]**\t_\na[**[```"},
+{"text":"__#)__ (\t## ","want":"_#)_ (\t##"},
+{"text":"😀\r\n```\t__*+-  \n","want":"😀\n```\t__*+-"},
+{"text":"*```\r-a```https://a.b/c+\n**(~##   ```a https://a.b/c_","want":"*```\r-a```https://a.b/c+\n**(~##   ```a https://a.b/c_"},
+{"text":" -a -क","want":"-a -क"},
+{"text":" ~ 😀 ```]a\n ","want":"~ 😀 ```]a"},
+{"text":"+😀क\n)```## [\tक( ```~(+","want":"+😀क\n)```## [\tक( ```~(+"},
+{"text":"😀a#~__\n+((","want":"😀a#~__\n+(("},
+{"text":"*","want":"*"},
+{"text":"- ","want":"-"},
+{"text":"\n#क\r\nक## )*[**]","want":"#क\nक## )*[**]"},
+{"text":" ] \r\t*(\t```क+[-**  **)","want":"] \r\t*(\t```क+[-**  **)"},
+{"text":"[)#--a###https://a.b/c\nक[#","want":"[)#--a###https://a.b/c\nक[#"},
+{"text":"\r( b` 😀` ab","want":"( b` 😀` ab"},
+{"text":"-😀\t \r**#[****~#b``` _","want":"-😀\t \r*#[***~#b``` _"},
+{"text":"]+\r\n","want":"]+"},
+{"text":"`-क+(]\r```  https://a.b/c","want":"`-क+(]\r```  https://a.b/c"},
+{"text":"```\t \t~","want":"```\t \t~"},
+{"text":"क😀`\r\n __क( *(-_#`+","want":"क😀`\n __क( *(-_#`+"},
+{"text":"\r+क\r_😀\r)`\n \r\n```*## *\r]\t a","want":"+क\r_😀\r)`\n\n```*## *\r]\t a"},
+{"text":" https://a.b/c## -*","want":"https://a.b/c## -*"},
+{"text":"`_😀## (____ **\r_## क","want":"`_😀## (____ **\r_## क"},
+{"text":"#(__ **## \r\t\t__` +https://a.b/c[b+\na","want":"#(__ **## \r\t\t__` +https://a.b/c[b+\na"},
+{"text":"## )_**-#a```ahttps://a.b/c[😀😀","want":"*)_-#a```ahttps://a.b/c[😀😀*"},
+{"text":"__]__\n[\r\n)~\t## ","want":"_]_\n[\n)~\t##"},
+{"text":"**## (~😀*😀)\r  *","want":"**## (~😀*😀)\r  *"},
+{"text":"-#[]","want":"-#[]"},
+{"text":"__\t**b\n~**+a*+**__## ```\r\r","want":"__\t**b\n~**+a*+**__## ```"},
+{"text":"😀😀\r```**a__ )__\n## _** \r\nक~## _``` \t","want":"😀😀\r```**a__ )__\n## _**\nक~## _```"},
+{"text":"\n()**[","want":"()**["},
+{"text":"~~","want":"~~"},
+{"text":"ba https://a.b/c)**`\n+## **a ]😀# ```\n~## ","want":"ba https://a.b/c)**`\n+## **a ]😀# ```\n~##"},
+{"text":"a+ b#____https://a.b/c-(b## [a**~","want":"a+ b#____https://a.b/c-(b## [a**~"},
+{"text":"_-\nb_b\r\n --\r\n** \r ##","want":"_-\nb_b\n --\n** \r ##"},
+{"text":" - \tb__## 😀(+)##  \n~","want":"- \tb__## 😀(+)##\n~"},
+{"text":"https://a.b/c\n])-\ta+## __bhttps://a.b/c","want":"https://a.b/c\n])-\ta+## __bhttps://a.b/c"},
+{"text":"+**)#","want":"+**)#"},
+{"text":"😀***##  _## (#__a #**]`` \n","want":"😀***##  _## (#__a #**]``"},
+{"text":"`\t\r \r\n\t  _## ```😀\r\n+ https://a.b/c#~**\t]क","want":"`\n\t  _## ```😀\n- https://a.b/c#~**\t]क"},
+{"text":"-*","want":"-*"},
+{"text":"क_\t\n )  *-\t\n -","want":"क_\n )  *-\n -"},
+{"text":" https://a.b/c(","want":"https://a.b/c("},
+{"text":" #)क_क~* ","want":"#)क_क~*"},
+{"text":" #aक+[## b## #\n 😀[]\n**","want":"#aक+[## b## #\n 😀[]\n**"},
+{"text":"\r\n``-] ***https://a.b/c_ *😀😀 #_","want":"``-] ***https://a.b/c_ *😀😀 #_"},
+{"text":"_ ]**## ___-~ \n * _-#-~ ","want":"_ ]**## ___-~\n * _-#-~"},
+{"text":"_b https://a.b/c)_]__ ","want":"_b https://a.b/c)_]__"},
+{"text":"https://a.b/c__#`","want":"https://a.b/c__#`"},
+{"text":"\r\n#  [ ```~","want":"#  [ ```~"},
+{"text":"क~\t\n+ +क\n [## +कb\r**]#\n```","want":"क~\n+ +क\n [## +कb\r**]#\n```"},
+{"text":"\r\n+ _b)[* \r\nhttps://a.b/c","want":"+ _b)[*\nhttps://a.b/c"},
+{"text":"~ __(]\r\n a ```\rक```ba[https://a.b/c## ","want":"~ __(]\n a ```\rक```ba[https://a.b/c##"},
+{"text":"]\t` [a","want":"]\t` [a"},
+{"text":"😀 **+## \n","want":"😀 **+##"},
+{"text":"https://a.b/chttps://a.b/c` ~``` कhttps://a.b/ca \r\n*- ","want":"https://a.b/chttps://a.b/c` ~``` कhttps://a.b/ca\n*-"},
+{"text":"\r\thttps://a.b/c**((😀b [😀\r```b(क\r\n\n`__ _","want":"https://a.b/c**((😀b [😀\r```b(क\n\n`__ _"},
+{"text":"+ *```)https://a.b/cb```__*https://a.b/c#b__\r\n\r][-*\n","want":"+ *```)https://a.b/cb```_*https://a.b/c#b_\n\r][-*"},
+{"text":"```**-https://a.b/c-)","want":"```**-https://a.b/c-)"},
+{"text":"-_```#] *क## `)\t😀*_😀**क`","want":"-_```#] *क## `)\t😀*_😀**क`"},
+{"text":"`## *_\t\t[ ````)\t( ]*a+https://a.b/c#","want":"`## *_\t\t[ ````)\t( ]*a+https://a.b/c#"},
+{"text":"````क  ]((-*https://a.b/c_\r\r\n*~[","want":"````क  ]((-*https://a.b/c_\n*~["},
+{"text":"https://a.b/ca\n\r#\r\r\n`https://a.b/c ~(]-```*## aक\nhttps://a.b/c ```क","want":"https://a.b/ca\n\r#\n`https://a.b/c ~(]-```*## aक\nhttps://a.b/c ```क"},
+{"text":"a","want":"a"},
+{"text":"https://a.b/c#\r\n]```)~+[_+**(\ra__😀-","want":"https://a.b/c#\n]```)~+[_+**(\ra__😀-"},
+{"text":"***😀)__#a\n___😀[\r\nhttps://a.b/c## \n[) \n","want":"***😀)__#a\n___😀[\nhttps://a.b/c##\n[)"},
+{"text":"https://a.b/c\r]","want":"https://a.b/c\r]"},
+{"text":"[\rक\r\n+\r\n क)\r\n\t😀 https://a.b/cक_क## ( b","want":"[\rक\n+\n क)\n\t😀 https://a.b/cक_क## ( b"},
+{"text":"`~```","want":"`~```"},
+{"text":"**aba)https://a.b/c*]","want":"**aba)https://a.b/c*]"},
+{"text":"\t\rक__(~b)`+````[😀[","want":"क__(~b)`+````[😀["},
+{"text":" \n+  _(\r\n (\t😀क)क~`https://a.b/c` ]_a","want":"- _(\n (\t😀क)क~`https://a.b/c` ]_a"},
+{"text":"-a(😀#__  __][b[","want":"-a(😀#__  __][b["},
+{"text":"[_ क**`]\n+","want":"[_ क**`]\n+"},
+{"text":"`)  \r\r]-क**(***-\t+a b","want":"`)  \r\r]-क*(**-\t+a b"},
+{"text":"क\r\n)b## ( ","want":"क\n)b## ("},
+{"text":"#**~\r\n[## -`*+a\r\n-~कhttps://a.b/c__😀\r) -(*","want":"#**~\n[## -`*+a\n-~कhttps://a.b/c__😀\r) -(*"},
+{"text":" ))`(https://a.b/c```~#][[## \r\nक","want":"))`(https://a.b/c```~#][[##\nक"},
+{"text":"~`-  ## \tक]]\r\n**] ]\r\n \r]__","want":"~`-  ## \tक]]\n**] ]\n \r]__"},
+{"text":" a*```~## 😀(","want":"a*```~## 😀("},
+{"text":"[(\r\n","want":"[("},
+{"text":"**+_)https://a.b/c+```**+__a)# )[bhttps://a.b/c\t)## _```","want":"**+_)https://a.b/c+```**+__a)# )[bhttps://a.b/c\t)## _```"},
+{"text":"#__#**\r\n_\r\n)\r ## ","want":"#__#**\n_\n)\r ##"},
+{"text":"कक**\r\n)( **~\r\n#~\naक😀\r\n\r\nbb~_)-","want":"कक**\n)( **~\n#~\naक😀\n\nbb~_)-"},
+{"text":"[__😀__+# a]```]कb+## __-","want":"[_😀_+# a]```]कb+## __-"},
+{"text":"## ](b**\n~ \r *\r)~( ## )__`😀## ]","want":"*](b*\n~ \r *\r)~( *)`😀## ]*"},
+{"text":"-[~#~+ 😀 https://a.b/c]b\t😀\nhttps://a.b/ca+```+ +_","want":"-[~#~+ 😀 https://a.b/c]b\t😀\nhttps://a.b/ca+```+ +_"},
+{"text":"\r\n*_**( ```क)** -😀~ ****\t","want":"*_**( ```क)** -😀~ ****"},
+{"text":"😀-\t\n_)😀[ ## \r\n*__+\n","want":"😀-\n_)😀[ ##\n*__+"},
+{"text":"`__a-]","want":"`__a-]"},
+{"text":"https://a.b/cb## https://a.b/c******`]😀  https://a.b/c-\n## b## ","want":"https://a.b/cb## https://a.b/c******`]😀  https://a.b/c-\n*b##*"},
+{"text":"😀 [[\t😀#","want":"😀 [[\t😀#"},
+{"text":"~😀 \t\n[\n_\n*) ~😀\n__😀क","want":"~😀\n[\n_\n*) ~😀\n__😀क"},
+{"text":"😀__\n)bक`\r(## _","want":"😀__\n)bक`\r(## _"},
+{"text":"*\r\nahttps://a.b/c\r\n#-क","want":"*\nahttps://a.b/c\n#-क"},
+{"text":" ]  \r\n\r\nhttps://a.b/c[  *क[ ~** _","want":"]\n\nhttps://a.b/c[  *क[ ~** _"},
+{"text":"b_**\r\n`**_\r\n क\n~_[_**[😀#*a[","want":"b_**\n`**_\n क\n~_[_**[😀#*a["},
+{"text":" *a(a**\tb`((😀)क","want":"*a(a**\tb`((😀)क"},
+{"text":"b+_😀)[**```+क\t-bb****क","want":"b+_😀)[*```+क\t-bb***क"},
+{"text":"`**a`\r😀-```** )(((b## a","want":"`**a`\r😀-```** )(((b## a"},
+{"text":" #\n**__a  ","want":"#\n**__a"},
+{"text":"____) `क`","want":"____) `क`"},
+{"text":"a*__","want":"a*__"},
+{"text":"## (-____**😀(\r\n`https://a.b/c`(]**\t\t\r\n**```","want":"*(-😀(*\n`https://a.b/c`(]**\n**```"},
+{"text":"[क[__\n#\r\n# **(","want":"[क[__\n#\n# **("},
+{"text":" \t-  `)bक","want":"-  `)bक"},
+{"text":"https://a.b/c\r\nक__-### ~`__\n```😀*(a]a","want":"https://a.b/c\nक_-### ~`_\n```😀*(a]a"},
+{"text":"~```[~https://a.b/chttps://a.b/c-\r (**\n)\r\n](","want":"~```[~https://a.b/chttps://a.b/c-\r (**\n)\n]("},
+{"text":"😀\t]+__😀`#****\t \t`+__` क","want":"😀\t]+__😀`#****\t \t`+__` क"},
+{"text":"-_\n\r\n\t`-\nक __  ~-\n```क","want":"-_\n\n\t`-\nक __  ~-\n```क"},
+{"text":"\n\n","want":""},
+{"text":"bb](**b~क]","want":"bb](**b~क]"},
+{"text":"```+\r  ","want":"```+"},
+{"text":"\t## `_https://a.b/c## 😀\r~)\r\n#\r\nhttps://a.b/c\t)","want":"*`_https://a.b/c## 😀*\r~)\n#\nhttps://a.b/c\t)"},
+{"text":"#][\t`[](","want":"#][\t`[]("},
+{"text":"**__क`[_\rb 😀-\n- ]\rhttps://a.b/chttps://a.b/c+\n ","want":"**__क`[_\rb 😀-\n- ]\rhttps://a.b/chttps://a.b/c+"},
+{"text":"bक[~***b## ```) #क)*\t__`~[\r[","want":"bक[~***b## ```) #क)*\t__`~[\r["},
+{"text":"__ ","want":"__"},
+{"text":"a*#`b\r\nb","want":"a*#`b\nb"},
+{"text":"#https://a.b/c## +😀[```#```","want":"#https://a.b/c## +😀[```#```"},
+{"text":"**`__-(\nhttps://a.b/c**```___😀\r\n## *\r\n[😀-a` 😀~","want":"**`__-(\nhttps://a.b/c**```___😀\n**\n[😀-a` 😀~"},
+{"text":"[-","want":"[-"},
+{"text":"-## ***]\nb```)(a😀 __(\n","want":"-## ***]\nb```)(a😀 __("},
+{"text":"(bक(+__## \r```-[[","want":"(bक(+__## \r```-[["},
+{"text":" #https://a.b/c # ","want":"#https://a.b/c #"},
+{"text":"\r_\r\n_क\n ","want":"_\n_क"},
+{"text":"__ #*(","want":"__ #*("},
+{"text":"(( 😀*#\t\r\n__\tक_((\r\n\n]**]* ","want":"(( 😀*#\n__\tक_((\n\n]**]*"},
+{"text":"`\n* https://a.b/cb\ta","want":"`\n- https://a.b/cb\ta"},
+{"text":")__**(https://a.b/c```__क[`#+","want":")__**(https://a.b/c```__क[`#+"},
+{"text":"\t~https://a.b/c## \r \r)## +__\t[ (*bb","want":"~https://a.b/c## \r \r)## +__\t[ (*bb"},
+{"text":"_क\r\n\t[````](~\t कa\na**a\r\n\r\n`_(","want":"_क\n\t[````](~\t कa\na**a\n\n`_("},
+{"text":"\r\n+https://a.b/c😀]😀** __`_(+```😀]__#","want":"+https://a.b/c😀]😀** __`_(+```😀]__#"},
+{"text":"--## (_\nकb 😀``` 😀[)_\t**\r\n","want":"--## (_\nकb 😀``` 😀[)_\t**"},
+{"text":" ]__","want":"]__"},
+{"text":"क**```()~b\t## ## https://a.b/c```__क ","want":"क**```()~b\t## ## https://a.b/c```__क"},
+{"text":"(\n```__b\t`https://a.b/c~(**\r\n ) ","want":"(\n```__b\t`https://a.b/c~(**\n )"},
+{"text":"\n\t\t\t-**-__```\r\n**`__` \n","want":"-**-__```\n**`__`"},
+{"text":")\r\n]]~\r\n\t(~` क`_(*\n~*```","want":")\n]]~\n\t(~` क`_(*\n~*```"},
+{"text":"😀] \tक__\t__(\t](## ([-\r\n## ","want":"😀] \tक__\t__(\t](## ([-\n##"},
+{"text":" *#क","want":"*#क"},
+{"text":"https://a.b/c\r\n)`\r\n+__]*","want":"https://a.b/c\n)`\n+__]*"},
+{"text":"```` ** https://a.b/c## ~a_-\n~https://a.b/c( (b","want":"```` ** https://a.b/c## ~a_-\n~https://a.b/c( (b"},
+{"text":" b__a```)  ","want":"b__a```)"},
+{"text":"[_","want":"[_"},
+{"text":"https://a.b/c## ~#b a()(# ## ++","want":"https://a.b/c## ~#b a()(# ## ++"},
+{"text":"```\r`\n\n ## \ta**","want":"```\r`\n\n *a*"},
+{"text":"\n```~#\n#\r\n`## #)","want":"```~#\n#\n`## #)"},
+{"text":"b`https://a.b/c😀( -😀`#\r\n\t+","want":"b`https://a.b/c😀( -😀`#\n\t+"},
+{"text":"(*]https://a.b/c😀_\r\na[**```","want":"(*]https://a.b/c😀_\na[**```"},
+{"text":"\n~b__","want":"~b__"},
+{"text":" ~\r\n","want":"~"},
+{"text":"https://a.b/c`## \t-~```  _क~**~_","want":"https://a.b/c`## \t-~```  _क~**~_"},
+{"text":"https://a.b/c\r\n# https://a.b/c[__a)-https://a.b/c```__ bb+## -😀https://a.b/chttps://a.b/c`__","want":"https://a.b/c\n# https://a.b/c[__a)-https://a.b/c```__ bb+## -😀https://a.b/chttps://a.b/c`__"},
+{"text":"-\n~ https://a.b/c ```___https://a.b/c_aक__\n( ``` \r\n","want":"-\n~ https://a.b/c ```___https://a.b/c_aक__\n( ```"},
+{"text":"\na)__ 😀\n\r\t)-(_ ","want":"a)__ 😀\n\r\t)-(_"},
+{"text":"#` ~## a\n```\tक","want":"#` ~## a\n```\tक"},
+{"text":")(\r\n**## `**```+","want":")(\n**## `**```+"},
+{"text":"~ __   (```-]\r[","want":"~ __   (```-]\r["},
+{"text":"~ *` #(## )https://a.b/c\n~https://a.b/c## _\n] क#https://a.b/c","want":"~ *` #(## )https://a.b/c\n~https://a.b/c## _\n] क#https://a.b/c"},
+{"text":"__कbb(__[\t]_[`_~[```https://a.b/cक-","want":"_कbb(_[\t]_[`_~[```https://a.b/cक-"},
+{"text":"https://a.b/c`\nb \r\nhttps://a.b/c]*\t ## ]\r_**## ````b\r\n~","want":"https://a.b/c`\nb\nhttps://a.b/c]*\t ## ]\r_**## ````b\n~"},
+{"text":"*a-","want":"*a-"},
+{"text":" `~https://a.b/cb (*+)~a`कक*https://a.b/c ","want":"`~https://a.b/cb (*+)~a`कक*https://a.b/c"},
+{"text":" ```  ```\r[\t\na~","want":"```  ```\r[\na~"},
+{"text":"+## ## क\t(*~ ## _#+https://a.b/chttps://a.b/c\t#__","want":"+## ## क\t(*~ ## _#+https://a.b/chttps://a.b/c\t#__"},
+{"text":"\r)a","want":")a"},
+{"text":"``` a)]","want":"``` a)]"},
+{"text":"+~```","want":"+~```"},
+{"text":"(#[+*\r\n## `\r)~**~\t😀[+","want":"(#[+*\n*`*\r)~**~\t😀[+"},
+{"text":"😀 __\t## ```#++\n\t*\n+_*b","want":"😀 __\t## ```#++\n\t*\n+_*b"},
+{"text":"`\r\nba\t😀+\n","want":"`\nba\t😀+"},
+{"text":"```\r\n```+a-कhttps://a.b/c\n\thttps://a.b/c__## a_## ```","want":"```\n```+a-कhttps://a.b/c\n\thttps://a.b/c__## a_## ```"},
+{"text":"\n**-(\r)b`\r#~\r\n-#https://a.b/c\t ","want":"**-(\r)b`\r#~\n-#https://a.b/c"},
+{"text":"```\r\nb\t_","want":"```\nb\t_"},
+{"text":"b## ","want":"b##"},
+{"text":"*\r\nahttps://a.b/c**-## ]```\r_] https://a.b/c  a[(`#` ","want":"*\nahttps://a.b/c**-## ]```\r_] https://a.b/c  a[(`#`"},
+{"text":"https://a.b/c\t*__😀\t#\r```*## __-**","want":"https://a.b/c\t*__😀\t#\r```*## __-**"},
+{"text":"\n*### क)+\tb(https://a.b/c ","want":"*### क)+\tb(https://a.b/c"},
+{"text":"[`````` #[\n\na (\t**]+\r\n\r\n\n[क~-","want":"[`````` #[\n\na (\t**]+\n\n\n[क~-"},
+{"text":"\t__## https://a.b/c)-b**_😀\n)\r\n__[\r\n~😀","want":"__## https://a.b/c)-b**_😀\n)\n__[\n~😀"},
+{"text":" क(]\n__😀] _ahttps://a.b/c[ \r\n `( \t","want":"क(]\n__😀] _ahttps://a.b/c[\n `("},
+{"text":"b**`https://a.b/cकhttps://a.b/c\r\n#`a -*  **#https://a.b/cक[","want":"b**`https://a.b/cकhttps://a.b/c\n#`a -*  **#https://a.b/cक["},
+{"text":"(\r\n__*a___~","want":"(\n_*a__~"},
+{"text":"**\n+ 😀 __\n*https://a.b/c(\t[https://a.b/c  ## \t*","want":"**\n+ 😀 __\n*https://a.b/c(\t[https://a.b/c  **"},
+{"text":")-__ +[## \n*```__ -##  \tकb`-_क__😀","want":")-__ +[##\n*```__ -##  \tकb`-_क__😀"},
+{"text":"_*  _\r\t]+\t)(**\r\r\r","want":"_*  _\r\t]+\t)(**"},
+{"text":"*## ])a+## ```__(b`क\t)https://a.b/c]\t","want":"*## ])a+## ```__(b`क\t)https://a.b/c]"},
+{"text":"__क```\n) **\r_*-ahttps://a.b/c#-)__😀","want":"__क```\n) **\r_*-ahttps://a.b/c#-)__😀"},
+{"text":"b**\r\n-😀https://a.b/chttps://a.b/c-_😀`## [\t","want":"b**\n-😀https://a.b/chttps://a.b/c-_😀`## ["},
+{"text":"+_+ \n~","want":"+_+\n~"},
+{"text":"```[**## +] a##  -~ ~## ","want":"```[**## +] a##  -~ ~##"},
+{"text":"```https://a.b/c```__ ## ]https://a.b/c)(https://a.b/c```\n__","want":"```https://a.b/c```__ ## ]https://a.b/c)(https://a.b/c```\n__"},
+{"text":" #[~https://a.b/c__]https://a.b/c ~\r","want":"#[~https://a.b/c__]https://a.b/c ~"},
+{"text":"__**```क__#","want":"_**```क_#"},
+{"text":"क \n))`( ` ]  `~","want":"क\n))`( ` ]  `~"},
+{"text":"*कaahttps://a.b/c\r+```\r\n #*\r\n**https://a.b/ca","want":"*कaahttps://a.b/c\r+```\n #*\n**https://a.b/ca"},
+{"text":"**__) )bक []_aa__aaक_]\na##  ","want":"**__) )bक []_aa__aaक_]\na##"},
+{"text":"-😀#**#```_[***~**क__~\n#","want":"-😀#*#```_[**~**क__~\n#"},
+{"text":"\nbhttps://a.b/c-","want":"bhttps://a.b/c-"},
+{"text":"https://a.b/c]__```_https://a.b/c","want":"https://a.b/c]__```_https://a.b/c"},
+{"text":"[ `\r__( [+😀**https://a.b/c**[_( ","want":"[ `\r__( [+😀*https://a.b/c*[_("},
+{"text":"~-[]**a(#`","want":"~-[]**a(#`"},
+{"text":"(https://a.b/c","want":"(https://a.b/c"},
+{"text":"b\r 😀-\n+क)``` ```","want":"b\r 😀-\n+क)``` ```"},
+{"text":"#\n__\r```b(## _]","want":"#\n__\r```b(## _]"},
+{"text":"## \r```-ba__b#\n+[)``` )\r##  ____ https://a.b/c","want":"## \r```-ba__b#\n+[)``` )\r##  ____ https://a.b/c"},
+{"text":"]]+```","want":"]]+```"},
+{"text":"-#","want":"-#"},
+{"text":"+😀\r**```#```]\n","want":"+😀\r**```#```]"},
+{"text":")b__ ]","want":")b__ ]"},
+{"text":"~","want":"~"},
+{"text":"क[((**```_]\r\r\nb[😀+__\n_)https://a.b/c+`_","want":"क[((**```_]\nb[😀+__\n_)https://a.b/c+`_"},
+{"text":"```* (]-`____```#`\r\n\r\n-]___","want":"```* (]-`____```#`\n\n-]___"},
+{"text":"[\r\n][ **~```#😀```## -]😀__(*_\r## _","want":"[\n][ **~```#😀```*-]😀(_*\r*_*"},
+{"text":"\r\nक\n~#)#*\r\n]https://a.b/cb[b \t***\t","want":"क\n~#)#*\n]https://a.b/cb[b \t***"},
+{"text":"https://a.b/c##  \r\n+]## \r+)[~","want":"https://a.b/c##\n+]## \r+)[~"},
+{"text":"b","want":"b"},
+{"text":"] aक](b**(_https://a.b/c   \t\n ~+)[**_","want":"] aक](b**(_https://a.b/c\n ~+)[**_"},
+{"text":"क**a`#क]  a__# \t _[~ # _(","want":"क**a`#क]  a__# \t _[~ # _("},
+{"text":" ))😀 ** `````` https://a.b/c[😀(+```क","want":"))😀 ** `````` https://a.b/c[😀(+```क"},
+{"text":"😀## https://a.b/c**😀","want":"😀## https://a.b/c**😀"},
+{"text":"_ [","want":"_ ["},
+{"text":"https://a.b/c\t+` b## कbकb","want":"https://a.b/c\t+` b## कbकb"},
+{"text":"a[)_ \r\n 😀","want":"a[)_\n 😀"},
+{"text":"_+```क+#a*  *)","want":"_+```क+#a*  *)"},
+{"text":"## ```\n**```**## क\r\n\t**__\t__a~ [)\t\t","want":"## ```\n**```**## क\n\t**__\t__a~ [)"},
+{"text":"क~😀","want":"क~😀"},
+{"text":" \r## \r\t\n ]कक+","want":"##\n ]कक+"},
+{"text":"https://a.b/c__\r-[-**```~## aa\r\n[😀","want":"https://a.b/c__\r-[-**```~## aa\n[😀"},
+{"text":"क(","want":"क("},
+{"text":"-\t___\r\n क\rb😀","want":"-\t___\n क\rb😀"},
+{"text":"😀\r**_\r)😀bb* #(`)","want":"😀\r**_\r)😀bb* #(`)"},
+{"text":"[\r\nhttps://a.b/c `","want":"[\nhttps://a.b/c `"},
+{"text":"__]**a](_(","want":"__]**a](_("},
+{"text":"-#*\r\n`#\r## +","want":"-#*\n`#\r*+*"},
+{"text":"## -+ ","want":"*-+*"},
+{"text":"+a]`__ https://a.b/cक+[#\r\n\r\n","want":"+a]`__ https://a.b/cक+[#"},
+{"text":"b`😀#```aक## __a_#_```क","want":"b`😀#```aक## __a_#_```क"},
+{"text":"__[ [#b \r\n`_b","want":"__[ [#b\n`_b"},
+{"text":"**\n-#`aकक# ## [**","want":"**\n-#`aकक# ## [**"},
+{"text":"_* \r#(+ b","want":"_* \r#(+ b"},
+{"text":" *","want":"*"},
+{"text":"\r\n","want":""},
+{"text":"*bक## **\t\n\tb#- ## **__\r\n`\t a\r\n*`😀","want":"*bक## **\n\tb#- ## **__\n`\t a\n*`😀"},
+{"text":"```\r\n","want":"```"},
+{"text":"😀+__```## ","want":"😀+__```##"},
+{"text":"~\n)___#```😀","want":"~\n)___#```😀"},
+{"text":"a\r##_*-https://a.b/c)--b ##  _+","want":"a\r##_*-https://a.b/c)--b ##  _+"},
+{"text":"`~\n**_]\t\r\n","want":"`~\n**_]"},
+{"text":"` )**____[#क```","want":"` )**____[#क```"},
+{"text":"-#*## #😀क]#😀+","want":"-#*## #😀क]#😀+"},
+{"text":"__","want":"__"},
+{"text":"b-```]\t #__`","want":"b-```]\t #__`"},
+{"text":"-## ba\r\na  )+#a(https://a.b/c#+a😀]\r\n][","want":"-## ba\na  )+#a(https://a.b/c#+a😀]\n]["},
+{"text":"__#\n -( ","want":"__#\n -("},
+{"text":"b(_","want":"b(_"},
+{"text":"क\t]a*😀https://a.b/c\n_ `__ [https://a.b/c\t*\r```_","want":"क\t]a*😀https://a.b/c\n_ `__ [https://a.b/c\t*\r```_"},
+{"text":"**)😀a","want":"**)😀a"},
+{"text":"_ 😀\n\t( ]\r]https://a.b/c### ````\r\n**+`#","want":"_ 😀\n\t( ]\r]https://a.b/c### ````\n**+`#"},
+{"text":"\n(]😀 ( 😀`_)(b\n+]**__#__","want":"(]😀 ( 😀`_)(b\n+]**__#__"},
+{"text":"## #]~`__#+a```*__\rhttps://a.b/c+## _[#","want":"*#]~*`__#+a```*__\rhttps://a.b/c+## _[#"},
+{"text":"``` ## #]-_\t__\r\n","want":"``` *#]-_\t*"},
+{"text":"क~)\r` # )**(क`[","want":"क~)\r` # )**(क`["},
+{"text":"_😀\t ##  \r\n\r\nhttps://a.b/c## \r\n)__  \r","want":"_😀\t ##\n\nhttps://a.b/c##\n)__"},
+{"text":" )(]) ~#क😀😀 क ## ** +```","want":")(]) ~#क😀😀 क ## ** +```"},
+{"text":"\t ## **\r\r\n[https://a.b/c ","want":"**\n[https://a.b/c"},
+{"text":"~`(]-+  ~😀","want":"~`(]-+  ~😀"},
+{"text":"😀`https://a.b/c\n~b)क😀","want":"😀`https://a.b/c\n~b)क😀"},
+{"text":"\t***bक \r\n\tb#\n```))https://a.b/c😀","want":"***bक\n\tb#\n```))https://a.b/c😀"},
+{"text":"## 😀\n```b\t+a## *__# 😀\t _क\n-]```","want":"*😀*\n```b\t+a## *__# 😀\t _क\n-]```"},
+{"text":")__)\r\n_ https://a.b/ca","want":")__)\n_ https://a.b/ca"},
+{"text":"😀","want":"😀"},
+{"text":" [ https://a.b/c[ -## )😀``\n\tb\r\n\t\n*","want":"[ https://a.b/c[ -## )😀``\n\tb\n\n*"},
+{"text":" (__~#]a\n\r\n` b`**\r-https://a.b/c) __]`","want":"(__~#]a\n\n` b`**\r-https://a.b/c) __]`"},
+{"text":"_**`__~\t## # a-)```_**___\n\t","want":"_**`__~\t## # a-)```_**___"},
+{"text":"~ )))## [__क-","want":"~ )))## [__क-"},
+{"text":" ","want":""},
+{"text":"- a*b ```\n__`\r\r\n+\r\n #~https://a.b/c😀#-**","want":"- a*b ```\n__`\n+\n #~https://a.b/c😀#-**"},
+{"text":"\r ##a[#+[","want":"##a[#+["},
+{"text":")~`\r__\r\n\r`](","want":")~`\r__\n\r`]("},
+{"text":"\r~]\n😀","want":"~]\n😀"},
+{"text":"## 😀-** bb## ``````क\r\nb-","want":"*😀-* bb## ``````क\nb-"},
+{"text":"**`","want":"**`"},
+{"text":"क## \tक#\thttps://a.b/c]#a~## https://a.b/c__\n\r(  ","want":"क## \tक#\thttps://a.b/c]#a~## https://a.b/c__\n\r("},
+{"text":"+-\r\n [`) *\n- #https://a.b/ca*)","want":"+-\n [`) *\n- #https://a.b/ca*)"},
+{"text":" *#\n`","want":"*#\n`"},
+{"text":"```## _]\rb\n","want":"```## _]\rb"},
+{"text":"## (\r+[","want":"*(*\r+["},
+{"text":"])\r[ \r\n]\r\n__😀-b\n \t**😀[ ","want":"])\r[\n]\n__😀-b\n \t**😀["},
+{"text":"~a~\t https://a.b/c*\t","want":"~a~\t https://a.b/c*"},
+{"text":"## (```_+## \n##  _b(`\r\n \r\n\r#] ","want":"*(```_+##*\n*_b(`*\n\n\r#]"},
+{"text":"क[]__~\nhttps://a.b/c*क😀 **_-😀[https://a.b/c https://a.b/c_","want":"क[]__~\nhttps://a.b/c*क😀 **_-😀[https://a.b/c https://a.b/c_"},
+{"text":"]`+~``` #`\nक😀\tb~```\r*[\ta\r\n","want":"]`+~``` #`\nक😀\tb~```\r*[\ta"},
+{"text":"__## \t(** क*a#[क\n(____(+b\n","want":"__## \t(** क*a#[क\n(____(+b"},
+{"text":"\r\n#\t- +https://a.b/ca_https://a.b/c_[\t(`[`#*","want":"*- +https://a.b/ca_https://a.b/c_[\t(*`[`#*"},
+{"text":"`~https://a.b/c__https://a.b/c#कb\n\r)😀[\r_ahttps://a.b/c**(```bb(","want":"`~https://a.b/c__https://a.b/c#कb\n\r)😀[\r_ahttps://a.b/c**(```bb("},
+{"text":"*\r]bक__[- क`b-\n++]__*```+","want":"*\r]bक__[- क`b-\n++]__*```+"},
+{"text":"😀~क- a\r\n😀(]","want":"😀~क- a\n😀(]"},
+{"text":"a+)😀()~_\r#क ]~क`क😀\t**b`_ ","want":"a+)😀()~_\r#क ]~क`क😀\t**b`_"},
+{"text":"\r\n_**","want":"_**"},
+{"text":"\n\r\n`_**\t+ \r\n__+__b__\t","want":"`_**\t+\n_+__b_"},
+{"text":"\t (","want":"("},
+{"text":"क#+ *\n😀##  __``(])````**b\r\n__क**-","want":"क#+ *\n😀##  __``(])````**b\n__क**-"},
+{"text":"\r😀https://a.b/c\n `_[)## ~+#+____*(a*## ```","want":"😀https://a.b/c\n `_[)## ~+#+____*(a*## ```"},
+{"text":"(-~__क**```\t ]]😀__`*```\r```https://a.b/c ## )","want":"(-~__क**```\t ]]😀__`*```\r```https://a.b/c ## )"},
+{"text":"क)# b\n😀\t** ","want":"क)# b\n😀\t**"},
+{"text":" \r\n\n~\ta]```[a\t[**","want":"~\ta]```[a\t[**"},
+{"text":"bक😀\n (b)```","want":"bक😀\n (b)```"},
+{"text":"😀😀(\n😀+*😀~😀)\r\nhttps://a.b/c**~`+~([[]\r)","want":"😀😀(\n😀+*😀~😀)\nhttps://a.b/c**~`+~([[]\r)"},
+{"text":" *\n```[ab) ~*__😀","want":"*\n```[ab) ~*__😀"},
+{"text":")## (","want":")## ("},
+{"text":"-(````क\r__\r## ","want":"-(````क\r__\r##"},
+{"text":"\ta+*)https://a.b/c\r\n","want":"a+*)https://a.b/c"},
+{"text":"https://a.b/c   _\n","want":"https://a.b/c   _"},
+{"text":") #```क\ta😀\t \r\n**😀https://a.b/c _ ","want":") #```क\ta😀\n**😀https://a.b/c _"},
+{"text":"\t__😀","want":"__😀"},
+{"text":" **** ### https://a.b/c](😀__`[ ]😀-","want":"**** ### https://a.b/c](😀__`[ ]😀-"},
+{"text":"``## \r\n#\n _","want":"``##\n#\n _"},
+{"text":"]## #[क\r\n__ https://a.b/c*```+```)## ","want":"]## #[क\n__ https://a.b/c*```+```)##"},
+{"text":"b\t]__-## ## `## \t**क[\r","want":"b\t]__-## ## `## \t**क["},
+{"text":"\n` क**https://a.b/c[__`)#~`_ba_","want":"` क**https://a.b/c[__`)#~`_ba_"},
+{"text":"a","want":"a"},
+{"text":"bक*\r~https://a.b/chttps://a.b/c","want":"bक*\r~https://a.b/chttps://a.b/c"},
+{"text":"+___ क**a*क*a","want":"+___ क**a*क*a"},
+{"text":"b","want":"b"},
+{"text":"*(b`\n)__*-\t_## **क**-क```","want":"*(b`\n)__*-\t_## *क*-क```"},
+{"text":"😀#+__**\rhttps://a.b/c] \r\rक","want":"😀#+__**\rhttps://a.b/c] \r\rक"},
+{"text":"*😀#__`_#)","want":"*😀#__`_#)"},
+{"text":" ]_😀*\nhttps://a.b/ca[https://a.b/c**_\r\nb ```https://a.b/c#**`","want":"]_😀*\nhttps://a.b/ca[https://a.b/c**_\nb ```https://a.b/c#**`"},
+{"text":"😀]## b\tकaकhttps://a.b/c\r\n*","want":"😀]## b\tकaकhttps://a.b/c\n*"},
+{"text":"__https://a.b/c#)+https://a.b/cb _((]क )\r]*a**__[`","want":"__https://a.b/c#)+https://a.b/cb _((]क )\r]*a**__[`"},
+{"text":"_https://a.b/c","want":"_https://a.b/c"},
+{"text":"\t #`क## bab```[(","want":"#`क## bab```[("},
+{"text":"\r\nक__)_aक😀\t )**https://a.b/c\n**https://a.b/c`https://a.b/c","want":"क__)_aक😀\t )**https://a.b/c\n**https://a.b/c`https://a.b/c"},
+{"text":"😀","want":"😀"},
+{"text":"\r`","want":"`"},
+{"text":"## \r\n-#*\n-## 😀https://a.b/c \r\na\t#][`__## ","want":"##\n-#*\n-## 😀https://a.b/c\na\t#][`__##"},
+{"text":"\t]\r\n____ ## ","want":"]\n____ ##"},
+{"text":"_https://a.b/c \t\r\n","want":"_https://a.b/c"},
+{"text":"(-b\r\n~*कb-__😀```\r","want":"(-b\n~*कb-__😀```"},
+{"text":"*_\rb` #__\n_क\n]] **","want":"*_\rb` #__\n_क\n]] **"},
+{"text":"**## ","want":"**##"},
+{"text":"*+~","want":"*+~"},
+{"text":"***## ```## 😀","want":"***## ```## 😀"},
+{"text":") _\rhttps://a.b/c b[ +\r\n\t~)b`_https://a.b/c(**~https://a.b/c","want":") _\rhttps://a.b/c b[ +\n\t~)b`_https://a.b/c(**~https://a.b/c"},
+{"text":")___]a#\n```\r\t*\r\n```a## ## (]a😀\n\r","want":")___]a#\n```\r\t*\n```a## ## (]a😀"},
+{"text":"\n```\rक```*\n)\n\r\r#(## ```)-**","want":"```\rक```*\n)\n\r\r#(## ```)-**"},
+{"text":"#क~__]क#https://a.b/c","want":"#क~__]क#https://a.b/c"},
+{"text":"a-[😀```","want":"a-[😀```"},
+{"text":"\r\nb*","want":"b*"},
+{"text":"\nक__`__#😀~b- \r()कa```` ","want":"क__`__#😀~b- \r()कa````"},
+{"text":"\tb\t\r \t\n_#] `\r\n)[_ `कhttps://a.b/c","want":"b\n_#] `\n)[_ `कhttps://a.b/c"},
+{"text":"## #]## क+```***--## क` ]","want":"*#]## क+``*`***--## क` ]"},
+{"text":"[[```~\r\n\nb[https://a.b/c## ~😀 b[``` b ((\t_","want":"[[```~\n\nb[https://a.b/c## ~😀 b[``` b ((\t_"},
+{"text":"]a\r  b__~\n\n-b*b_[\r\n`*\r\n]b","want":"]a\r  b__~\n\n-b*b_[\n`*\n]b"},
+{"text":"\t __]++कक-b#ab ~```\r\n\r*https://a.b/c(","want":"__]++कक-b#ab ~```\n\r*https://a.b/c("},
+{"text":" क😀[## `+-क[_b_--)\r","want":"क😀[## `+-क[_b_--)"},
+{"text":"**[*_ #😀_","want":"**[*_ #😀_"},
+{"text":"**_+ )क##😀+_\n+\r\n_ 😀` `\n\t","want":"**_+ )क##😀+_\n+\n_ 😀` `"},
+{"text":"\n\r~## \r\n \nक  \r\na\r## ~~\r\n__\r","want":"~##\n\nक\na\r*~~*\n__"},
+{"text":" \r__**\r[__","want":"__**\r[__"},
+{"text":")https://a.b/ca😀 __**#\n\r* [ ``` ```**-` क*","want":")https://a.b/ca😀 __**#\n\r* [ ``` ```**-` क*"},
+{"text":"😀 a __~__b\t## \r 😀```~_~]`","want":"😀 a __~__b\t## \r 😀```~_~]`"},
+{"text":"#~","want":"#~"},
+{"text":"https://a.b/c___[ क+","want":"https://a.b/c___[ क+"},
+{"text":"]a_) ","want":"]a_)"},
+{"text":"](\t","want":"]("},
+{"text":" \n__```]https://a.b/c```","want":"__```]https://a.b/c```"},
+{"text":"क\n[😀## \n```- ## ~+_~ +_https://a.b/c(\rक__[(","want":"क\n[😀##\n```- ## ~+_~ +_https://a.b/c(\rक__[("},
+{"text":"~-\r\n\r\n] \r\t*क(  `[a😀~+क","want":"~-\n\n] \r\t*क(  `[a😀~+क"},
+{"text":"ab_----\t~_~__*`-*+_`","want":"ab_----\t~_~__*`-*+_`"},
+{"text":"\n__]\r\n(\r\n** \r __[`\nhttps://a.b/c)😀``_## ","want":"__]\n(\n** \r __[`\nhttps://a.b/c)😀``_##"},
+{"text":"b ","want":"b"},
+{"text":"## 😀()","want":"*😀()*"},
+{"text":"`_कhttps://a.b/ca** **\r\n ]😀","want":"`_कhttps://a.b/ca** **\n ]😀"},
+{"text":" ___**https://a.b/c\na ~~क+a~_(-_```😀```https://a.b/c","want":"___**https://a.b/c\na ~~क+a~_(-_```😀```https://a.b/c"},
+{"text":"[ https://a.b/c```_#(","want":"[ https://a.b/c```_#("},
+{"text":"*` *😀_","want":"*` *😀_"},
+{"text":"## ++😀~https://a.b/c\r\n#a\t__+ 😀\n\r","want":"*++😀~https://a.b/c*\n#a\t__+ 😀"},
+{"text":"]#**😀https://a.b/c a 😀(** +a**)","want":"]#**😀https://a.b/c a 😀(** +a**)"},
+{"text":"## a__https://a.b/c-(a]**\r-#```#\r## ","want":"*ahttps://a.b/c-(a]*\r-#```#\r##"},
+{"text":"क`+__ **","want":"क`+__ **"},
+{"text":"##  ]\n__+_https://a.b/c### ","want":"##  ]\n__+_https://a.b/c###"},
+{"text":"कhttps://a.b/c ```\r\n","want":"कhttps://a.b/c ```"},
+{"text":" \n__https://a.b/c**## )] \r\na\r\n\na","want":"__https://a.b/c**## )]\na\n\na"},
+{"text":"\t\r__+😀क\t**","want":"__+😀क\t**"},
+{"text":"\t]😀```#\t","want":"]😀```#"},
+{"text":" ## bhttps://a.b/c]```a__\t+","want":"## bhttps://a.b/c]```a__\t+"},
+{"text":"\t\r\n-## -**`😀कb😀 \r #``` ","want":"-## -**`😀कb😀 \r #```"},
+{"text":"~```\r)","want":"~```\r)"},
+{"text":"\r\n +https://a.b/cक ~(`___","want":"+https://a.b/cक ~(`___"},
+{"text":"https://a.b/c- \t-a [-","want":"https://a.b/c- \t-a [-"},
+{"text":"-","want":"-"},
+{"text":"**## ","want":"**##"},
+{"text":"+https://a.b/c[`\n`## ","want":"+https://a.b/c[`\n`##"},
+{"text":"`]😀a```~\n😀","want":"`]😀a```~\n😀"},
+{"text":"\t\r\nb~\n[[`a","want":"b~\n[[`a"},
+{"text":"\r\n\r\t**😀\t ]**https://a.b/cक-__ [_+[\r)_# ","want":"**😀\t ]**https://a.b/cक-__ [_+[\r)_#"},
+{"text":"[#)]क)","want":"[#)]क)"},
+{"text":" ","want":""},
+{"text":"__-__[##  https://a.b/c```# (*b","want":"_-_[##  https://a.b/c```# (*b"},
+{"text":"*```(*(~__b*\r\n","want":"*```(*(~__b*"},
+{"text":" b\r*a)+-\t__(\rक**😀*`","want":"b\r*a)+-\t__(\rक**😀*`"},
+{"text":"~~\r b+ ]https://a.b/c","want":"~~\r b+ ]https://a.b/c"},
+{"text":"\r\n\r","want":""},
+{"text":"_## \t(","want":"_## \t("},
+{"text":"```]bhttps://a.b/ca]","want":"```]bhttps://a.b/ca]"},
+{"text":"https://a.b/c~)+\r__\r\n````b```(+]+`","want":"https://a.b/c~)+\r__\n````b```(+]+`"},
+{"text":"##  \r\n[`__\n**]#😀","want":"- *\n[`__\n**]#😀"},
+{"text":"-```क_)\r``😀https://a.b/cक\n* https://a.b/c_```क\r\n## +b","want":"-```क_)\r``😀https://a.b/cक\n* https://a.b/c_```क\n*+b*"},
+{"text":"`]* \t## **#)[a","want":"`]* *#)[a*"},
+{"text":"## \n\r\n\rhttps://a.b/c_## ** ## ])","want":"##\n\n\rhttps://a.b/c_## ** ## ])"},
+{"text":"b\n~[","want":"b\n~["},
+{"text":"\tक\na[\r\n**a","want":"क\na[\n**a"},
+{"text":"_\t\n*~https://a.b/c~क## +\r#)\r\n\r","want":"_\n*~https://a.b/c~क## +\r#)"},
+{"text":"_ ","want":"_"},
+{"text":"https://a.b/c__**\r+_(#  ]","want":"https://a.b/c__**\r+_(#  ]"},
+{"text":"(#\r\n😀","want":"(#\n😀"},
+{"text":"__ \ra\r\n~(```**https://a.b/c - \n[```)bक","want":"__ \ra\n~(```**https://a.b/c -\n[```)bक"},
+{"text":"a😀😀\n ## a","want":"a😀😀\n *a*"},
+{"text":"`\r\n","want":"`"},
+{"text":"https://a.b/cb b 😀b\r\r\n+b","want":"https://a.b/cb b 😀b\n+b"},
+{"text":"b\r#-+😀\t```","want":"b\r#-+😀\t```"},
+{"text":"]\t\r\n+__ )+\n````#)https://a.b/c_क* +()","want":"]\n+__ )+\n````#)https://a.b/c_क* +()"},
+{"text":"-)``````\t\r```~__\rकb[b\tक~ `)~\r\n*https://a.b/c","want":"-)``````\t\r```~__\rकb[b\tक~ `)~\n*https://a.b/c"},
+{"text":"_]## __## \r## ```*__\r b \r \ra*","want":"_]## __## \r*```*\r b \r \ra*"},
+{"text":"https://a.b/c## **b","want":"https://a.b/c## **b"},
+{"text":"[```([-_](a```-~`## )https://a.b/c+++\tb\nक*","want":"[```([-_](a```-~`## )https://a.b/c+++\tb\nक*"},
+{"text":"## https://a.b/c[https://a.b/c]## ```","want":"*https://a.b/c[https://a.b/c]## ```*"},
+{"text":"a~b**_","want":"a~b**_"},
+{"text":"\t+a*)~a\r\n\tb","want":"+a*)~a\n\tb"},
+{"text":"\r\n+😀]😀__😀## ```(### ```a]__\r~( #_~","want":"+😀]😀__😀## ```(### ```a]__\r~( #_~"},
+{"text":"__😀+)_(a)","want":"__😀+)_(a)"},
+{"text":"\n[##  https://a.b/c++😀_\t(`क\r\n```[ __\r","want":"[##  https://a.b/c++😀_\t(`क\n```[ __"},
+{"text":"]\r\n)","want":"]\n)"},
+{"text":"😀~)😀~__- ## -+*a😀https://a.b/c`\r\n#\r\n[\n\r\n","want":"😀~)😀~__- ## -+*a😀https://a.b/c`\n#\n["},
+{"text":"_ a## ## _+ _ ```\t\r\n**\n*-\r","want":"_ a## ## _+ _ ```\n**\n*-"},
+{"text":"\n","want":""},
+{"text":"__ ```)+","want":"__ ```)+"},
+{"text":"\r\nhttps://a.b/c*-+_+क```","want":"https://a.b/c*-+_+क```"},
+{"text":" https://a.b/cba\n## `[-~[ (]**b```","want":"https://a.b/cba\n## `[-~[ (]**b```"},
+{"text":"b[-\rक \t```","want":"b[-\rक \t```"},
+{"text":"क))*```\r\n-## ## (\r\n😀 ```","want":"क))*```\n-## ## (\n😀 ```"},
+{"text":"\r\n _`😀a#\r\n)a)## ```https://a.b/c\r +## ~क~a[क","want":"_`😀a#\n)a)## ```https://a.b/c\r +## ~क~a[क"},
+{"text":"+","want":"+"},
+{"text":"___","want":"___"},
+{"text":"** `\n# *[__#https://a.b/c```*# +_`","want":"** `\n# *[__#https://a.b/c```*# +_`"},
+{"text":"(_😀\n(## \tक(\tक ## \r\n\n## क)","want":"(_😀\n(## \tक(\tक ##\n\n*क)*"},
+{"text":"\t","want":""},
+{"text":"##  **]https://a.b/c","want":"*]https://a.b/c*"},
+{"text":"(~😀-*__😀https://a.b/c","want":"(~😀-*__😀https://a.b/c"},
+{"text":"\t  a## ","want":"a##"},
+{"text":"\r \r\n+-*\n)\tb+\t++b😀","want":"+-*\n)\tb+\t++b😀"},
+{"text":"+`[``` https://a.b/c  _\t+(*__]**  _a-b","want":"+`[``` https://a.b/c  _\t+(*__]**  _a-b"},
+{"text":")```[-`\r[(\t__\r😀\n ```क]😀-_#**","want":")```[-`\r[(\t__\r😀\n ```क]😀-_#**"},
+{"text":"a-+\nhttps://a.b/c[  \t\t\nक(","want":"a-+\nhttps://a.b/c[\nक("},
+{"text":"]😀)-``` __)a-++b😀`","want":"]😀)-``` __)a-++b😀`"},
+{"text":"  )bb\t## __ [## ## 😀\r*क","want":")bb\t## __ [## ## 😀\r*क"},
+{"text":"# +  😀ab ","want":"# +  😀ab"},
+{"text":"\r)](__~\t~)\r\r\n\n```😀 bक[~#","want":")](__~\t~)\n\n```😀 bक[~#"},
+{"text":"\r__ [*","want":"__ [*"},
+{"text":"[\r\t ~]## [)`(b## a## \n","want":"[\r\t ~]## [)`(b## a##"},
+{"text":"-]\tb\n#```)\t[ )-`~क*\r\n😀- b ","want":"-]\tb\n#```)\t[ )-`~क*\n😀- b"},
+{"text":"~-","want":"~-"},
+{"text":")\t__+😀 +\n~ ","want":")\t__+😀 +\n~"},
+{"text":"क😀## **https://a.b/c-","want":"क😀## **https://a.b/c-"},
+{"text":"\r\n \t\r__-\t[https://a.b/cक `https://a.b/c~) (**~\t","want":"__-\t[https://a.b/cक `https://a.b/c~) (**~"},
+{"text":"क","want":"क"},
+{"text":"~","want":"~"},
+{"text":"\t _*\n-https://a.b/c__## [ \t###  ```https://a.b/c+[**b```https://a.b/c","want":"_*\n-https://a.b/c__## [ \t###  ```https://a.b/c+[**b```https://a.b/c"},
+{"text":"\n][ (-_b## \r## *## -```-क (## https://a.b/c[","want":"][ (-_b## \r*## -```-क* (## https://a.b/c["},
+{"text":"_`https://a.b/c)````## ## ~]+~\r#\na`bक## b","want":"_`https://a.b/c)````## ## ~]+~\r#\na`bक## b"},
+{"text":"*aक [~**कb+## **ab😀\r😀#\n**b```b","want":"*aक [~**कb+## **ab😀\r😀#\n**b```b"},
+{"text":"\r\n-\r\n```## \t**😀-+** ## 😀]\n\r\rb","want":"-\n```## \t*😀-+* *😀]*\n\r\rb"},
+{"text":"+__क*-*bक \t\r\n`-https://a.b/c**][ -","want":"+__क*-*bक\n`-https://a.b/c**][ -"},
+{"text":"`~) ] `` ` ~`\r\n#`(## \r  +```## ","want":"`~) ] `` ` ~`\n#`(## \r  +```##"},
+{"text":"😀","want":"😀"},
+{"text":"b]\tक`~\t\t+```\n[https://a.b/c\r```","want":"b]\tक`~\t\t+```\n[https://a.b/c\r```"},
+{"text":"]__#```__#`","want":"]__#```__#`"},
+{"text":"aa_https://a.b/c","want":"aa_https://a.b/c"},
+{"text":" b~\r\n~## +क**क","want":"b~\n~## +क**क"},
+{"text":"https://a.b/c+*_b😀 ****)😀`","want":"https://a.b/c+*_b😀 ****)😀`"},
+{"text":"\r\n)**\t**## )क\na)()-_```#","want":")**\t**## )क\na)()-_```#"},
+{"text":"```~`","want":"```~`"},
+{"text":"~#]```","want":"~#]```"},
+{"text":"b*## \t\t`b\n\r\na*`(  `😀","want":"b*## \t\t`b\n\na*`(  `😀"},
+{"text":"]\t\r`\r  a`","want":"]\t\r`\r  a`"},
+{"text":"\t```a`क```\r\n  \r\nकhttps://a.b/c~\r\n __~]+\r\n-","want":"```a`क```\n\nकhttps://a.b/c~\n __~]+\n-"},
+{"text":"😀~https://a.b/cक`😀\t**```#```[b+__","want":"😀~https://a.b/cक`😀\t**```#```[b+__"},
+{"text":"\t[`**","want":"[`**"},
+{"text":"a[-😀-]a[\t#`*क\t ","want":"a[-😀-]a[\t#`*क"},
+{"text":"\r(**\r\n``` ```https://a.b/c_ (` a _","want":"(**\n``` ```https://a.b/c_ (` a _"},
+{"text":"\n`]`","want":"`]`"},
+{"text":" 😀😀😀`## **\r-\rhttps://a.b/c+` \t```","want":"😀😀😀`## **\r-\rhttps://a.b/c+` \t```"},
+{"text":"\ta \n```bक#+__]#```\t\n","want":"a\n```bक#+__]#```"},
+{"text":"__****क+\t__a)## b-](a ","want":"__****क+\t__a)## b-](a"},
+{"text":"\n```","want":"```"},
+{"text":" `* aक😀क_","want":"`* aक😀क_"},
+{"text":"😀\t  😀)____aa( ] b`\r\n","want":"😀\t  😀)____aa( ] b`"},
+{"text":")","want":")"},
+{"text":"😀**a[#(`\n\na**)_+https://a.b/c","want":"😀**a[#(`\n\na**)_+https://a.b/c"},
+{"text":"\n```","want":"```"},
+{"text":"क[+a+(`)`[**`b __a","want":"क[+a+(`)`[**`b __a"},
+{"text":"```__*\r_\r\r ","want":"```__*\r_"},
+{"text":"\n\r*+कक\n__\r\n**#]-~ a\r\n😀~ [","want":"*+कक\n__\n**#]-~ a\n😀~ ["},
+{"text":"**` (]`### \t)(-","want":"**` (]`*)(-*"},
+{"text":"## -__##     ____~--\t-https://a.b/c* -** __","want":"*-##     ~--\t-https://a.b/c* -** __"},
+{"text":"\t__ ~[https://a.b/c\t__b## -\t\t\r\n_\r","want":"__ ~[https://a.b/c\t__b## -\n_"},
+{"text":"-)[b`😀))\t_😀**`a ","want":"-)[b`😀))\t_😀**`a"},
+{"text":"`]* +~https://a.b/c😀(__+a##) 😀\nb","want":"`]* +~https://a.b/c😀(__+a##) 😀\nb"},
+{"text":"]_+(-+]`\r\n\r\na -","want":"]_+(-+]`\n\na -"},
+{"text":"a+__","want":"a+__"},
+{"text":"a[\n]b__\t*(]-++\r","want":"a[\n]b__\t*(]-++"},
+{"text":"__## #b😀## _~\r\n#__*~\t\t\r\nक([## **]","want":"__## #b😀## _~\n#__*~\nक([## **]"},
+{"text":" ","want":""},
+{"text":"[a_-+* \r\t*\tbhttps://a.b/c-😀_","want":"[a_-+* \r\t- bhttps://a.b/c-😀_"},
+{"text":"```\r\r","want":"```"},
+{"text":"**(`)(*https://a.b/cab \r\n\n*-","want":"**(`)(*https://a.b/cab\n\n*-"},
+{"text":"b\r\n-``` \t  ","want":"b\n-```"},
+{"text":"\r\n ## ","want":"##"},
+{"text":"[\t\r\na😀_#__*","want":"[\na😀_#__*"},
+{"text":"https://a.b/c(😀","want":"https://a.b/c(😀"},
+{"text":" [**-_) b b__#क##  😀https://a.b/chttps://a.b/c+ https://a.b/c-\r## ","want":"[**-_) b b__#क##  😀https://a.b/chttps://a.b/c+ https://a.b/c-\r##"},
+{"text":"😀]__]~##  ##  ]#+[)[b\t[#","want":"😀]__]~##  ##  ]#+[)[b\t[#"},
+{"text":"https://a.b/c _\nhttps://a.b/c*a````\r\n- _** _","want":"https://a.b/c _\nhttps://a.b/c*a````\n- _** _"},
+{"text":"*][ -😀#\t~(https://a.b/c__#a~[ **~","want":"*][ -😀#\t~(https://a.b/c__#a~[ **~"},
+{"text":"```*## +)_```## \r\n`+(\rb __)__\r\n **## *","want":"```*## +)_```##\n`+(\rb _)_\n **## *"},
+{"text":"()","want":"()"},
+{"text":"*","want":"*"},
+{"text":"## ]~b```a[\n**bhttps://a.b/c\r~\n__)`(\na __**","want":"*]~b```a[*\n**bhttps://a.b/c\r~\n__)`(\na __**"},
+{"text":"`__## __```]  \t`a`(+__+#**```]\r\ra*","want":"`__## __```]  \t`a`(+__+#**```]\r\ra*"},
+{"text":"(\t+`a__","want":"(\t+`a__"},
+{"text":"+😀__https://a.b/cकa(__```😀##  \r\n)~","want":"+😀_https://a.b/cकa(_```😀##\n)~"},
+{"text":" https://a.b/c` \r\n\n\r\n\n ","want":"https://a.b/c`"},
+{"text":"##  ~","want":"##  ~"},
+{"text":"```😀__ ```~   ```)] \rhttps://a.b/c**","want":"```😀__ ```~   ```)] \rhttps://a.b/c**"},
+{"text":"\r\n`**(#\t\r\nb __*+https://a.b/c https://a.b/c````## \r\n~क","want":"`**(#\nb __*+https://a.b/c https://a.b/c````##\n~क"},
+{"text":"\r**)__क*  b`\n-क)## a😀(`+``` ","want":"**)__क*  b`\n-क)## a😀(`+```"},
+{"text":"~","want":"~"},
+{"text":"__a*## **~) )😀\n\r\n","want":"__a*## **~) )😀"},
+{"text":"`~  [))\n**[]\r\n)**( 😀\n\r😀","want":"`~  [))\n**[]\n)**( 😀\n\r😀"},
+{"text":" *)https://a.b/c## \t#)कक## ","want":"*)https://a.b/c## \t#)कक##"},
+{"text":"#(**#(\r\n```b(\rb]","want":"#(**#(\n```b(\rb]"},
+{"text":" ** b#😀\r\n( ``` #https://a.b/c\t```+#https://a.b/c**__`","want":"** b#😀\n( ``` #https://a.b/c\t```+#https://a.b/c**__`"},
+{"text":"__+_```","want":"__+_```"},
+{"text":"_[\r\n\t","want":"_["},
+{"text":" \t]\r\n ~*","want":"]\n ~*"},
+{"text":"## (```[\r\n\r\n+`\t`+😀b```\t**","want":"*(*```[\n\n+`\t`+😀b```\t**"},
+{"text":"## ```(\thttps://a.b/cb a**__\r\nhttps://a.b/c```**","want":"## ```(\thttps://a.b/cb a**__\nhttps://a.b/c```**"},
+{"text":"😀**\r#😀\t*~\r( ____## *`-[","want":"😀**\r#😀\t*~\r( ____## *`-["},
+{"text":"**\n```b\t__ahttps://a.b/c#[","want":"**\n```b\t__ahttps://a.b/c#["},
+{"text":"#[~## \tक[[**)_https://a.b/c )***a\n#\t 😀 ","want":"#[~## \tक[[**)_https://a.b/c )***a\n*😀 *"},
+{"text":"क`**","want":"क`**"},
+{"text":"a## ```\nhttps://a.b/c\n`","want":"a## ```\nhttps://a.b/c\n`"},
+{"text":"]__(\r\n\n]_#`https://a.b/c[__[b## __-- क```\n\rhttps://a.b/c","want":"]__(\n\n]_#`https://a.b/c[__[b## __-- क```\n\rhttps://a.b/c"},
+{"text":"(\r\n_`- (😀b[ ","want":"(\n_`- (😀b["},
+{"text":"(([```https://a.b/c#a~```\r\n`**क\n]\tb-\r\n__ ```","want":"(([```https://a.b/c#a~```\n`**क\n]\tb-\n__ ```"},
+{"text":"## ```\t##~`","want":"*``*`\t##~`"},
+{"text":"क\rb#] \t\r#*\rb","want":"क\rb#] \t\r#*\rb"},
+{"text":"`__* ++*\t😀\r\n","want":"`__* ++*\t😀"},
+{"text":")]\tb\r\n\r\nb##\n]b+# __\t \n``````","want":")]\tb\n\nb##\n]b+# __\n``````"},
+{"text":"(\t+)\r\r\n```https://a.b/c`","want":"(\t+)\n```https://a.b/c`"},
+{"text":"** ","want":"**"},
+{"text":"_\t","want":"_"},
+{"text":"```b\r\n__]## ~(`_)(\r_b~","want":"```b\n__]## ~(`_)(\r_b~"},
+{"text":")`#\t\n```(","want":")`#\n```("},
+{"text":"## __)** b\n]+a\n```","want":"*)* b\n]+a\n```"},
+{"text":"+\thttps://a.b/cकbb~\r\n\r\n😀]##  (_\r\n\r__","want":"- https://a.b/cकbb~\n\n😀]##  (_\n\r__"},
+{"text":"**]*","want":"**]*"},
+{"text":"-**- (-क]` *## (**(-\r\n __-\tक`","want":"-**- (-क]` *## (**(-\n __-\tक`"},
+{"text":"](😀 \t~-~```(**\r\n ","want":"](😀 \t~-~```(**"},
+{"text":"+\r\n😀\n\r","want":"+\n😀"},
+{"text":"https://a.b/c](aक~\r```\r\n+ ","want":"https://a.b/c](aक~\r```\n-"},
+{"text":"~__(]","want":"~__(]"},
+{"text":"## +### )(~**~ )_)b` https://a.b/c]https://a.b/c__","want":"*+### )(~~ )_)b` https://a.b/c]https://a.b/c*"},
+{"text":"क\t**[\r]]- ** \t## \t","want":"क\t**[\r]]- ** \t##"},
+{"text":" 😀__(+)😀","want":"😀__(+)😀"},
+{"text":" ]😀~--+b```__## *** * +~)__ क~*","want":"]😀~--+b```_## *** * +~)_ क~*"},
+{"text":" )~b*\r-`** ```a_\nb\n*","want":")~b*\r-`** ```a_\nb\n*"},
+{"text":"_`+#a-[+https://a.b/c","want":"_`+#a-[+https://a.b/c"},
+{"text":"\r\n`#**","want":"`#**"},
+{"text":"+\r\n[____bक#b\nhttps://a.b/c```+ `https://a.b/c__\t][b## \r\n","want":"+\n[____bक#b\nhttps://a.b/c```+ `https://a.b/c__\t][b##"},
+{"text":"a+b#```_क+ `( \r","want":"a+b#```_क+ `("},
+{"text":"__ ( ]~```]) -\r\n~😀 ","want":"__ ( ]~```]) -\n~😀"},
+{"text":"#-(**( ","want":"#-(**("},
+{"text":"[ ```]a","want":"[ ```]a"},
+{"text":"https://a.b/chttps://a.b/c\n]#क___","want":"https://a.b/chttps://a.b/c\n]#क___"},
+{"text":"*~[https://a.b/c```क 😀 aक-]+\t","want":"*~[https://a.b/c```क 😀 aक-]+"},
+{"text":"\nhttps://a.b/c\r\nक**__\t*\n-))-*]\n\r😀","want":"https://a.b/c\nक**__\t*\n-))-*]\n\r😀"},
+{"text":" https://a.b/c) ","want":"https://a.b/c)"}
+],
+"clip": [
+{"text":"abc","length":3,"want":"abc"},
+{"text":"abcd","length":3,"want":"abc…"},
+{"text":"ab😀😀","length":3,"want":"ab😀…"},
+{"text":"","length":0,"want":""},
+{"text":"😀","length":0,"want":"…"},
+{"text":"a\ud83db","length":2,"want":"a�…"},
+{"text":"क्षत्रिय","length":3,"want":"क्ष…"}
+]
+}
