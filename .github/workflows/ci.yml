@@ -42,6 +42,11 @@ jobs:
           cache: npm
       - run: npm ci
       - run: make lint-core typecheck test-core build-core
+      - name: the go core's golden files match the typescript core
+        run: |
+          make golden
+          git status --porcelain -- core-go
+          test -z "$(git status --porcelain -- core-go)"
 
   gateway:
     runs-on: ubuntu-latest

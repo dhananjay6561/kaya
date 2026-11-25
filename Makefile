@@ -1,6 +1,6 @@
 .DEFAULT_GOAL := help
 .PHONY: help install dev dev-core dev-gateway dev-core-go lint lint-core lint-gateway lint-core-go \
-	lint-kit format format-core format-gateway format-core-go typecheck test test-core test-gateway \
+	lint-kit golden format format-core format-gateway format-core-go typecheck test test-core test-gateway \
 	test-core-go test-kit build build-core build-gateway build-core-go check clean \
 	up down db logs ps pair pair-dev media send data-dirs migrate rollback migration test-db contracts
 
@@ -87,6 +87,9 @@ build-gateway: ## build the gateway into gateway/bin
 build-core-go: ## build the Go core into core-go/bin
 	cd core-go && CGO_ENABLED=0 go build -trimpath -ldflags "-s -w -X main.version=$(VERSION)" \
 		-o bin/core ./cmd/core
+
+golden: ## write the Go core's golden test files from the TypeScript core
+	npx tsx core/scripts/golden.ts
 
 contracts: ## regenerate core's TypeScript types after changing contracts/schemas
 	npm run contracts:types -w @kaya/core
