@@ -565,8 +565,8 @@ func TestReplyBringsBackOlderExchangesMaskedAndAnswersWithoutThemWhenRecallFails
 	var before time.Time
 	c := newChat(t, Options{
 		LLM: cloud, NewMaskSession: realMasking, History: history(recent),
-		Recall: func(_ context.Context, q Question, exclude []int64, cut time.Time) ([]memory.Exchange, error) {
-			asked, excluded, before = append(asked, q.Text), exclude, cut
+		Recall: func(_ context.Context, query string, exclude []int64, cut time.Time) ([]memory.Exchange, error) {
+			asked, excluded, before = append(asked, query), exclude, cut
 			return []memory.Exchange{old}, nil
 		},
 	})
@@ -585,7 +585,7 @@ func TestReplyBringsBackOlderExchangesMaskedAndAnswersWithoutThemWhenRecallFails
 	stub := llm.NewStub(llm.StubOptions{Reply: func(llm.Request) string { return "fine" }})
 	c = newChat(t, Options{
 		LLM: stub,
-		Recall: func(context.Context, Question, []int64, time.Time) ([]memory.Exchange, error) {
+		Recall: func(context.Context, string, []int64, time.Time) ([]memory.Exchange, error) {
 			return nil, errors.New("voyage away")
 		},
 	})
@@ -596,7 +596,7 @@ func TestReplyBringsBackOlderExchangesMaskedAndAnswersWithoutThemWhenRecallFails
 	away := errors.New("connect ECONNREFUSED")
 	c = newChat(t, Options{
 		LLM: stub, DatabaseAway: func(err error) bool { return errors.Is(err, away) },
-		Recall: func(context.Context, Question, []int64, time.Time) ([]memory.Exchange, error) { return nil, away },
+		Recall: func(context.Context, string, []int64, time.Time) ([]memory.Exchange, error) { return nil, away },
 	})
 	if _, err := c.Reply(bg, q("hi")); !errors.Is(err, away) {
 		t.Fatalf("a recall that found the database away did not fail the question: %v", err)
@@ -605,7 +605,7 @@ func TestReplyBringsBackOlderExchangesMaskedAndAnswersWithoutThemWhenRecallFails
 
 func TestReplyDropsRecalledExchangesWhenTooLongAndKeepsThemForTheLowEffortRetry(t *testing.T) {
 	old := memory.Exchange{ID: 5, Question: "old question", Answer: "old answer", At: now.Add(-60 * 24 * time.Hour)}
-	recall := func(context.Context, Question, []int64, time.Time) ([]memory.Exchange, error) {
+	recall := func(context.Context, string, []int64, time.Time) ([]memory.Exchange, error) {
 		return []memory.Exchange{old}, nil
 	}
 	var sizes []int
@@ -634,8 +634,19 @@ func TestReplyDropsRecalledExchangesWhenTooLongAndKeepsThemForTheLowEffortRetry(
 	}
 }
 
-func found(excerpts ...search.Excerpt) func(context.Context, Question, string) ([]search.Excerpt, bool, error) {
-	return func(context.Context, Question, string) ([]search.Excerpt, bool, error) { return excerpts, true, nil }
+func found(excerpts ...search.Excerpt) func(context.Context, search.Plan) (search.Found, error) {
+	return func(context.Context, search.Plan) (search.Found, error) { return search.Found{Excerpts: excerpts}, nil }
+}
+
+// answers are the requests for an answer, leaving out the ones that planned a search.
+func answers(requests []llm.Request) []llm.Request {
+	var out []llm.Request
+	for _, r := range requests {
+		if r.Schema == nil {
+			out = append(out, r)
+		}
+	}
+	return out
 }
 
 func excerptsOf(r llm.Request) string {
@@ -656,13 +667,13 @@ func TestReplyShowsExcerptsAsMaskedDataAndRestoresTheAnswer(t *testing.T) {
 	var asked []string
 	c := newChat(t, Options{
 		LLM: cloud, NewMaskSession: realMasking, Zone: zone(t, "Asia/Kolkata"),
-		Excerpts: func(_ context.Context, q Question, _ string) ([]search.Excerpt, bool, error) {
-			asked = append(asked, q.Text)
-			return []search.Excerpt{e}, true, nil
+		Excerpts: func(_ context.Context, p search.Plan) (search.Found, error) {
+			asked = append(asked, p.Query)
+			return search.Found{Excerpts: []search.Excerpt{e}}, nil
 		},
 	})
 	got := reply(t, c, "what did rahul say about saturday?")
-	r := cloud.Requests()[0]
+	r := answers(cloud.Requests())[0]
 	sys, data := r.Messages[0].Content, excerptsOf(r)
 	if len(asked) != 1 || strings.Contains(data, "9876543210") || !strings.Contains(data, "21:04 Rahul: saturday at 7, call me on [PHONE_1]") {
 		t.Fatalf("excerpts:\n%s", data)
@@ -683,7 +694,7 @@ func TestReplyMasksACodeThatOnlyTheMessagesBeforeAnExcerptExplain(t *testing.T) 
 		Before: "bhai login code bhej do",
 	})})
 	reply(t, c, "rahul ne kya bheja?")
-	if data := excerptsOf(cloud.Requests()[0]); strings.Contains(data, "482913") || !strings.Contains(data, "Rahul: [OTP_1] hai jaldi daal") {
+	if data := excerptsOf(answers(cloud.Requests())[0]); strings.Contains(data, "482913") || !strings.Contains(data, "Rahul: [OTP_1] hai jaldi daal") {
 		t.Fatalf("excerpts:\n%s", data)
 	}
 }
@@ -694,33 +705,49 @@ func TestReplyMasksACodeRepeatedInAnEarlierAnswer(t *testing.T) {
 	c := newChat(t, Options{
 		LLM: cloud, NewMaskSession: realMasking,
 		History: func(context.Context, Question) ([]memory.Exchange, error) { return earlier, nil },
-		Recall: func(context.Context, Question, []int64, time.Time) ([]memory.Exchange, error) {
+		Recall: func(context.Context, string, []int64, time.Time) ([]memory.Exchange, error) {
 			return []memory.Exchange{{ID: 2, Question: "priya ne kya kaha?", Answer: "Priya ne 773105 bataya tha.", At: now.Add(-90 * 24 * time.Hour)}}, nil
 		},
 	})
 	reply(t, c, "aur kuch?")
-	for _, m := range cloud.Requests()[0].Messages {
+	for _, m := range answers(cloud.Requests())[0].Messages {
 		if strings.Contains(m.Content, "482913") || strings.Contains(m.Content, "773105") {
 			t.Fatalf("a code reached the cloud: %q", m.Content)
 		}
 	}
 }
 
+// planning is a stub reply that answers a planning request with plan and anything else with answer.
+func planning(plan, answer string) func(llm.Request) string {
+	return func(r llm.Request) string {
+		if r.Schema != nil {
+			return plan
+		}
+		return answer
+	}
+}
+
+const searchPlan = `{"search":true,"query":"q","people":[],"groups":[],"newest":false,"from":"","to":""}`
+
 func TestReplyTellsTheModelWhatTheChatSearchDid(t *testing.T) {
 	for _, c := range []struct {
 		name   string
-		search func(context.Context, Question, string) ([]search.Excerpt, bool, error)
+		plan   string
+		search func(context.Context, search.Plan) (search.Found, error)
 		want   string
 	}{
-		{"found nothing", found(), "found nothing for this question"},
-		{"failed", func(context.Context, Question, string) ([]search.Excerpt, bool, error) {
-			return nil, true, errors.New("voyage away")
+		{"found nothing", searchPlan, found(), "found nothing for this question"},
+		{"failed", searchPlan, func(context.Context, search.Plan) (search.Found, error) {
+			return search.Found{}, errors.New("voyage away")
 		}, "failed this time"},
-		{"not searched", func(context.Context, Question, string) ([]search.Excerpt, bool, error) { return nil, false, nil }, ""},
+		{"not searched", `{"search":false,"query":"","people":[],"groups":[],"newest":false,"from":"","to":""}`, func(context.Context, search.Plan) (search.Found, error) {
+			t.Fatal("searched although the plan said not to")
+			return search.Found{}, nil
+		}, ""},
 	} {
-		stub := llm.NewStub(llm.StubOptions{Reply: func(llm.Request) string { return "fine" }})
+		stub := llm.NewStub(llm.StubOptions{Reply: planning(c.plan, "fine")})
 		got := reply(t, newChat(t, Options{LLM: stub, Excerpts: c.search}), "hi")
-		r := stub.Requests()[0]
+		r := answers(stub.Requests())[0]
 		sys := r.Messages[0].Content
 		if got.Text != "fine" || len(r.Messages) != 2 || excerptsOf(r) != "" {
 			t.Fatalf("%s: %+v", c.name, r.Messages)
@@ -733,7 +760,7 @@ func TestReplyTellsTheModelWhatTheChatSearchDid(t *testing.T) {
 	stub := llm.NewStub(llm.StubOptions{Reply: func(llm.Request) string { return "fine" }})
 	c := newChat(t, Options{
 		LLM: stub, DatabaseAway: func(err error) bool { return errors.Is(err, away) },
-		Excerpts: func(context.Context, Question, string) ([]search.Excerpt, bool, error) { return nil, true, away },
+		Excerpts: func(context.Context, search.Plan) (search.Found, error) { return search.Found{}, away },
 	})
 	if _, err := c.Reply(bg, q("hi")); !errors.Is(err, away) {
 		t.Fatalf("a chat search that found the database away did not fail the question: %v", err)
@@ -747,7 +774,7 @@ func TestReplyTagsExcerptsAfreshForEveryQuestion(t *testing.T) {
 	for range 3 {
 		reply(t, c, "rahul?")
 	}
-	for _, r := range stub.Requests() {
+	for _, r := range answers(stub.Requests()) {
 		tag := regexp.MustCompile(`<(excerpt-[a-z0-9]{10})>`).FindStringSubmatch(excerptsOf(r))
 		if tag == nil || !strings.Contains(r.Messages[0].Content, "<"+tag[1]+">") {
 			t.Fatalf("no tag in %+v", r.Messages)
@@ -767,8 +794,8 @@ func TestReplyAsksAgainWithoutExcerptsWhenTheyMadeTheRequestTooLong(t *testing.T
 		return llm.Completion{Text: "short", FinishReason: llm.FinishStop}, nil
 	}}}
 	c := newChat(t, Options{LLM: tooLong, Excerpts: found(search.Excerpt{Hit: search.Hit{Title: "Rahul", Lines: []search.Line{{SentAt: now, Sender: "Rahul", Text: "hi"}}}})})
-	if got := reply(t, c, "rahul?"); got.Text != "short" || len(tooLong.requests) != 2 || excerptsOf(tooLong.requests[0]) == "" ||
-		!strings.Contains(tooLong.requests[1].Messages[0].Content, "too long to send with this question") {
+	if got := reply(t, c, "rahul?"); got.Text != "short" || len(answers(tooLong.requests)) != 2 || excerptsOf(answers(tooLong.requests)[0]) == "" ||
+		!strings.Contains(answers(tooLong.requests)[1].Messages[0].Content, "too long to send with this question") {
 		t.Fatalf("got %+v after %d requests", got, len(tooLong.requests))
 	}
 }
@@ -786,7 +813,7 @@ func TestReplyKeepsTheExcerptsWhenDroppingTheConversationIsEnough(t *testing.T) 
 		History:  func(context.Context, Question) ([]memory.Exchange, error) { return earlier, nil },
 		Excerpts: found(search.Excerpt{Hit: search.Hit{Title: "Rahul", Lines: []search.Line{{SentAt: now, Sender: "Rahul", Text: "hi"}}}}),
 	})
-	if got := reply(t, c, "rahul?"); got.Text != "short" || len(model.requests) != 2 || excerptsOf(model.requests[1]) == "" {
+	if got := reply(t, c, "rahul?"); got.Text != "short" || len(answers(model.requests)) != 2 || excerptsOf(answers(model.requests)[1]) == "" {
 		t.Fatalf("got %+v after %+v", got, model.requests)
 	}
 }
@@ -795,33 +822,103 @@ func TestReplySendsExcerptsAsTheyAreToALocalModel(t *testing.T) {
 	local := llm.NewStub(llm.StubOptions{Reply: func(llm.Request) string { return "ok" }})
 	c := newChat(t, Options{LLM: local, Excerpts: found(search.Excerpt{Hit: search.Hit{Title: "Rahul", Lines: []search.Line{{SentAt: now, Sender: "Rahul", Text: "call 9876543210"}}}})})
 	reply(t, c, "rahul's number?")
-	if data := excerptsOf(local.Requests()[0]); !strings.Contains(data, "Rahul: call 9876543210") {
+	if data := excerptsOf(answers(local.Requests())[0]); !strings.Contains(data, "Rahul: call 9876543210") {
 		t.Fatalf("excerpts:\n%s", data)
 	}
 }
 
-func TestReplySearchesAFollowUpWithTheQuestionJustBefore(t *testing.T) {
-	stub := llm.NewStub(llm.StubOptions{Reply: func(llm.Request) string { return "ok" }})
-	var got []string
-	history := []memory.Exchange{
-		{ID: 1, Question: "old question", Answer: "a", At: now.Add(-2 * time.Hour)},
-		{ID: 2, Question: "tejashree ne kya pucha", Answer: "b", At: now.Add(-5 * time.Minute)},
+func TestReplyPlansTheSearchFromTheQuestionAndTheLastExchangesMasked(t *testing.T) {
+	plan := `{"search":true,"query":"tejashree recent messages","people":["Tejashree"],"groups":["College"],"newest":true,"from":"2026-11-20","to":"2026-11-24"}`
+	cloud := cloudStub{llm.NewStub(llm.StubOptions{Reply: planning(plan, "ok")})}
+	earlier := []memory.Exchange{
+		{ID: 1, Question: "oldest", Answer: "not sent", At: now.Add(-3 * time.Hour)},
+		{ID: 2, Question: "rahul ka number?", Answer: "It is 9876543210.", At: now.Add(-2 * time.Hour)},
+		{ID: 3, Question: "tejashree ne kya pucha", Answer: "Kya chahiye.", At: now.Add(-time.Hour)},
 	}
+	var planned search.Plan
+	var recalled string
 	c := newChat(t, Options{
-		LLM:     stub,
-		History: func(context.Context, Question) ([]memory.Exchange, error) { return history, nil },
-		Excerpts: func(_ context.Context, _ Question, earlier string) ([]search.Excerpt, bool, error) {
-			got = append(got, earlier)
-			return nil, true, nil
+		LLM: cloud, NewMaskSession: realMasking, Zone: zone(t, "Asia/Kolkata"),
+		History: func(context.Context, Question) ([]memory.Exchange, error) { return earlier, nil },
+		Recall: func(_ context.Context, query string, _ []int64, _ time.Time) ([]memory.Exchange, error) {
+			recalled = query
+			return nil, nil
+		},
+		Excerpts: func(_ context.Context, p search.Plan) (search.Found, error) {
+			planned = p
+			return search.Found{}, nil
 		},
 	})
-	reply(t, c, "recently kya pucha")
-	history = history[:1]
-	reply(t, c, "recently kya pucha")
-	if !slices.Equal(got, []string{"tejashree ne kya pucha", ""}) {
-		t.Fatalf("earlier %q", got)
+	reply(t, c, "usne ab kya msg kiya")
+	r := cloud.Requests()[0]
+	if r.Tier != llm.Routine || r.Schema == nil || !strings.Contains(r.Messages[0].Content, "Today is ") {
+		t.Fatalf("planning request %+v", r)
 	}
-	if sys := stub.Requests()[0].Messages[0].Content; !strings.Contains(sys, "never say you cannot, even if") {
+	asked := r.Messages[1].Content
+	if strings.Contains(asked, "oldest") || strings.Contains(asked, "9876543210") || !strings.Contains(asked, "You: It is [PHONE_1].") ||
+		!strings.HasSuffix(asked, "Their latest message: usne ab kya msg kiya") {
+		t.Fatalf("planner was asked:\n%s", asked)
+	}
+	kolkata := zone(t, "Asia/Kolkata")
+	from, to := time.Date(2026, 11, 20, 0, 0, 0, 0, kolkata), time.Date(2026, 11, 25, 0, 0, 0, 0, kolkata).Add(-time.Nanosecond)
+	if planned.Query != "tejashree recent messages" || !slices.Equal(planned.People, []string{"Tejashree"}) || !slices.Equal(planned.Groups, []string{"College"}) ||
+		!planned.Newest || !planned.From.Equal(from) || !planned.To.Equal(to) || recalled != "tejashree recent messages" {
+		t.Fatalf("plan %+v, recall %q", planned, recalled)
+	}
+}
+
+func TestReplySearchesTheQuestionWhenThePlanIsUnusable(t *testing.T) {
+	for _, bad := range []string{"not json", `{"search":true,"query":"x","people":[],"groups":[],"newest":false,"from":"2026-13-40","to":""}`} {
+		var planned []search.Plan
+		stub := llm.NewStub(llm.StubOptions{Reply: planning(bad, "ok")})
+		c := newChat(t, Options{LLM: stub, Excerpts: func(_ context.Context, p search.Plan) (search.Found, error) {
+			planned = append(planned, p)
+			return search.Found{}, nil
+		}})
+		reply(t, c, "what did priya say")
+		if len(planned) != 1 || planned[0].Query != "what did priya say" || planned[0].People != nil {
+			t.Fatalf("%q: planned %+v", bad, planned)
+		}
+	}
+}
+
+func TestReplyDropsADateRangeTheWrongWayRound(t *testing.T) {
+	var planned search.Plan
+	stub := llm.NewStub(llm.StubOptions{Reply: planning(`{"search":true,"query":"x","people":[],"groups":[],"newest":false,"from":"2026-11-24","to":"2026-11-20"}`, "ok")})
+	c := newChat(t, Options{LLM: stub, Excerpts: func(_ context.Context, p search.Plan) (search.Found, error) {
+		planned = p
+		return search.Found{}, nil
+	}})
+	reply(t, c, "x")
+	if !planned.From.IsZero() || !planned.To.IsZero() {
+		t.Fatalf("plan %+v", planned)
+	}
+}
+
+func TestReplyTellsTheModelWhichNamesMatchNobody(t *testing.T) {
+	stub := llm.NewStub(llm.StubOptions{Reply: planning(searchPlan, "ok")})
+	c := newChat(t, Options{LLM: stub, Excerpts: func(context.Context, search.Plan) (search.Found, error) {
+		return search.Found{Unknown: []string{"Zorawar <x>"}}, nil
+	}})
+	reply(t, c, "what did zorawar say")
+	if sys := answers(stub.Requests())[0].Messages[0].Content; !strings.Contains(sys, `No contact or group in their chats matches "Zorawar ‹x›"`) {
 		t.Fatalf("system:\n%s", sys)
+	}
+}
+
+func TestReplyMarksTheNewestExcerpts(t *testing.T) {
+	stub := llm.NewStub(llm.StubOptions{Reply: planning(searchPlan, "ok")})
+	line := []search.Line{{SentAt: now, Sender: "Tejashree", Text: "kya chahiye"}}
+	c := newChat(t, Options{LLM: stub, Excerpts: found(
+		search.Excerpt{Hit: search.Hit{Title: "Tejashree", Lines: line}, Newest: true},
+		search.Excerpt{Hit: search.Hit{Title: "College", Lines: line}},
+	)})
+	reply(t, c, "usne ab kya msg kiya")
+	r := answers(stub.Requests())[0]
+	if data := excerptsOf(r); strings.Count(data, newestLabel) != 1 || !strings.Contains(data, newestLabel+"\nChat: Tejashree") {
+		t.Fatalf("excerpts:\n%s", data)
+	}
+	if !strings.Contains(r.Messages[0].Content, "call a message someone's latest only when") || !strings.Contains(r.Messages[0].Content, "never say you cannot") {
+		t.Fatal("the note does not say which excerpts are the newest")
 	}
 }

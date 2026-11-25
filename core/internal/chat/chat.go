@@ -47,15 +47,15 @@ type Options struct {
 	Zone   *time.Location
 	// History reads the conversation so far for a question; nil means none.
 	History func(ctx context.Context, q Question) ([]memory.Exchange, error)
-	// Recall finds older exchanges that may bear on a question, best first, leaving out exclude
-	// (the recent exchanges the context carries, by question id) and anything from before on;
-	// nil means none. A failure is handled like History's.
-	Recall func(ctx context.Context, q Question, exclude []int64, before time.Time) ([]memory.Exchange, error)
-	// Excerpts finds passages of DJ's other chats that may answer a question, best first, and says
-	// whether it searched; earlier is his previous question when he asked it moments ago, so a
-	// follow-up can be searched with it. nil means none. A failure is handled like History's, and
-	// the model is told the search failed.
-	Excerpts func(ctx context.Context, q Question, earlier string) ([]search.Excerpt, bool, error)
+	// Recall finds older exchanges that bear on query (the question, or what the search plan says
+	// it is about), best first, leaving out exclude (the recent exchanges the context carries, by
+	// question id) and anything from before on; nil means none. A failure is handled like
+	// History's.
+	Recall func(ctx context.Context, query string, exclude []int64, before time.Time) ([]memory.Exchange, error)
+	// Excerpts finds passages of DJ's other chats for a search plan, which the routine model works
+	// out from the question; nil means the chats are not searched. A failure is handled like
+	// History's, and the model is told the search failed.
+	Excerpts func(ctx context.Context, p search.Plan) (search.Found, error)
 	// DatabaseAway says whether a History error means the database is down, in which case the
 	// question fails and runs again later; any other error is logged and the question is answered
 	// without the conversation.
@@ -71,7 +71,7 @@ type Chat struct{ o Options }
 
 const (
 	maxRecalled     = 3
-	followUp        = 30 * time.Minute
+	newestLabel     = "(Among the newest messages found for the question.)"
 	maxAnswerTokens = 3072
 	cutShort        = "\n\n(Cut short here. Ask for less, or for the rest.)"
 )
@@ -103,7 +103,7 @@ func (c *Chat) Reply(ctx context.Context, q Question) (Answer, error) {
 	if o.LLM.Locality() == llm.Cloud {
 		privacy = o.NewMaskSession()
 	}
-	var excerpts []string
+	var excerpts, unknown []string
 	var chatSearch memory.ChatSearch
 	tag := strings.ToLower(rand.Text()[:10])
 	input := func(history, recalled []memory.Exchange) memory.Input {
@@ -111,6 +111,7 @@ func (c *Chat) Reply(ctx context.Context, q Question) (Answer, error) {
 			Excerpts:    excerpts,
 			Tag:         tag,
 			ChatSearch:  chatSearch,
+			Unknown:     unknown,
 			System:      SystemPrompt(now, o.Zone, o.LLM.Locality()),
 			History:     history,
 			Recalled:    recalled,
@@ -168,20 +169,28 @@ func (c *Chat) Reply(ctx context.Context, q Question) (Answer, error) {
 		return Answer{}, err
 	}
 	history = mask(history)
-	earlier := ""
-	if n := len(history); n > 0 && now.Sub(history[n-1].At) <= followUp {
-		earlier = history[n-1].Question
-	}
-	if excerpts, chatSearch, err = c.excerpts(ctx, q, earlier, privacy); err != nil {
-		return Answer{}, err
+	query := q.Text
+	if o.Excerpts != nil {
+		p, searchIt, err := c.plan(ctx, q, history, now)
+		if err != nil {
+			return Answer{}, err
+		}
+		if searchIt {
+			if strings.TrimSpace(p.Query) != "" {
+				query = p.Query
+			}
+			if excerpts, unknown, chatSearch, err = c.excerpts(ctx, p, privacy); err != nil {
+				return Answer{}, err
+			}
+		}
 	}
 	var recalled []memory.Exchange
 	if o.Recall != nil {
 		// What the recent conversation will carry decides what recall looks beyond, so a recent
 		// talk on the same topic neither crowds out an older one nor comes back twice.
 		recent := memory.Build(input(history, nil))
-		recalled, err = c.read(ctx, q, func(ctx context.Context, q Question) ([]memory.Exchange, error) {
-			return o.Recall(ctx, q, recent.Kept, recent.Oldest)
+		recalled, err = c.read(ctx, q, func(ctx context.Context, _ Question) ([]memory.Exchange, error) {
+			return o.Recall(ctx, query, recent.Kept, recent.Oldest)
 		}, "could not recall older exchanges; answering without them")
 		if err != nil {
 			return Answer{}, err
@@ -238,33 +247,30 @@ func (c *Chat) Reply(ctx context.Context, q Question) (Answer, error) {
 // excerpts renders the passages Excerpts finds, masked for a cloud model with the question's mask
 // session, so placeholders match the rest of the request and are put back in the answer, and says
 // what the search did.
-func (c *Chat) excerpts(ctx context.Context, q Question, earlier string, privacy MaskSession) ([]string, memory.ChatSearch, error) {
-	if c.o.Excerpts == nil {
-		return nil, memory.NotSearched, nil
-	}
-	found, searched, err := c.o.Excerpts(ctx, q, earlier)
+func (c *Chat) excerpts(ctx context.Context, p search.Plan, privacy MaskSession) ([]string, []string, memory.ChatSearch, error) {
+	found, err := c.o.Excerpts(ctx, p)
 	switch {
 	case err == nil:
 	case ctx.Err() != nil:
-		return nil, memory.NotSearched, context.Cause(ctx)
+		return nil, nil, memory.NotSearched, context.Cause(ctx)
 	case c.o.DatabaseAway(err):
-		return nil, memory.NotSearched, err
+		return nil, nil, memory.NotSearched, err
 	default:
 		c.o.Logger.Warn("could not search the chats; answering without them", logging.Err(err))
-		return nil, memory.SearchFailed, nil
-	}
-	if !searched {
-		return nil, memory.NotSearched, nil
+		return nil, nil, memory.SearchFailed, nil
 	}
 	var masker search.Masker
 	if privacy != nil {
 		masker = privacy
 	}
-	out := make([]string, len(found))
-	for i, e := range found {
+	out := make([]string, len(found.Excerpts))
+	for i, e := range found.Excerpts {
 		out[i] = search.Render(e.Title, e.Lines, c.o.Zone, search.DefaultShape, masker, e.Before)
+		if e.Newest {
+			out[i] = newestLabel + "\n" + out[i]
+		}
 	}
-	return out, memory.Searched, nil
+	return out, found.Unknown, memory.Searched, nil
 }
 
 // read gets exchanges from source. When the database is away the question fails and runs again
