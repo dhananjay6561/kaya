@@ -18,8 +18,11 @@ type Exchange struct {
 
 // Input is what Build needs. Count is the model's own token counter.
 type Input struct {
-	System   string
-	History  []Exchange
+	System  string
+	History []Exchange
+	// Recalled are older exchanges found because they may bear on the question, oldest first. They
+	// get whatever room the recent conversation leaves, each whole or not at all.
+	Recalled []Exchange
 	Question string
 	Budget   int
 	Count    func(text string) int
@@ -33,12 +36,14 @@ type Package struct {
 	Tokens    int
 	Exchanges int
 	LeftOut   int
+	Recalled  int
 }
 
 const (
 	requestOverhead = 48
 	minShortened    = 64
 	leftOutNote     = "Older parts of this conversation were left out to save space."
+	recalledNote    = "Before the recent conversation come a few older exchanges, picked because they may bear on the question; treat them as background."
 )
 
 // HowLongAgo says an age the way a person would.
@@ -106,17 +111,38 @@ func Build(in Input) Package {
 		}
 		break
 	}
+	var recalled [][2]string
+	note := count(system+"\n"+recalledNote) - count(system)
+	for _, e := range in.Recalled {
+		question := marked(e, e.Question)
+		cost := count(question) + count(e.Answer)
+		if len(recalled) == 0 {
+			cost += note
+		}
+		if tokens+cost <= in.Budget {
+			tokens += cost
+			recalled = append(recalled, [2]string{question, e.Answer})
+		}
+	}
 	leftOut := len(in.History) - len(kept)
 	if leftOut == 0 {
 		system = in.System
 	}
-	messages := make([]llm.Message, 0, 2*len(kept)+2)
+	if len(recalled) > 0 {
+		system += "\n" + recalledNote
+	}
+	messages := make([]llm.Message, 0, 2*len(kept)+2*len(recalled)+2)
 	messages = append(messages, llm.Message{Role: llm.System, Content: system})
+	for _, r := range recalled {
+		messages = append(messages,
+			llm.Message{Role: llm.User, Content: r[0]},
+			llm.Message{Role: llm.Assistant, Content: r[1]})
+	}
 	for i := len(kept) - 1; i >= 0; i-- {
 		messages = append(messages,
 			llm.Message{Role: llm.User, Content: kept[i][0]},
 			llm.Message{Role: llm.Assistant, Content: kept[i][1]})
 	}
 	messages = append(messages, llm.Message{Role: llm.User, Content: in.Question})
-	return Package{Messages: messages, Tokens: tokens, Exchanges: len(kept), LeftOut: leftOut}
+	return Package{Messages: messages, Tokens: tokens, Exchanges: len(kept), LeftOut: leftOut, Recalled: len(recalled)}
 }

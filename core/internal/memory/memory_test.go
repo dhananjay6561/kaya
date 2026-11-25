@@ -249,3 +249,29 @@ func TestBuildMatchesTheTypeScriptCore(t *testing.T) {
 		}
 	}
 }
+
+func TestBuildPutsRecalledExchangesBeforeTheRecentOnesWhenThereIsRoom(t *testing.T) {
+	old := Exchange{Question: "what is my wifi name", Answer: "It is Kaya-Home.", At: at.Add(-40 * 24 * time.Hour)}
+	p := Build(Input{
+		System: "s", History: []Exchange{exchange("1", 10)}, Recalled: []Exchange{old}, Question: "and the password?",
+		Budget: 10_000, Count: count, Now: at,
+	})
+	if p.Recalled != 1 || p.Exchanges != 1 || len(p.Messages) != 6 {
+		t.Fatalf("package %+v", p)
+	}
+	if !strings.Contains(p.Messages[0].Content, "older exchanges") || p.Messages[1].Content != "(sent 40 days ago) what is my wifi name" ||
+		p.Messages[2].Content != "It is Kaya-Home." || !strings.HasPrefix(p.Messages[3].Content, "(sent just now) question 1") {
+		t.Fatalf("messages %+v", p.Messages)
+	}
+	small := Build(Input{
+		System: "s", History: []Exchange{exchange("1", 10)}, Recalled: []Exchange{old}, Question: "q",
+		Budget: requestOverhead + count("s\n"+leftOutNote) + count("q") + count("(sent just now) question 1 qqqqqqqqqq") + count("answer 1 aaaaaaaaaa"),
+		Count:  count, Now: at,
+	})
+	if small.Recalled != 0 || strings.Contains(small.Messages[0].Content, "older exchanges") || small.Exchanges != 1 {
+		t.Fatalf("recalled without room: %+v", small)
+	}
+	if got := Build(Input{System: "s", Question: "q", Budget: 10_000, Count: count, Now: at}); got.Recalled != 0 || got.Messages[0].Content != "s" {
+		t.Fatalf("nothing recalled: %+v", got)
+	}
+}
