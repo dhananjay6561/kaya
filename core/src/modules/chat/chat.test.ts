@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import { describe, it } from "node:test";
 import { createLogger } from "../../lib/logger.js";
-import { createStubLlm, LlmError } from "../../providers/llm/index.js";
+import { createGroqLlm, createStubLlm, LlmError } from "../../providers/llm/index.js";
 import { chatReply, clipTo, systemPrompt, toWhatsApp } from "./chat.js";
 
 const logger = createLogger({ level: "silent", service: "core", version: "test" });
@@ -376,5 +376,65 @@ describe("chat reply", () => {
     );
     assert.equal(reply.text, "short answer");
     assert.deepEqual(sizes, [4, 2]);
+  });
+
+  it("keeps the conversation out of the low-effort retry once it was too long", async () => {
+    const asked: [number, string | undefined][] = [];
+    const llm = {
+      ...createStubLlm(),
+      complete: async (request: { messages: readonly unknown[]; effort?: string }) => {
+        asked.push([request.messages.length, request.effort]);
+        if (request.messages.length > 2) throw new LlmError("groq", "too_long", { status: 413 });
+        return {
+          text: request.effort === "low" ? "made it" : "",
+          model: "m",
+          finishReason: "length" as const,
+          usage: { inputTokens: 1, outputTokens: 1 },
+        };
+      },
+    };
+    const reply = await chatReply(
+      q("hi"),
+      {
+        llm,
+        logger,
+        timeZone: "UTC",
+        history: async () => [{ question: "old", answer: "older", at: now }],
+      },
+      signal,
+    );
+    assert.deepEqual(asked, [
+      [4, "medium"],
+      [2, "medium"],
+      [2, "low"],
+    ]);
+    assert.match(reply.text, /^made it/);
+  });
+
+  it("still answers when a remembered answer looks like a special token", async () => {
+    const counted = createGroqLlm({
+      apiKey: "k",
+      heavyModel: "openai/gpt-oss-120b",
+      routineModel: "openai/gpt-oss-20b",
+      contextTokens: 2_000,
+    });
+    const llm = {
+      ...createStubLlm({ reply: () => "sure" }),
+      countTokens: (text: string) => counted.countTokens(text),
+    };
+    const reply = await chatReply(
+      q("and the next one?"),
+      {
+        llm,
+        logger,
+        timeZone: "UTC",
+        now: () => now,
+        history: async () => [
+          { question: "what ends a text?", answer: "It is the <|endoftext|> token.", at: now },
+        ],
+      },
+      signal,
+    );
+    assert.equal(reply.text, "sure");
   });
 });

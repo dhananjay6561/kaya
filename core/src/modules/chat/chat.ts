@@ -153,17 +153,19 @@ export async function chatReply(
       ? { ...exchange, answer: privacy.mask(exchange.answer, { context: exchange.question }) }
       : exchange,
   );
+  let sent = history;
   let completion: Completion;
   try {
-    completion = await ask(history);
+    completion = await ask(sent);
   } catch (err) {
     if (!(err instanceof LlmError) || err.code !== "too_long" || history.length === 0) throw err;
     options.logger.warn("the request was too long with the conversation; asking without it");
-    completion = await ask([]);
+    sent = [];
+    completion = await ask(sent);
   }
   if (!completion.text.trim() && completion.finishReason === "length") {
     options.logger.warn("the model spent its room thinking; asking again with less effort");
-    completion = await ask(history, "low");
+    completion = await ask(sent, "low");
   }
 
   const masked = privacy?.counts() ?? {};
