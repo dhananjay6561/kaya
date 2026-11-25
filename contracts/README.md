@@ -12,20 +12,19 @@ schemas/v1/
 samples/
 ├── samples.go                 Go package embedding v1/; only tests import it
 └── v1/<schema>/
-    ├── valid/                 must pass on every side, and round-trip through the Go types
-    └── invalid/               must fail on every side, each for one reason named in the file name
+    ├── valid/                 must pass, and round-trip through the Go types
+    └── invalid/               must fail, each for one reason named in the file name
 ```
 
-This folder is also a Go module (`contracts.go` embeds the schemas; `types.go` and `validate.go`
-hold the Go types and validator both Go services use) and an npm workspace package
-(`@kaya/contracts`), so both services load the same files.
+This folder is a Go module: `contracts.go` embeds the schemas, and `types.go` and `validate.go`
+hold the Go types and validator both services use, so the gateway and core load the same files.
 
 ## Changing a contract
 
 1. Edit the schema. Add a valid sample for anything new and an invalid sample for each new rule.
 2. Update the Go types in `contracts/types.go`.
-3. Run `make contracts` to regenerate `core/src/contracts/types.gen.ts`.
-4. Run `make check`. Both test suites run every sample.
+3. Run `make check`. The contract tests run every sample, and both services build against the
+   change.
 
 Adding an optional field or a new event type is compatible. Removing or renaming a field, or
 tightening a rule, is breaking: add `schemas/v2/` and handle both versions until every service has

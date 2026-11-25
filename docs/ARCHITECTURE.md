@@ -9,7 +9,7 @@ kept outside this repository.
 | Service | Language | Owns |
 |---|---|---|
 | `gateway` | Go (whatsmeow) | The WhatsApp connection: pairing, session, receiving, sending, media. Knows nothing about the agent. |
-| `core` | TypeScript (Node 24), moving to Go (`core-go/`, decision 72) | The agent: commands, LLM calls, tools, safety rules, confirmations, scheduler, browser control |
+| `core` | Go (decision 72) | The agent: commands, LLM calls, tools, safety rules, confirmations, scheduler, browser control |
 | `services/docs` (later) | Python | PPT and PDF generation, Drive upload |
 | `services/voice` (later) | Python (Pipecat) | Live phone calls |
 | `db` | Postgres + pgvector | All shared data |
@@ -22,16 +22,9 @@ only touches `gateway`.
 
 ```
 kaya/
-├── core/                   TypeScript agent (npm workspace)
-│   └── src/
-│       ├── index.ts        entry point: wires modules together, nothing else
-│       ├── config/         env loading and validation
-│       ├── modules/        one folder per feature (commands, chats, tools, ...)
-│       ├── providers/      swappable backends behind interfaces (llm/, channel/, telephony/)
-│       └── lib/            small shared helpers
-├── core-go/                the Go core that replaces core/ (its own Go module), until it moves to core/
-│   ├── cmd/core/           main package
-│   └── internal/           one package per feature, ported with its tests:
+├── core/                   Go agent (its own Go module)
+│   ├── cmd/core/           main package: wires the packages together; serve, send, healthcheck
+│   └── internal/           one package per feature, with its tests:
 │       ├── config/         env loading and validation
 │       ├── gateway/        the event consumer (gateway_events)
 │       ├── channel/        DJ's own chat: the command inbox and sends through send_requests
@@ -41,7 +34,7 @@ kaya/
 │       ├── memory/         the conversation (exchanges) and the context package
 │       ├── chat/           system prompt, replies, WhatsApp formatting
 │       ├── masking/        placeholders for private details before a cloud model
-│       └── text/           text rules shared with the TypeScript core
+│       └── text/           text rules kept from the TypeScript core
 ├── gateway/                Go WhatsApp gateway (its own Go module)
 │   ├── cmd/gateway/        main package
 │   └── internal/           config, whatsapp, ingest, events, send, media, testdb
@@ -156,15 +149,13 @@ Folders appear when a phase needs them; empty placeholders are not committed.
 - **Contracts:** every payload has a JSON Schema (draft 2020-12) in `contracts/schemas/v1/` and
   carries `"version": 1`. Both sides validate at the boundary: the writer before inserting, the
   reader before handling.
-  - Formats are pinned with patterns, so ajv and the Go validator agree: lowercase UUIDs, and
-    timestamps in UTC with an uppercase `T` and `Z`.
-  - Go: hand-written types in the `contracts` module, used by the gateway and the Go core. Every time field uses
+  - Formats are pinned with patterns, so any validator reads them the same way: lowercase UUIDs,
+    and timestamps in UTC with an uppercase `T` and `Z`.
+  - Go: hand-written types in the `contracts` module, used by the gateway and core. Every time field uses
     `contracts.Time`, which always encodes as UTC. Validation errors name the field and the rule,
     never the value, so they are safe to log.
-  - TypeScript: types generated into `core/src/contracts/types.gen.ts` (`make contracts`).
-  - Shared samples in `contracts/samples/v1/<schema>/{valid,invalid}/` are checked by both test
-    suites. Every valid sample must also round-trip through the Go types unchanged, and core's
-    tests fail if the generated types are out of date. The samples are a separate Go package that
+  - Shared samples in `contracts/samples/v1/<schema>/{valid,invalid}/` are checked by the contract
+    tests, and every valid sample must also round-trip through the Go types unchanged. The samples are a separate Go package that
     only tests import, so they never ship in the gateway binary.
   - A contract change is its own PR and updates the schema, the samples and both sides. A
     breaking change gets a new version folder.
@@ -218,39 +209,34 @@ Folders appear when a phase needs them; empty placeholders are not committed.
 
 ## Engineering standards
 
-- **Types:** TypeScript `strict` with `noUncheckedIndexedAccess`; Go with `go vet` and golangci-lint.
+- **Types:** Go with `go vet` and golangci-lint (gosec, staticcheck, gofumpt and more).
 - **Config:** only from environment variables, validated once at startup. A bad config stops the
   service with every problem listed. Secrets never appear in logs or errors.
-- **Modules:** each feature lives in its own folder with a small public entry (`index.ts` or a Go
-  package). Modules depend on interfaces, not on each other's internals. Providers are chosen by
+- **Modules:** each feature is its own Go package with a small exported surface. Modules depend on interfaces, not on each other's internals. Providers are chosen by
   config.
-- **Providers:** `core/src/providers/<kind>/` holds the interface (`types.ts`), one file per
-  implementation, and a factory in `index.ts` that switches on the config value. The config enum
-  lists only implementations that exist, and the switch is exhaustive, so adding a provider means
-  adding a file, an enum value and a case; TypeScript fails the build if one is missed. Every kind
-  has a `stub` implementation for development and tests. Kinds so far:
-  - `llm`: `complete()` with a `routine` or `heavy` tier, returning text, model and token usage
-  - `llm` returns a `finishReason` (`stop`, `length`, `tool_calls`, `content_filter`) with every
-    completion.
-  - `channel`: the one conversation between DJ and Kaya (`start`, `stop`, `send`, `onMessage`).
-    Reading the rest of WhatsApp goes through the database, not the channel. `start()` never
+- **Providers:** each kind is a package holding the interface, one file per implementation, and a
+  constructor that switches on the config value and fails on an unknown one; config accepts only
+  implementations that exist. Every kind has a `stub` implementation for development and tests.
+  Kinds so far:
+  - `llm` (`internal/llm`): `Complete()` with a `routine` or `heavy` tier, returning text, model,
+    token usage and a finish reason (`stop`, `length`, `tool_calls`, `content_filter`).
+  - `channel` (`internal/channel`): the one conversation between DJ and Kaya (`Start`, `Stop`,
+    `Send`, `OnMessage`).
+    Reading the rest of WhatsApp goes through the database, not the channel. `Start()` never
     fails because a dependency is down; it connects in the background, and the channel is a
     `/health` check like the db. Every handler sees every message; failures are collected and
     reported together.
-  - `telephony`: `placeCall()` to an E.164 number with a brief, and `getCall()` for status and
-    transcript
-  - Every outward action (`send`, `placeCall`) takes a required `idempotencyKey`. A repeated key
+  - `telephony` comes with the phone-call stage: `PlaceCall()` to an E.164 number with a brief,
+    and `GetCall()` for status and transcript. Until then `TELEPHONY_PROVIDER` only accepts `stub`.
+  - Every outward action (`Send`, `PlaceCall`) takes a required idempotency key. A repeated key
     returns the first result and never acts twice. Stubs never report that an outward action
     happened.
-  - The Go core keeps the same shape: `internal/llm` holds the `Provider` interface, one file per
-    implementation (`groq.go`, `stub.go`) and `New`, which switches on the config value and fails
-    on an unknown one.
 - **Metrics (from stage 15):** every service exposes `GET /metrics` in Prometheus format on its
   existing HTTP port. Names start with `kaya_` and carry the unit (`kaya_ingest_delay_seconds`).
   Labels hold only small fixed sets (service, kind, state, outcome): never a JID, a name, a chat id
   or message text, both for privacy and because every distinct label value is a new time series.
   Counters for what happened, gauges for what is waiting, histograms for how long things took.
-- **Logging:** structured JSON to stdout, one logger per service (pino in core, `log/slog` in Go).
+- **Logging:** structured JSON to stdout, one `log/slog` JSON logger per service (`kit/logging`).
   Every line has `time`, `level`, `msg`, `service` and `version`. A request id travels in the
   `X-Request-Id` header and appears on every log line for that request. Errors are logged with an
   allowlist of fields, never whole objects, so attached clients or credentials can't leak.
@@ -272,11 +258,10 @@ Folders appear when a phase needs them; empty placeholders are not committed.
   calls.
 - **Tests:** every phase ships tests for its logic. Anything touching the database is tested
   against a real Postgres. Tests use made-up data, never real chats.
-- **Parity while porting:** a Go package that replaces TypeScript is checked against golden files
-  that `make golden` (`core/scripts/golden.ts`) writes from the real TypeScript functions. The Go
-  tests read them without Node, CI regenerates them and fails on any difference, and they stay as
-  the spec once the TypeScript is deleted. A deliberate change of behaviour is made in both cores
-  and recorded in `DECISIONS.md`.
+- **Golden files:** core was first written in TypeScript and ported to Go (decisions 72 to 75).
+  Before the TypeScript was deleted, it wrote what its functions return on made-up inputs into
+  `core/internal/*/testdata`, and the Go tests must still match those files exactly. They are the
+  spec: change one only with a deliberate change of behaviour, recorded in `DECISIONS.md`.
 - **Dependencies:** pinned exactly; updated through Dependabot PRs.
 - **Containers:** multi-stage builds, non-root user, read-only filesystem where possible.
-- **Commands:** `make lint`, `make test` and `make build` at the root cover every language.
+- **Commands:** `make lint`, `make test` and `make build` at the root cover every module.

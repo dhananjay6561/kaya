@@ -7,8 +7,7 @@ Kaya is a self-hosted, privacy-first personal AI agent that lives in WhatsApp. I
 WhatsApp account as a linked device, keeps your chats in a Postgres database with pgvector on a
 machine you own, and is being built to answer questions about your chats, search the web, make
 documents, run scheduled jobs and act for you, always after you confirm. The WhatsApp gateway is
-written in Go, the agent in TypeScript (being rewritten in Go), and the whole stack runs with Docker
-Compose. Your chats and
+written in Go, and so is the agent; the whole stack runs with Docker Compose. Your chats and
 your WhatsApp session stay in your own database; only masked, relevant slices go to a cloud model
 when a task needs one.
 
@@ -42,8 +41,8 @@ contact, and it works with everything your WhatsApp account can see.
 
 - **Self-hosted.** It runs on your own computer with Docker Compose. Today that is a Mac; the plan is
   a dedicated Linux laptop at home, reachable only over Tailscale.
-- **Split by job.** A Go service owns the WhatsApp connection, a TypeScript service is the agent, and
-  they share one Postgres database. Each can be restarted, updated or replaced on its own.
+- **Split by job.** One Go service owns the WhatsApp connection, another is the agent, and they
+  share one Postgres database. Each can be restarted, updated or replaced on its own.
 - **Built in small phases.** Every phase ships with tests and a clear "done when" check. Stage
   status is in the [roadmap](#project-status-and-roadmap).
 
@@ -92,7 +91,7 @@ contact, and it works with everything your WhatsApp account can see.
   Core, the part that will talk to an LLM, can read chats but cannot see the WhatsApp session, its
   encryption keys, or the keys needed to fetch media.
 - **Versioned service contracts.** JSON Schemas for every message between the gateway and core,
-  validated the same way in Go and TypeScript against shared sample payloads.
+  validated by one shared Go module against shared sample payloads.
 - **Swappable providers.** Interfaces in core for the LLM, the chat channel and telephony, each with
   a `stub` implementation. Groq is the configured LLM provider.
 - **Production basics.** Structured JSON logs with request ids, a `/health` endpoint with a database
@@ -158,7 +157,7 @@ language with the best libraries for it, and they talk only through versioned co
 | Service | Language | Owns |
 |---|---|---|
 | `gateway` | Go (whatsmeow) | The WhatsApp connection: pairing, session, receiving and sending. Knows nothing about the agent. |
-| `core` | TypeScript (Node 24), moving to Go (`core-go/`) | The agent: commands, LLM calls, tools, safety rules, confirmations, scheduler |
+| `core` | Go | The agent: commands, LLM calls, tools, safety rules, confirmations, scheduler |
 | `db` | Postgres 18 + pgvector | All shared data, including the WhatsApp session |
 | `migrate` | dbmate | Applies `db/migrations/` once before the services start |
 
@@ -171,7 +170,7 @@ flowchart LR
 
     subgraph host["Your machine, Docker Compose"]
         gateway["gateway<br/>Go, whatsmeow"]
-        core["core<br/>agent, TypeScript, moving to Go"]
+        core["core<br/>Go agent"]
         db[("db<br/>Postgres 18, pgvector")]
         migrate["migrate<br/>dbmate, one-shot"]
         whisper["whisper<br/>voice notes"]
@@ -399,21 +398,19 @@ target instead of adding rows.
 | Layer | Choice |
 |---|---|
 | WhatsApp gateway | Go 1.26, [whatsmeow](https://github.com/tulir/whatsmeow), `log/slog` |
-| Agent | TypeScript on Node 24, zod for config, pino for logs, `pg`; moving to Go (`core-go/`: commands, chat, memory, Groq and masking ported, not live yet) |
+| Agent | Go 1.26, `log/slog`, pgx; Groq over plain `net/http`, its own o200k token counter |
 | Database | Postgres 18 with pgvector, migrations with dbmate |
-| Contracts | JSON Schema 2020-12, validated with ajv in TypeScript and santhosh-tekuri/jsonschema in Go |
+| Contracts | JSON Schema 2020-12, validated with santhosh-tekuri/jsonschema in a shared Go module |
 | LLM | Groq behind a provider interface (`openai/gpt-oss-120b` and `openai/gpt-oss-20b`) |
 | Runtime | Docker Compose, distroless images, non-root, read-only root filesystem |
-| Quality | Biome, golangci-lint, `go test -race`, Node test runner, SQL schema tests, GitHub Actions |
+| Quality | golangci-lint, `go test -race`, golden files from the TypeScript core, SQL schema tests, GitHub Actions |
 
 ## Repository layout
 
 ```
 kaya/
-├── core/               TypeScript agent (npm workspace)
-│   └── src/            config, contracts, modules, providers (llm, channel, telephony), lib
-├── core-go/            the Go agent that replaces core/ (its own Go module)
-│   ├── cmd/core/       main package: serve, healthcheck
+├── core/               Go agent (its own Go module)
+│   ├── cmd/core/       main package: serve, send, healthcheck
 │   └── internal/       config, gateway (events), channel (inbox, sends), commands, pause, status,
 │                       llm (Groq, stub, o200k token counter), memory, chat, masking, text
 ├── gateway/            Go WhatsApp gateway (its own Go module)
@@ -427,7 +424,7 @@ kaya/
 ├── docs/               spec, architecture, infra, decisions, phases
 ├── compose.yml         base stack
 ├── compose.mac.yml     per-machine override (ports on 127.0.0.1)
-├── Makefile            one entry point for dev, lint, test and build in both languages
+├── Makefile            one entry point for dev, lint, test and build
 └── .env.example        every setting for every service
 ```
 
@@ -438,7 +435,7 @@ in the phases that need them.
 
 ### Requirements
 
-- Node 24, Go 1.26 and make
+- Go 1.26 and make
 - Docker with Compose
 - A phone with WhatsApp, to link Kaya as a device
 
@@ -533,10 +530,10 @@ gateway notices on its next connection, drops the session and reports `logged_ou
 
 ## Development
 
-Needs Node 24, Go 1.26, make and Docker with Compose. Run everything from the repo root.
+Needs Go 1.26, make and Docker with Compose. Run everything from the repo root.
 
 ```sh
-make install       # install dependencies
+make install       # download the Go modules
 make dev           # run core from source
 make dev-gateway   # run the WhatsApp gateway from source
 make db            # start only Postgres and apply migrations, for running services from source
@@ -550,11 +547,9 @@ make down          # stop the stack (data stays in DATA_DIR)
 make migration name=add_tasks   # new empty migration in db/migrations
 make migrate       # apply pending migrations
 make rollback      # roll back the latest migration on the live db (asks first)
-make contracts     # regenerate core's TypeScript types after changing contracts/schemas
-make golden        # rewrite the Go core's golden test files from the TypeScript core
 make format        # fix lint and formatting where possible
 make test-db       # migrations and schema tests on a throwaway database
-make check         # lint, typecheck, test and build everything (what CI runs)
+make check         # lint, test and build everything (what CI runs)
 make help          # list every target
 ```
 
@@ -566,7 +561,7 @@ How the code is organised, and the standards every change follows:
 ## Testing
 
 ```sh
-make check   # lint, typecheck, test and build both services
+make check   # lint, test and build both services
 ```
 
 Tests that need Postgres run when `TEST_DATABASE_URL` is set and are skipped otherwise (CI always
@@ -579,13 +574,13 @@ TEST_DATABASE_URL=postgres://kaya:kaya@localhost:5432/kaya make test
 - **Schema tests.** `make test-db` needs the db container running (`make db` or `make up`). On a
   throwaway `kaya_schema_test` database it migrates, reruns (which must apply nothing), rolls back,
   reapplies and runs the SQL tests in `db/tests/`. It never touches your live database.
-- **Contract tests.** Every sample in `contracts/samples/v1/` must pass or fail the same way in Go
-  and TypeScript, and every valid sample must round-trip through the Go types unchanged.
-- **Golden tests.** While the agent moves from TypeScript to Go, `make golden` runs the TypeScript
-  functions on made-up inputs and writes what they return into `core-go` testdata: token counts for
-  every Unicode character, context packages, system prompts, WhatsApp formatting, masking of a few
-  thousand messages and exact Groq requests. The Go tests must match them exactly, and CI fails if
-  the files drift from the TypeScript code.
+- **Contract tests.** Every sample in `contracts/samples/v1/` must pass or fail as its folder says,
+  and every valid sample must round-trip through the Go types unchanged.
+- **Golden tests.** The agent was first written in TypeScript. Before that code was deleted, it
+  wrote what its functions return on made-up inputs into `core` testdata: token counts for every
+  Unicode character, context packages, system prompts, WhatsApp formatting, masking of a few
+  thousand messages and exact Groq requests. The Go tests must still match them exactly, so the
+  files are the spec; change one only together with a deliberate change of behaviour.
 - **CI.** [GitHub Actions](.github/workflows/ci.yml) runs core and gateway jobs against a real
   Postgres with pgvector, brings up the full Compose stack and runs the schema tests, and reviews
   dependency changes on pull requests.
