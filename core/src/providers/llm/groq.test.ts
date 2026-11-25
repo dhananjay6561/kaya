@@ -291,6 +291,13 @@ describe("groq", () => {
     assert.ok(llm.countTokens("order id 4839201, txn 99381") > 10, "numbers cost more than words");
   });
 
+  it("counts text that looks like a special token as plain text", () => {
+    const { llm } = groq([]);
+    assert.equal(llm.countTokens("<|endoftext|>"), 7 + 4);
+    assert.equal(llm.countTokens("say <|start|> now"), 7 + 4);
+    assert.equal(llm.countTokens("<|reserved_200050|>"), 8 + 4);
+  });
+
   it("does not call out for an empty conversation", async () => {
     const { llm, calls } = groq([]);
     await assert.rejects(llm.complete({ tier: "routine", messages: [] }));

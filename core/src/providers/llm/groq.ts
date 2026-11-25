@@ -25,6 +25,9 @@ export type GroqOptions = Readonly<{
 const reasoningEffort: Record<ModelTier, ReasoningEffort> = { routine: "low", heavy: "medium" };
 const defaultMaxTokens: Record<ModelTier, number> = { routine: 1_024, heavy: 8_192 };
 const framingTokens = 4;
+// Text that looks like a special token, such as "<|endoftext|>", is counted as plain text: it is
+// what the model receives, and refusing it would fail every question that has it in context.
+const plainText = { disallowedSpecial: new Set<string>() };
 const finishReasons = new Set<string>(["stop", "length", "tool_calls", "content_filter"]);
 
 const responseSchema = z.object({
@@ -169,7 +172,7 @@ export function createGroqLlm(config: GroqConfig, options: GroqOptions = {}): Ll
     name: "groq",
     locality: "cloud",
     contextTokens: config.contextTokens,
-    countTokens: (text: string) => harmonyTokens(text) + framingTokens,
+    countTokens: (text: string) => harmonyTokens(text, plainText) + framingTokens,
     async complete(request: CompletionRequest, callOptions: CallOptions = {}): Promise<Completion> {
       const { signal } = callOptions;
       signal?.throwIfAborted();
