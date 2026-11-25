@@ -9,6 +9,7 @@ import { encode } from "gpt-tokenizer/encoding/o200k_harmony";
 import { createLogger } from "../src/lib/logger.js";
 import { chatReply, clipTo, systemPrompt, toWhatsApp } from "../src/modules/chat/index.js";
 import { buildContext, type Exchange, howLongAgo, shorten } from "../src/modules/context/index.js";
+import { createMaskSession } from "../src/modules/masking/index.js";
 import {
   type CompletionRequest,
   createGroqLlm,
@@ -609,6 +610,270 @@ function whatsapp() {
   });
 }
 
+// --- Masking ------------------------------------------------------------------------------
+
+function masking() {
+  const curated: [string, string?][] = [
+    ["call me on 9876543210 tomorrow"],
+    ["call me on +91 98765 43210 tomorrow"],
+    ["call me on +919876543210 tomorrow"],
+    ["call me on 098765-43210 tomorrow"],
+    ["call me on 91-98765-43210 tomorrow"],
+    ["call me on +1 415 555 2671 tomorrow"],
+    ["call me on +44 20 7946 0958 tomorrow"],
+    ["mail rahul.k@gmail.com"],
+    ["pay on rahul99@okaxis please"],
+    ["Your OTP is 482913. Do not share it."],
+    ["482913 is your verification code"],
+    ["X pe dm passcode is 6561"],
+    ["meet at 4521 Main St"],
+    ["card 4111 1111 1111 1111 exp 12/29"],
+    ["card 4111-1111-1111-1111"],
+    ["ref 1234 5678 9012 3456"],
+    ["A/c no: 50100234567891, IFSC HDFC0001234"],
+    ["account number 123456789012"],
+    ["aadhaar 2345 6789 0123"],
+    ["PAN ABCDE1234F"],
+    ["Flat No. 302, Sunshine Apartments"],
+    ["H.No 14/2"],
+    ["send it here:\n12 MG Road, Sector 15, Gurugram 122001\nthanks"],
+    ["pincode 110001"],
+    ["it costs ₹4,500 for 2 people"],
+    ["see you at 10:30 on 25/11/2026"],
+    ["the meeting is in 2026"],
+    ["order #4839201 shipped"],
+    ["flight 6E 2341 at gate 12"],
+    ["my score was 98.5%"],
+    ["call at 5 pm, 3 of us"],
+    ["12 MG Road, Gurugram 122001, call 9876543210"],
+    ["I couldn't find [PHONE_1] anywhere"],
+    ["https://x.com/someone/status/1859340012345678901 and https://wa.me/919876543210"],
+    ["OTP 482913, card 4111 1111 1111 1111, flat 302, Sector 15 Gurugram 122001"],
+    ["nothing private here at all"],
+    ["Room 302 9876543210"],
+    ["ref 12345 9876543210"],
+    ["numbers: 98765 43210 91234 56780"],
+    ["Rahul PAN ABCDE1234F, Priya PAN PQRST1234Z, HDFC0001234 vs ICIC0001234"],
+    ["Sent from 100123456789; account no is 100123456789"],
+    ["pay me at rahul@ybl."],
+    ["rahul@okhdfcbank."],
+    ["9876543210@ybl."],
+    ["rahul@gmail.com.au and dj@ok-bank.com"],
+    ["OTP:482913"],
+    ["otp482913"],
+    ["OTP: 4 8 2 9 1 3"],
+    ["OTP is 482-913"],
+    ["Use 482913 to log in, it's your login code"],
+    ["code hai 482913"],
+    ["Here it is: 482913", "what was that OTP?"],
+    ["Here it is: 482913", "what was that number?"],
+    ["Sent 50100234567891", "which bank account?"],
+    ["office 011-23456789"],
+    ["office 011 2345 6789"],
+    ["+91-9876-543-210"],
+    ["+91 9876 543 210"],
+    ["(+91) 98765-43210"],
+    ["नंबर ९८७६५४३२१० है"],
+    ["full width ９８７６５４３２１０"],
+    ["٩٨٧٦٥٤٣٢١٠ arabic"],
+    ["4111.1111.1111.1111"],
+    ["pan abcde1234f"],
+    ["C-12, Lajpat Nagar, New Delhi"],
+    ["B-204, Sunshine Apartments, Sector 15, Gurugram"],
+    ["12 MG Road, Sector 15, Gurugram"],
+    ["send here:\n12 MG Road, Gurugram 122001, call 9876543210"],
+    ["HDFC 50100234567891"],
+    ["transfer to 50100234567891 at HDFC"],
+    ["a/c 5010 0234 5678 91"],
+    ["car DL 3C AB 1234 parked"],
+    ["passport K1234567"],
+    ["Salary of 150000 is credited; the office is near Cyber Hub."],
+    ["In your code, set the port to 5432 and timeout 30000"],
+    ["Rs 45000 and the promo code SAVE10"],
+    ["the door 2 times"],
+    ["shop 24x7"],
+    ["it costs 1,23,456 rupees"],
+    ["₹ 98765 total"],
+    ["the OTP screen ships in 2026"],
+    ["the OTP service costs Rs 4500 a month"],
+    ["tracking id 123456789012 via Bluedart"],
+    ["your PIN is 482913"],
+    ["😀😀 12 MG Road 😀, Gurugram 122001 😀😀"],
+    [`12 MG Road ${"😀".repeat(70)} end`],
+    [`flat 3, ${"x".repeat(200)} road`],
+    ["banK 50100234567891"],
+    ["OTſ 482913 and OTP 112233"],
+    ["Flat ſ12 and FLAT 12"],
+    ["ADDREſS_1 [ADDRESS_1] [PHONE_1] [OTP_2]"],
+    ["﻿9876543210 and 9123456780"],
+    ["line one\r12 Park Street, Kolkata  7 Ring Road, Delhi"],
+    ["x\u0085 482913 is the OTP"],
+    ["OTP 4829.13 and code 482913.5 and otp 482913. done"],
+    ["otp 4829:13, otp 12:482913, otp 1.482913"],
+    ["pay rahul@okaxis1 now, x@ybl2, ok@ybl_x, ok@ybl-x.com"],
+    ["pay xy@ybl_y.com and ab@cd_e.f and pq@rs-t.uv and mn@op_q.r1"],
+    ...[56, 57, 58, 59, 60, 61].map((n): [string] => [`road ${"x".repeat(n - 5)} 122001`]),
+    ...[56, 57, 58, 59, 60, 61].map((n): [string] => [`a, road ${"y".repeat(n - 5)} 560 001 end`]),
+  ];
+  const restores = [
+    "call [PHONE_1] now",
+    "call [Phone_1] now",
+    "call PHONE_1 now",
+    "call [PHONE 1] now",
+    "call [ PHONE_1 ] now",
+    "call [PHONE\\_1] now",
+    "call [PHONE-1] now",
+    "call phone_1 now",
+    "call [PHONE_2] now",
+    "call [PHONE_1][EMAIL_1] or PHONE_1_2",
+    "mail [EMAIL_1] or [email_1]",
+    "[ADDRESS_1] and [ADDREſS_1]",
+    "[UPI_1] [OTP_1] [ACCOUNT_1]",
+    "escaped ［PHONE_1］ stays",
+    "x_PHONE_1 PHONE_1x [PHONE__1]",
+  ];
+  const session = createMaskSession();
+  const sequence = [
+    "Rahul: 9876543210, rahul@x.com",
+    "again +91 98765 43210 and 9123456780",
+    "Rahul 9876543210 and 12 MG Road, Gurugram 122001, rahul@ybl",
+    "OTP 482913 then [PHONE_1] typed",
+    "0091 98765 43210 and 0 98765 43210 and 919876543210",
+    "send here:\n12 MG Road, Gurugram 122001",
+    "send here:\n12  MG   Road,\tGurugram 122001",
+    "send here:\n12 mg road, gurugram 122001",
+    "RAHUL@X.COM, Rahul@YBL, pan abcde1234f, PAN ABCDE1234F",
+    "car DL 3C AB 1234, DL-3C-AB-1234, then DL3CAB1234, ifsc hdfc0001234 HDFC0001234",
+  ].map((text) => ({ text, want: session.mask(text) }));
+
+  const pieces = [
+    "9876543210",
+    "+91 98765 43210",
+    "98765-43210",
+    "011-23456789",
+    "+44 20 7946 0958",
+    "123",
+    "4111 1111 1111 1111",
+    "4111111111111112",
+    "2345 6789 0123",
+    "50100234567891",
+    "482913",
+    "4 8 2 9 1 3",
+    "2026",
+    "1999",
+    "₹4,500",
+    "Rs 450",
+    "12/29",
+    "10:30",
+    "98.5%",
+    "1,23,456",
+    "ABCDE1234F",
+    "abcde1234f",
+    "HDFC0001234",
+    "DL 3C AB 1234",
+    "K1234567",
+    "122001",
+    "rahul@okaxis",
+    "rahul.k@gmail.com",
+    "x@y.co.in",
+    "[PHONE_1]",
+    "PHONE_1",
+    "９８７６５４３２１０",
+    "९८७६५४३२१०",
+    "😀",
+    "OTP",
+    "otp",
+    "code",
+    "PIN",
+    "is",
+    "hai",
+    "your",
+    "passcode",
+    "verification",
+    "account",
+    "a/c",
+    "bank",
+    "HDFC",
+    "IFSC",
+    "flat",
+    "Flat No.",
+    "H.No",
+    "house no",
+    "#",
+    "plot",
+    "shop",
+    "door",
+    "road",
+    "Road",
+    "nagar",
+    "Sector",
+    "pincode",
+    "zip",
+    "MG",
+    "Gurugram",
+    "B-204",
+    "C-12",
+    "14/2",
+    "12",
+    "302",
+    "the",
+    "call",
+    "me",
+    "on",
+    "at",
+    "send",
+    "here",
+    "and",
+  ];
+  const glue = [" ", " ", " ", ", ", ": ", "\n", ". ", "-", "", " \t", ";", " ", "\r\n", "/"];
+  const next = random(91);
+  const fuzzed: [string, string?][] = [];
+  for (let i = 0; i < 2_500; i++) {
+    let s = "";
+    const n = 1 + Math.floor(next() * 10);
+    for (let j = 0; j < n; j++) {
+      s += pieces[Math.floor(next() * pieces.length)];
+      if (j < n - 1) s += glue[Math.floor(next() * glue.length)];
+    }
+    fuzzed.push(
+      i % 10 === 3 ? [s, "what was that OTP?"] : i % 10 === 7 ? [s, "my bank account"] : [s],
+    );
+  }
+
+  // Sessions of three texts each, so the same value written differently must share a placeholder.
+  const sessions = Array.from({ length: 150 }, (_, i) => {
+    const one = createMaskSession();
+    const texts = fuzzed.slice(i * 3, i * 3 + 3).map(([text]) => text);
+    const wants = texts.map((text) => one.mask(text));
+    const issued = Object.entries(one.counts()).flatMap(([kind, n]) =>
+      Array.from({ length: n ?? 0 }, (_, k) => `[${kind}_${k + 1}]`),
+    );
+    const probe = issued.join(" ");
+    return { texts, wants, probe, restored: one.restore(probe), counts: one.counts() };
+  });
+
+  write("core-go/internal/masking/testdata/masking.json", {
+    sessions,
+    cases: [...curated, ...fuzzed].map(([text, context]) => {
+      const one = createMaskSession();
+      const masked = one.mask(text, context === undefined ? {} : { context });
+      const restored = one.restore(masked);
+      // restored and context are left out when they are the text itself or empty, to keep the
+      // file small; the Go test fills them back in.
+      return {
+        text,
+        ...(context === undefined ? {} : { context }),
+        want: masked,
+        ...(restored === text ? {} : { restored }),
+        counts: one.counts(),
+      };
+    }),
+    sequence,
+    restores: restores.map((text) => ({ text, want: session.restore(text) })),
+    counts: session.counts(),
+  });
+}
+
 // --- The Groq request ---------------------------------------------------------------------
 
 async function requests() {
@@ -687,6 +952,22 @@ async function requests() {
       ],
       reply: "It is [mostly words](https://example.com/words).",
     },
+    {
+      question: "Rahul ka number aur OTP phir se batao",
+      history: [
+        {
+          question: "Rahul ka number kya hai?",
+          answer: "Rahul is on +91 98765 43210, mail rahul@x.com, flat no. 302, Sector 15",
+          at: new Date("2026-11-25T08:40:00.000Z"),
+        },
+        {
+          question: "what was that OTP?",
+          answer: "Here it is: 482913",
+          at: new Date("2026-11-25T08:50:00.000Z"),
+        },
+      ],
+      reply: "**Rahul**: [PHONE_1], [Email_1], ADDRESS_1. OTP was [OTP_1]",
+    },
   ];
   const chat = [];
   for (const c of chats) {
@@ -721,6 +1002,7 @@ async function requests() {
 
 await classes();
 tokens();
+masking();
 context();
 prompts();
 whatsapp();
