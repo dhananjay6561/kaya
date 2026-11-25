@@ -312,6 +312,8 @@ BEGIN
     AND has_table_privilege('kaya_core', 'message_chunks', 'SELECT, INSERT, UPDATE, DELETE'), 'core owns the search index';
   ASSERT NOT has_table_privilege('kaya_gateway', 'chunks', 'SELECT'), 'the gateway cannot read the search index';
   ASSERT EXISTS (SELECT 1 FROM pg_indexes WHERE indexname = 'messages_body_search_idx'), 'message text has a keyword index';
+  ASSERT EXISTS (SELECT 1 FROM pg_indexes WHERE indexname = 'contacts_names_search_idx')
+    AND EXISTS (SELECT 1 FROM pg_indexes WHERE indexname = 'chats_name_search_idx'), 'names have keyword indexes';
   ASSERT NOT has_table_privilege('kaya_core', 'pause_state', 'INSERT')
     AND NOT has_table_privilege('kaya_core', 'pause_state', 'DELETE'), 'core cannot add or remove the pause row';
   ASSERT NOT has_table_privilege('kaya_gateway', 'pause_state', 'SELECT')
