@@ -66,7 +66,7 @@ func TestRendersTheChatTheDayAndEachLineInTheOwnersZone(t *testing.T) {
 	got := Render("College Gang", []Line{
 		line(1, at(18, 25), "Rahul", "kal  milte\nhain?"),
 		line(2, at(18, 35), "Me", "haan"),
-	}, kolkata, DefaultShape, nil)
+	}, kolkata, DefaultShape, nil, "")
 	want := "Chat: College Gang\n24 Nov 2026\n23:55 Rahul: kal milte hain?\n25 Nov 2026\n00:05 Me: haan"
 	if got != want {
 		t.Fatalf("got\n%s\nwant\n%s", got, want)
@@ -75,7 +75,7 @@ func TestRendersTheChatTheDayAndEachLineInTheOwnersZone(t *testing.T) {
 
 func TestCutsALongMessageAtASpaceAndNeverInsideAPlaceholder(t *testing.T) {
 	s := Shape{Gap: time.Minute, MaxChars: 20, MaxLines: 5}
-	got := Render("c", []Line{line(1, at(10, 0), "Me", "one two three four five six seven")}, time.UTC, s, nil)
+	got := Render("c", []Line{line(1, at(10, 0), "Me", "one two three four five six seven")}, time.UTC, s, nil, "")
 	if !strings.HasSuffix(got, "Me: one two three four…") {
 		t.Fatalf("got %q", got)
 	}
@@ -89,12 +89,12 @@ func TestCutsALongMessageAtASpaceAndNeverInsideAPlaceholder(t *testing.T) {
 
 func TestMasksTheMessagesTogetherAndTheNamesApart(t *testing.T) {
 	lines := []Line{
-		line(1, at(10, 30), "Rahul", "code:"),
+		line(1, at(10, 30), "Rahul", "code bhej"),
 		line(2, at(10, 31), "+919876543210", "482913"),
 		line(3, at(10, 32), "Rahul", "12 MG Road, Gurugram 122001"),
 		line(4, at(10, 33), "Rahul", "mail rahul@x.com "+strings.Repeat("x", 1490)),
 	}
-	got := Render("+919123456780", lines, time.UTC, DefaultShape, masking.NewSession())
+	got := Render("+919123456780", lines, time.UTC, DefaultShape, masking.NewSession(), "")
 	for _, secret := range []string{"9876543210", "9123456780", "482913", "MG Road", "122001", "rahul@x.com"} {
 		if strings.Contains(got, secret) {
 			t.Errorf("%s leaked:\n%s", secret, got)
@@ -111,10 +111,38 @@ func TestMasksTheMessagesTogetherAndTheNamesApart(t *testing.T) {
 }
 
 func TestHashesTheTextItWasMadeFrom(t *testing.T) {
-	a := Render("c", []Line{line(1, at(10, 0), "Me", "hi")}, time.UTC, DefaultShape, nil)
-	b := Render("c", []Line{line(1, at(10, 0), "Me", "hi!")}, time.UTC, DefaultShape, nil)
-	again := Render("c", []Line{line(1, at(10, 0), "Me", "hi")}, time.UTC, DefaultShape, nil)
+	a := Render("c", []Line{line(1, at(10, 0), "Me", "hi")}, time.UTC, DefaultShape, nil, "")
+	b := Render("c", []Line{line(1, at(10, 0), "Me", "hi!")}, time.UTC, DefaultShape, nil, "")
+	again := Render("c", []Line{line(1, at(10, 0), "Me", "hi")}, time.UTC, DefaultShape, nil, "")
 	if Hash(a) == Hash(b) || Hash(a) != Hash(again) || len(Hash(a)) != 64 {
 		t.Fatal("hash does not follow the text")
+	}
+}
+
+func TestMasksCodesAskedForInAnyWayChatAsksForThem(t *testing.T) {
+	for _, c := range []struct {
+		texts  []string
+		before string
+	}{
+		{[]string{"code bhej", "482913"}, ""},
+		{[]string{"pin?", "4829"}, ""},
+		{[]string{"code bhej: 482913"}, ""},
+		{[]string{"bhai code bhejna\n482913"}, ""},
+		{[]string{"482913"}, "OTP bhej jaldi"},
+		{[]string{"here it is 4829 13"}, "verification code bhejo"},
+		{[]string{"482913"}, ""},
+	} {
+		var lines []Line
+		for i, text := range c.texts {
+			lines = append(lines, line(int64(i), at(10, i), "Rahul", text))
+		}
+		got := Render("c", lines, time.UTC, DefaultShape, masking.NewSession(), c.before)
+		if strings.Contains(got, "4829") {
+			t.Errorf("%q after %q leaked:\n%s", c.texts, c.before, got)
+		}
+	}
+	got := Render("c", []Line{line(1, at(10, 0), "Rahul", "meeting at 4521 Main St tomorrow")}, time.UTC, DefaultShape, masking.NewSession(), "")
+	if !strings.Contains(got, "4521") {
+		t.Errorf("a number with no code nearby was masked:\n%s", got)
 	}
 }

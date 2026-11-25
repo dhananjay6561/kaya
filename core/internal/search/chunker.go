@@ -63,20 +63,37 @@ type Masker interface {
 	Mask(text, context string) string
 }
 
+var (
+	codeWords = regexp.MustCompile(`\b(?:otp|code|pin|mpin|passcode|verification|verify)\b`)
+	justCode  = regexp.MustCompile(`^\d(?:[ -]?\d){3,7}$`)
+)
+
 // Render writes a chunk as its chat's name, then each day and "time sender: text" lines in zone.
-// With a masker, the messages are masked together, one to a line, so a word like "OTP" or "code"
-// in one message counts for a number in the next; no masking rule crosses a line, so each message
-// comes back on its own line. Names are masked apart from the text, and nothing is cut until it is
-// masked, so a cut never splits a detail and a time or a name is never taken for one.
-func Render(title string, lines []Line, zone *time.Location, s Shape, m Masker) string {
+//
+// With a masker, the messages are masked together, one to a line, so a word in one message counts
+// for a number in the next; no masking rule crosses a line, so each message comes back on its own
+// line. before is the text of the messages just before the chunk in the same chat. When the chunk
+// or before mentions an OTP, a code or a PIN, or a message is nothing but a 4 to 8 digit number,
+// every code-shaped number in the chunk is masked as an OTP: the masking rules want the word right
+// before the number, and chat puts it a verb or a message earlier ("code bhej" ... "482913"), so for
+// text leaving the machine it is safer to mask a little too much. Names are masked apart from the
+// text, and nothing is cut until it is masked, so a cut never splits a detail.
+func Render(title string, lines []Line, zone *time.Location, s Shape, m Masker, before string) string {
 	texts := make([]string, len(lines))
+	codeShaped := false
 	for i, line := range lines {
 		texts[i] = oneLine(line.Text)
+		codeShaped = codeShaped || justCode.MatchString(texts[i])
 	}
 	mask := func(text string) string { return text }
 	if m != nil {
 		mask = func(text string) string { return m.Mask(text, "") }
-		if masked := strings.Split(m.Mask(strings.Join(texts, "\n"), ""), "\n"); len(masked) == len(texts) {
+		joined := strings.Join(texts, "\n")
+		hint := ""
+		if codeShaped || codeWords.MatchString(strings.ToLower(before+"\n"+joined)) {
+			hint = "otp"
+		}
+		if masked := strings.Split(m.Mask(joined, hint), "\n"); len(masked) == len(texts) {
 			texts = masked
 		} else {
 			for i := range texts {
