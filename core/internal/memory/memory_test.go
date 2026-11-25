@@ -2,9 +2,11 @@ package memory
 
 import (
 	"encoding/json"
+	"fmt"
 	"os"
 	"reflect"
 	"regexp"
+	"slices"
 	"strings"
 	"testing"
 	"time"
@@ -251,27 +253,53 @@ func TestBuildMatchesTheTypeScriptCore(t *testing.T) {
 }
 
 func TestBuildPutsRecalledExchangesBeforeTheRecentOnesWhenThereIsRoom(t *testing.T) {
-	old := Exchange{Question: "what is my wifi name", Answer: "It is Kaya-Home.", At: at.Add(-40 * 24 * time.Hour)}
+	old := Exchange{ID: 7, Question: "what is my wifi name", Answer: "It is Kaya-Home.", At: at.Add(-40 * 24 * time.Hour)}
+	older := Exchange{ID: 6, Question: "router model", Answer: "TP-Link.", At: at.Add(-90 * 24 * time.Hour)}
+	recent := exchange("1", 10)
+	recent.ID = 9
 	p := Build(Input{
-		System: "s", History: []Exchange{exchange("1", 10)}, Recalled: []Exchange{old}, Question: "and the password?",
+		System: "s", History: []Exchange{recent}, Recalled: []Exchange{old, older}, MaxRecalled: 3, Question: "and the password?",
 		Budget: 10_000, Count: count, Now: at,
 	})
-	if p.Recalled != 1 || p.Exchanges != 1 || len(p.Messages) != 6 {
+	if p.Recalled != 2 || p.Exchanges != 1 || len(p.Messages) != 8 || !slices.Equal(p.Kept, []int64{9}) || !p.Oldest.Equal(at) {
 		t.Fatalf("package %+v", p)
 	}
-	if !strings.Contains(p.Messages[0].Content, "older exchanges") || p.Messages[1].Content != "(sent 40 days ago) what is my wifi name" ||
-		p.Messages[2].Content != "It is Kaya-Home." || !strings.HasPrefix(p.Messages[3].Content, "(sent just now) question 1") {
+	if !strings.Contains(p.Messages[0].Content, "older exchanges") || p.Messages[1].Content != "(sent 90 days ago) router model" ||
+		p.Messages[3].Content != "(sent 40 days ago) what is my wifi name" || !strings.HasPrefix(p.Messages[5].Content, "(sent just now) question 1") {
 		t.Fatalf("messages %+v", p.Messages)
 	}
-	small := Build(Input{
-		System: "s", History: []Exchange{exchange("1", 10)}, Recalled: []Exchange{old}, Question: "q",
-		Budget: requestOverhead + count("s\n"+leftOutNote) + count("q") + count("(sent just now) question 1 qqqqqqqqqq") + count("answer 1 aaaaaaaaaa"),
-		Count:  count, Now: at,
-	})
-	if small.Recalled != 0 || strings.Contains(small.Messages[0].Content, "older exchanges") || small.Exchanges != 1 {
-		t.Fatalf("recalled without room: %+v", small)
+	if got := Build(Input{
+		System: "s", History: []Exchange{recent}, Recalled: []Exchange{recent, old}, MaxRecalled: 1, Question: "q",
+		Budget: 10_000, Count: count, Now: at,
+	}); got.Recalled != 1 || got.Messages[1].Content != "(sent 40 days ago) what is my wifi name" {
+		t.Fatalf("a kept exchange was recalled again, or the cap ignored: %+v", got)
 	}
 	if got := Build(Input{System: "s", Question: "q", Budget: 10_000, Count: count, Now: at}); got.Recalled != 0 || got.Messages[0].Content != "s" {
 		t.Fatalf("nothing recalled: %+v", got)
+	}
+}
+
+func TestBuildCountsTheRecallNoteAndKeepsTheReserveForRecalledExchanges(t *testing.T) {
+	old := Exchange{ID: 7, Question: "wifi", Answer: "Kaya-Home", At: at.Add(-40 * 24 * time.Hour)}
+	pair := count("(sent 40 days ago) wifi") + count("Kaya-Home")
+	base := requestOverhead + count("s") + count("q")
+	fits := Build(Input{System: "s", Recalled: []Exchange{old}, MaxRecalled: 3, Question: "q", Budget: base + pair + count("s\n"+recalledNote) - count("s"), Count: count, Now: at})
+	if fits.Recalled != 1 {
+		t.Fatalf("an exchange that fits with its note was left out: %+v", fits)
+	}
+	tight := Build(Input{System: "s", Recalled: []Exchange{old}, MaxRecalled: 3, Question: "q", Budget: base + pair, Count: count, Now: at})
+	if tight.Recalled != 0 {
+		t.Fatal("the note's cost was not counted")
+	}
+	var history []Exchange
+	for i := range 20 {
+		e := exchange(fmt.Sprint(i), 50)
+		e.ID = int64(100 + i)
+		history = append(history, e)
+	}
+	without := Build(Input{System: "s", History: history, Question: "q", Budget: 1000, Count: count, Now: at})
+	with := Build(Input{System: "s", History: history, Recalled: []Exchange{old}, MaxRecalled: 3, RecallReserve: 250, Question: "q", Budget: 1000, Count: count, Now: at})
+	if with.Recalled != 1 || with.Exchanges >= without.Exchanges || with.Tokens > 1000 {
+		t.Fatalf("the reserve was not kept for recall: without %d kept, with %d kept and %d recalled", without.Exchanges, with.Exchanges, with.Recalled)
 	}
 }

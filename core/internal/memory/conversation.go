@@ -15,7 +15,7 @@ import (
 const DefaultExchanges = 50
 
 const conversationSQL = `
-SELECT q.body AS question, a.body AS answer, q.sent_at
+SELECT q.id, q.body AS question, a.body AS answer, q.sent_at
 FROM (SELECT * FROM exchanges ORDER BY id DESC LIMIT $1 * 2) e
 JOIN messages q ON q.id = e.question_message_id
 JOIN messages a ON a.chat_id = q.chat_id AND a.wa_id = e.answer_wa_id AND a.from_me
@@ -41,7 +41,7 @@ func ReadConversation(ctx context.Context, db *store.DB, maxExchanges int) ([]Ex
 		out, err = pgx.CollectRows(rows, func(row pgx.CollectableRow) (Exchange, error) {
 			var e Exchange
 			var at time.Time
-			err := row.Scan(&e.Question, &e.Answer, &at)
+			err := row.Scan(&e.ID, &e.Question, &e.Answer, &at)
 			e.Question = text.Trim(e.Question)
 			e.At = at
 			return e, err

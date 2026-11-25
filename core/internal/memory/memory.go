@@ -3,6 +3,7 @@
 package memory
 
 import (
+	"slices"
 	"strconv"
 	"time"
 
@@ -11,6 +12,8 @@ import (
 
 // Exchange is one past question from DJ and Kaya's answer to it.
 type Exchange struct {
+	// ID is the question's messages.id; zero when it is not known.
+	ID       int64
 	Question string
 	Answer   string
 	At       time.Time
@@ -20,13 +23,17 @@ type Exchange struct {
 type Input struct {
 	System  string
 	History []Exchange
-	// Recalled are older exchanges found because they may bear on the question, oldest first. They
-	// get whatever room the recent conversation leaves, each whole or not at all.
-	Recalled []Exchange
-	Question string
-	Budget   int
-	Count    func(text string) int
-	Now      time.Time
+	// Recalled are older exchanges found because they may bear on the question, best first. Up to
+	// MaxRecalled of them that the recent conversation did not keep get RecallReserve tokens set
+	// aside from it plus whatever room it leaves, each whole or not at all, and are shown oldest
+	// first.
+	Recalled      []Exchange
+	MaxRecalled   int
+	RecallReserve int
+	Question      string
+	Budget        int
+	Count         func(text string) int
+	Now           time.Time
 }
 
 // Package is the context sent to the model, with how many tokens it was counted at and how many
@@ -37,6 +44,10 @@ type Package struct {
 	Exchanges int
 	LeftOut   int
 	Recalled  int
+	// Kept are the IDs of the recent exchanges the package carries, and Oldest when the oldest of
+	// them was sent; zero when it carries none.
+	Kept   []int64
+	Oldest time.Time
 }
 
 const (
@@ -93,36 +104,50 @@ func Build(in Input) Package {
 		system = in.System + "\n" + leftOutNote
 	}
 	tokens := requestOverhead + count(system) + count(in.Question)
+	historyBudget := in.Budget - in.RecallReserve
 	var kept [][2]string
+	keptIDs := map[int64]bool{}
+	var pkg Package
 	for i := range in.History {
 		e := in.History[len(in.History)-1-i]
 		question := marked(e, e.Question)
-		if cost := count(question) + count(e.Answer); tokens+cost <= in.Budget {
+		if cost := count(question) + count(e.Answer); tokens+cost <= historyBudget {
 			tokens += cost
 			kept = append(kept, [2]string{question, e.Answer})
+			keptIDs[e.ID] = true
+			pkg.Kept, pkg.Oldest = append(pkg.Kept, e.ID), e.At
 			continue
 		}
-		if room := in.Budget - tokens; i == 0 && room >= minShortened {
+		if room := historyBudget - tokens; i == 0 && room >= minShortened {
 			marker := count(marked(e, ""))
 			question = marked(e, Shorten(e.Question, room/2-marker, count))
 			answer := Shorten(e.Answer, room-count(question), count)
 			tokens += count(question) + count(answer)
 			kept = append(kept, [2]string{question, answer})
+			keptIDs[e.ID] = true
+			pkg.Kept, pkg.Oldest = append(pkg.Kept, e.ID), e.At
 		}
 		break
 	}
-	var recalled [][2]string
+	var chosen []Exchange
 	note := count(system+"\n"+recalledNote) - count(system)
 	for _, e := range in.Recalled {
-		question := marked(e, e.Question)
-		cost := count(question) + count(e.Answer)
-		if len(recalled) == 0 {
+		if len(chosen) >= in.MaxRecalled || e.ID != 0 && keptIDs[e.ID] {
+			continue
+		}
+		cost := count(marked(e, e.Question)) + count(e.Answer)
+		if len(chosen) == 0 {
 			cost += note
 		}
 		if tokens+cost <= in.Budget {
 			tokens += cost
-			recalled = append(recalled, [2]string{question, e.Answer})
+			chosen = append(chosen, e)
 		}
+	}
+	slices.SortStableFunc(chosen, func(a, b Exchange) int { return a.At.Compare(b.At) })
+	recalled := make([][2]string, len(chosen))
+	for i, e := range chosen {
+		recalled[i] = [2]string{marked(e, e.Question), e.Answer}
 	}
 	leftOut := len(in.History) - len(kept)
 	if leftOut == 0 {
@@ -144,5 +169,6 @@ func Build(in Input) Package {
 			llm.Message{Role: llm.Assistant, Content: kept[i][1]})
 	}
 	messages = append(messages, llm.Message{Role: llm.User, Content: in.Question})
-	return Package{Messages: messages, Tokens: tokens, Exchanges: len(kept), LeftOut: leftOut, Recalled: len(recalled)}
+	pkg.Messages, pkg.Tokens, pkg.Exchanges, pkg.LeftOut, pkg.Recalled = messages, tokens, len(kept), leftOut, len(recalled)
+	return pkg
 }
