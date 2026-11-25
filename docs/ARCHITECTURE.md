@@ -49,6 +49,7 @@ kaya/
 ├── db/migrations/          plain SQL migrations (dbmate)
 ├── deploy/                 Victus host setup, compose override, backups, hosting checklist
 ├── docs/                   spec, architecture, infra, decisions, phases
+├── scripts/                host checks run through make (check-network: link MTU)
 ├── compose.yml             base stack; compose.mac.yml / deploy/compose.victus.yml per machine
 ├── Makefile                one entry point for dev, lint, test and build across languages
 └── .env.example            every setting for every service

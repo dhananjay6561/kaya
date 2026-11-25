@@ -473,6 +473,7 @@ kaya/
 │   ├── migrations/     plain SQL migrations (dbmate)
 │   └── tests/          SQL schema tests
 ├── docs/               spec, architecture, infra, decisions, phases
+├── scripts/            host checks run through make (check-network)
 ├── compose.yml         base stack
 ├── compose.mac.yml     per-machine override (ports on 127.0.0.1)
 ├── Makefile            one entry point for dev, lint, test and build
@@ -527,6 +528,20 @@ curl -s http://127.0.0.1:3000/health   # core
 Each answers 200 with `"status":"ok"` when its database check passes, and 503 otherwise. Before
 pairing, the gateway reports WhatsApp under `info.whatsapp` as `logged_out` with the reason
 `not paired: run make pair`. That state never fails the health check.
+
+If the gateway keeps reconnecting (`Keepalive timed out` in `make logs`) or Kaya replies late, run
+`make check-network`. It finds the largest packet your internet link carries and warns when this
+machine sends bigger ones, which stalls large WhatsApp replies (common on PPPoE broadband, which
+carries 1492 bytes while Wi-Fi and Ethernet default to 1500). It prints the fix for your system.
+TCP MSS clamping on the router fixes every device at once. On macOS, Docker Desktop opens container
+connections from the host, so the host's MTU is enough. On Linux, containers sit on Docker's own
+bridge networks, so also set Docker's MTU in `/etc/docker/daemon.json` (Docker 24 or newer):
+
+```json
+{"mtu": 1492, "default-network-opts": {"bridge": {"com.docker.network.driver.mtu": "1492"}}}
+```
+
+Then restart Docker and run `make down && make up` so the networks are made again.
 
 ### 4. Link WhatsApp
 
@@ -594,6 +609,7 @@ make pair-dev      # pair from source against the db from make db
 make media id=42   # download the file of message 42 (photo, voice note, document)
 make logs          # follow logs from every service
 make ps            # show the status of every service
+make check-network # warn when packets are bigger than the internet link carries
 make down          # stop the stack (data stays in DATA_DIR)
 make migration name=add_tasks   # new empty migration in db/migrations
 make migrate       # apply pending migrations
