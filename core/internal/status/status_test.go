@@ -3,6 +3,7 @@ package status
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"regexp"
 	"strings"
 	"testing"
@@ -149,5 +150,28 @@ func TestReadsWhatCoreIsAllowedToRead(t *testing.T) {
 	}
 	if full.EventsWaiting != 1 || full.EventsDead != 0 {
 		t.Fatalf("got %d waiting, %d dead", full.EventsWaiting, full.EventsDead)
+	}
+}
+
+func TestShowsHowMuchOfTheHistoryIsSearchable(t *testing.T) {
+	if text := Format(healthy()); strings.Contains(text, "Search index") {
+		t.Fatal(text)
+	}
+	st := healthy()
+	st.Indexed, st.Searchable = 98123, 102000
+	matches(t, Format(st), `^Search index: 98123 of 102000 messages \(96%\)\.$`)
+}
+
+func TestReadsTheIndexAndLeavesItOutWhenItCannot(t *testing.T) {
+	core, _ := testdb.MigratedPair(t, "kaya_core")
+	src := Source{DB: core, Pause: &pause.Memory{}, Version: "test", StartedAt: time.Now(),
+		Index: func(context.Context) (int, int, error) { return 5, 8, nil }}
+	st, err := Read(bg, src)
+	if err != nil || st.Indexed != 5 || st.Searchable != 8 {
+		t.Fatalf("got %+v, %v", st, err)
+	}
+	src.Index = func(context.Context) (int, int, error) { return 0, 0, errors.New("index away") }
+	if st, err := Read(bg, src); err != nil || st.Searchable != 0 {
+		t.Fatalf("a failing index broke the status: %+v, %v", st, err)
 	}
 }

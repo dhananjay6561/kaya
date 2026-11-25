@@ -23,11 +23,13 @@ import (
 	"github.com/dhananjay6561/kaya/core/internal/chat"
 	"github.com/dhananjay6561/kaya/core/internal/commands"
 	"github.com/dhananjay6561/kaya/core/internal/config"
+	"github.com/dhananjay6561/kaya/core/internal/embeddings"
 	"github.com/dhananjay6561/kaya/core/internal/gateway"
 	"github.com/dhananjay6561/kaya/core/internal/llm"
 	"github.com/dhananjay6561/kaya/core/internal/masking"
 	"github.com/dhananjay6561/kaya/core/internal/memory"
 	"github.com/dhananjay6561/kaya/core/internal/pause"
+	"github.com/dhananjay6561/kaya/core/internal/search"
 	"github.com/dhananjay6561/kaya/core/internal/status"
 	"github.com/dhananjay6561/kaya/kit/envfile"
 	"github.com/dhananjay6561/kaya/kit/httpapi"
@@ -114,6 +116,10 @@ func run(cfg config.Config, logger *slog.Logger) error {
 	if err != nil {
 		return err
 	}
+	embedder, err := embeddings.New(cfg.Embeddings)
+	if err != nil {
+		return err
+	}
 	databaseAway := func(err error) bool { return channel.DatabaseAway(db, err) }
 
 	events := gateway.NewEvents(logger)
@@ -129,6 +135,7 @@ func run(cfg config.Config, logger *slog.Logger) error {
 		})
 	}
 	switches := pause.NewStored(db)
+	indexer := search.NewIndexer(search.IndexerOptions{DB: db, Embeddings: embedder, Pause: switches, Logger: logger, Zone: zone})
 	replies, err := chat.New(chat.Options{
 		LLM:    model,
 		Logger: logger,
@@ -147,7 +154,13 @@ func run(cfg config.Config, logger *slog.Logger) error {
 		Logger:  logger,
 		Pause:   switches,
 		Status: func(ctx context.Context) (string, error) {
-			st, err := status.Read(ctx, status.Source{DB: db, Pause: switches, Version: version, StartedAt: startedAt})
+			st, err := status.Read(ctx, status.Source{
+				DB: db, Pause: switches, Version: version, StartedAt: startedAt,
+				Index: func(ctx context.Context) (int, int, error) {
+					p, err := indexer.Progress(ctx)
+					return p.Indexed, p.Total, err
+				},
+			})
 			if err != nil {
 				return "", err
 			}
@@ -166,7 +179,7 @@ func run(cfg config.Config, logger *slog.Logger) error {
 		logger.Warn("db not reachable at startup; health reports it until it is", logging.Err(err))
 	}
 	cancel()
-	for kind, name := range map[string]string{"llm": model.Name(), "channel": ch.Name(), "telephony": cfg.Telephony} {
+	for kind, name := range map[string]string{"llm": model.Name(), "embeddings": embedder.Name(), "channel": ch.Name(), "telephony": cfg.Telephony} {
 		if name == "stub" {
 			logger.Warn(kind+" provider is the stub; nothing real happens through it", "kind", kind)
 		}
@@ -177,6 +190,8 @@ func run(cfg config.Config, logger *slog.Logger) error {
 	defer ch.Stop()
 	consumer.Start(ctx)
 	defer consumer.Stop()
+	indexer.Start()
+	defer indexer.Stop()
 
 	ln, err := net.Listen("tcp", net.JoinHostPort(cfg.ListenHost, strconv.Itoa(cfg.Port)))
 	if err != nil {
@@ -191,6 +206,7 @@ func run(cfg config.Config, logger *slog.Logger) error {
 	logger.Info("core started",
 		"addr", ln.Addr().String(),
 		"llm", model.Name(),
+		"embeddings", embedder.Name(),
 		"channel", ch.Name(),
 		"telephony", cfg.Telephony,
 		"data_dir", cfg.DataDir,
