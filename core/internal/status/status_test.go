@@ -164,8 +164,10 @@ func TestShowsHowMuchOfTheHistoryIsSearchable(t *testing.T) {
 
 func TestReadsTheIndexAndLeavesItOutWhenItCannot(t *testing.T) {
 	core, _ := testdb.MigratedPair(t, "kaya_core")
-	src := Source{DB: core, Pause: &pause.Memory{}, Version: "test", StartedAt: time.Now(),
-		Index: func(context.Context) (int, int, error) { return 5, 8, nil }}
+	src := Source{
+		DB: core, Pause: &pause.Memory{}, Version: "test", StartedAt: time.Now(),
+		Index: func(context.Context) (int, int, error) { return 5, 8, nil },
+	}
 	st, err := Read(bg, src)
 	if err != nil || st.Indexed != 5 || st.Searchable != 8 {
 		t.Fatalf("got %+v, %v", st, err)

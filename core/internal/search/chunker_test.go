@@ -113,7 +113,8 @@ func TestMasksTheMessagesTogetherAndTheNamesApart(t *testing.T) {
 func TestHashesTheTextItWasMadeFrom(t *testing.T) {
 	a := Render("c", []Line{line(1, at(10, 0), "Me", "hi")}, time.UTC, DefaultShape, nil)
 	b := Render("c", []Line{line(1, at(10, 0), "Me", "hi!")}, time.UTC, DefaultShape, nil)
-	if Hash(a) == Hash(b) || Hash(a) != Hash(a) || len(Hash(a)) != 64 {
+	again := Render("c", []Line{line(1, at(10, 0), "Me", "hi")}, time.UTC, DefaultShape, nil)
+	if Hash(a) == Hash(b) || Hash(a) != Hash(again) || len(Hash(a)) != 64 {
 		t.Fatal("hash does not follow the text")
 	}
 }

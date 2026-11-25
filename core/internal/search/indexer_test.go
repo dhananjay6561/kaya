@@ -91,8 +91,10 @@ func newRig(t *testing.T, tune ...func(*IndexerOptions)) *rig {
 	r.exec("UPDATE contacts SET saved_name = 'Rahul' WHERE id = $1", r.rahul)
 	r.direct = r.one("INSERT INTO chats (kind, contact_id) VALUES ('direct', $1) RETURNING id", r.rahul)
 	r.group = r.one("INSERT INTO chats (kind, jid, name) VALUES ('group', '120363000000000001@g.us', 'College Gang') RETURNING id")
-	o := IndexerOptions{DB: core, Embeddings: r.fake, Pause: r.switches, Logger: quiet, Zone: time.UTC,
-		Settle: time.Minute, Poll: 20 * time.Millisecond, RetryMin: time.Millisecond, RetryMax: 5 * time.Millisecond, Refused: 10 * time.Millisecond}
+	o := IndexerOptions{
+		DB: core, Embeddings: r.fake, Pause: r.switches, Logger: quiet, Zone: time.UTC,
+		Settle: time.Minute, Poll: 20 * time.Millisecond, RetryMin: time.Millisecond, RetryMax: 5 * time.Millisecond, Refused: 10 * time.Millisecond,
+	}
 	for _, f := range tune {
 		f(&o)
 	}
