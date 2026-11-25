@@ -97,6 +97,9 @@ contact, and it works with everything your WhatsApp account can see.
   match as typed), fused into one ranking, with filters by chat, contact and date. Each question you
   ask Kaya also brings back up to three older exchanges with it that bear on the question, beyond
   the recent conversation. Try it from a terminal: `docker compose exec core /core search "money"`.
+- **Talks like a friend, not a bot.** Kaya texts like a close friend who happens to be scarily
+  capable: short, warm, cheeky, in your language and script, and honest about what she can and
+  cannot do yet.
 - **Answers from your chats.** Ask "what did Rahul say about Saturday?", "usne ab kya bola?" or
   "¿qué dijo María ayer?" and a small model first works out what to search for: who you mean (even
   from your last question), what about, whether you want the newest messages, and which days. Kaya
