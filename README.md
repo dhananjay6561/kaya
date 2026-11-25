@@ -97,16 +97,16 @@ contact, and it works with everything your WhatsApp account can see.
   match as typed), fused into one ranking, with filters by chat, contact and date. Each question you
   ask Kaya also brings back up to three older exchanges with it that bear on the question, beyond
   the recent conversation. Try it from a terminal: `docker compose exec core /core search "money"`.
-- **Answers from your chats.** Ask "what did Rahul say about Saturday?" and Kaya searches your other
-  chats, giving a head start to the people or groups your question names (in English or Hindi
-  script), and gives the model up to three excerpts with who said what, in which chat and when, so
-  the answer can say where it came from. The excerpts are masked, kept out of the instructions in a
-  message of their own, marked as data the model must never obey, and escaped so no message can
-  break out of them; a name someone chose for themselves shows as `~Name`, so nobody can pass for
-  you or Kaya. A follow-up like "and recently?" keeps the person from your last question, and
-  asking about recent messages brings their newest ones. If the search finds nothing, or could not
-  run, the model is told which. Kaya never
-  sees a whole chat, only the excerpts it found.
+- **Answers from your chats.** Ask "what did Rahul say about Saturday?", "usne ab kya bola?" or
+  "¿qué dijo María ayer?" and a small model first works out what to search for: who you mean (even
+  from your last question), what about, whether you want the newest messages, and which days. Kaya
+  then searches your other chats, matching names in any script and despite typos, and gives the
+  model up to three excerpts with who said what, in which chat and when, so the answer can say where
+  it came from. The excerpts are masked, kept out of the instructions in a message of their own,
+  marked as data the model must never obey, and escaped so no message can break out of them; a name
+  someone chose for themselves shows as `~Name`, so nobody can pass for you or Kaya. If the search
+  finds nothing, could not run, or a name matches nobody, the model is told. Kaya never sees a whole
+  chat, only the excerpts it found.
 - **Least-privilege database logins.** The gateway and core each have their own Postgres role.
   Core, the part that will talk to an LLM, can read chats but cannot see the WhatsApp session, its
   encryption keys, or the keys needed to fetch media.
@@ -347,8 +347,8 @@ erDiagram
 
 *Figure 3. Entity relationship diagram of contacts, chats, messages and reactions. A message is
 unique by chat, WhatsApp id and sender. A reaction has no foreign key to its message, because it can
-arrive before the message it targets. Core's migrations add full text indexes on message text and on
-contact and group names, for search, although the gateway owns these tables.*
+arrive before the message it targets. Core's migrations add a full text index on message text and trigram
+indexes on contact and group names, for search, although the gateway owns these tables.*
 
 A media message also has a `media` row (type, size, duration and whether the file is downloaded).
 
