@@ -607,3 +607,36 @@ func TestGoesStraightOnWhileThereIsABacklog(t *testing.T) {
 		time.Sleep(10 * time.Millisecond)
 	}
 }
+
+func TestAChatStillTalkingDoesNotHoldUpTheHistoryBehindIt(t *testing.T) {
+	r := newRig(t, func(o *IndexerOptions) { o.BatchMessages = 10 })
+	busy := r.one("INSERT INTO chats (kind, jid, name) VALUES ('group', '120363000000000501@g.us', 'busy') RETURNING id")
+	old := r.one("INSERT INTO chats (kind, jid, name) VALUES ('group', '120363000000000502@g.us', 'history') RETURNING id")
+	r.say(busy, 15, "still")
+	r.say(busy, 14, "talking")
+	r.add(msg{chat: busy, ago: 8 * time.Minute, body: str("and more"), fresh: true})
+	for i := range 40 {
+		r.say(old, 2000-i*30, fmt.Sprintf("old message %d", i))
+	}
+	total := 0
+	for range 6 {
+		total += r.pass()
+	}
+	if total != 40 || r.count("SELECT 1 FROM message_chunks mc JOIN messages m ON m.id = mc.message_id WHERE m.chat_id = $1", busy) != 0 {
+		t.Fatalf("indexed %d of the 40 old messages; the busy chat has %d", total,
+			r.count("SELECT 1 FROM message_chunks mc JOIN messages m ON m.id = mc.message_id WHERE m.chat_id = $1", busy))
+	}
+}
+
+func TestCuttingABatchInsideAChatWaitsOnlyForItsLastGroup(t *testing.T) {
+	r := newRig(t, func(o *IndexerOptions) { o.BatchMessages = 5 })
+	for i := range 8 {
+		r.say(r.group, 600-i*60, fmt.Sprintf("hourly %d", i))
+	}
+	if n := r.pass(); n != 4 {
+		t.Fatalf("first pass indexed %d, want the 4 groups before the cut", n)
+	}
+	if n := r.pass(); n != 4 {
+		t.Fatalf("second pass indexed %d", n)
+	}
+}

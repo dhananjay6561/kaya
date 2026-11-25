@@ -304,23 +304,7 @@ func (ix *Indexer) pass(ctx context.Context) (int, error) {
 			LIMIT 200)`, settle); err != nil {
 		return 0, err
 	}
-	rows, err := readLines(ctx, ix.o.DB, linesSQL+settled+`
-		ORDER BY m.chat_id, m.sent_at, m.id LIMIT $2`, settle, ix.o.BatchMessages+1)
-	if err != nil {
-		return 0, err
-	}
-	if len(rows) > ix.o.BatchMessages {
-		// The batch stopped inside a chat, so its last conversation may be cut in two: leave that
-		// chat for the next pass, unless it is the only one.
-		last := rows[len(rows)-1].ChatID
-		trimmed := slices.DeleteFunc(slices.Clone(rows), func(l titledLine) bool { return l.ChatID == last })
-		if len(trimmed) > 0 {
-			rows = trimmed
-		} else {
-			rows = rows[:ix.o.BatchMessages]
-		}
-	}
-	items, err := ix.chunk(ctx, rows)
+	items, err := ix.collect(ctx, settle)
 	if err != nil {
 		return 0, err
 	}
@@ -344,22 +328,66 @@ func (ix *Indexer) pass(ctx context.Context) (int, error) {
 	return indexed, nil
 }
 
-// chunk groups rows (ordered by chat, then time) into chunks, masked when the embeddings leave
-// the machine. A chat's last group waits while its conversation may still go on, so a chat that is
-// busy is not cut into one chunk per pass.
-func (ix *Indexer) chunk(ctx context.Context, rows []titledLine) ([]pending, error) {
+// collect reads settled messages chat by chat, the chats whose waiting messages are oldest first,
+// until about BatchMessages are read, and turns them into chunks. Going by the oldest waiting
+// message keeps a chat whose conversation is still going on (and so waits) from standing in front
+// of the history behind it.
+func (ix *Indexer) collect(ctx context.Context, settle float64) ([]pending, error) {
+	var chats []int64
+	err := ix.o.DB.InTx(ctx, func(tx pgx.Tx) error {
+		rows, err := tx.Query(ctx, `
+			SELECT m.chat_id FROM messages m WHERE `+eligible+settled+`
+			GROUP BY m.chat_id ORDER BY min(m.sent_at), m.chat_id LIMIT 1000`, settle)
+		if err != nil {
+			return err
+		}
+		chats, err = pgx.CollectRows(rows, pgx.RowTo[int64])
+		return err
+	})
+	if err != nil {
+		return nil, err
+	}
 	var out []pending
-	for start := 0; start < len(rows); {
-		end := start
-		for end < len(rows) && rows[end].ChatID == rows[start].ChatID {
-			end++
+	budget := ix.o.BatchMessages
+	for _, chat := range chats {
+		if budget <= 0 {
+			break
 		}
-		lines := make([]Line, 0, end-start)
-		for _, r := range rows[start:end] {
-			lines = append(lines, r.Line)
+		rows, err := readLines(ctx, ix.o.DB, linesSQL+settled+`
+			AND m.chat_id = $2 ORDER BY m.sent_at, m.id LIMIT $3`, settle, chat, budget+1)
+		if err != nil {
+			return nil, err
 		}
-		title, chatID := rows[start].title, rows[start].ChatID
-		groups := Group(lines, ix.o.Shape)
+		cut := len(rows) > budget
+		if cut {
+			rows = rows[:budget]
+		}
+		items, err := ix.chunk(ctx, rows, cut)
+		if err != nil {
+			return nil, err
+		}
+		out = append(out, items...)
+		budget -= len(rows)
+	}
+	return out, nil
+}
+
+// chunk groups one chat's rows, oldest first, into chunks, masked when the embeddings leave the
+// machine. The last group waits when the read was cut inside it, or while its conversation may
+// still go on, so a chat is never chunked in the middle of a conversation.
+func (ix *Indexer) chunk(ctx context.Context, rows []titledLine, cut bool) ([]pending, error) {
+	if len(rows) == 0 {
+		return nil, nil
+	}
+	lines := make([]Line, 0, len(rows))
+	for _, r := range rows {
+		lines = append(lines, r.Line)
+	}
+	title, chatID := rows[0].title, rows[0].ChatID
+	groups := Group(lines, ix.o.Shape)
+	if cut {
+		groups = groups[:len(groups)-1]
+	} else {
 		closed, err := ix.closed(ctx, groups[len(groups)-1])
 		if err != nil {
 			return nil, err
@@ -367,24 +395,27 @@ func (ix *Indexer) chunk(ctx context.Context, rows []titledLine) ([]pending, err
 		if !closed {
 			groups = groups[:len(groups)-1]
 		}
-		before, err := ix.before(ctx, chatID, lines[0].SentAt)
-		if err != nil {
-			return nil, err
+	}
+	if len(groups) == 0 {
+		return nil, nil
+	}
+	before, err := ix.before(ctx, chatID, lines[0].SentAt)
+	if err != nil {
+		return nil, err
+	}
+	var out []pending
+	for _, group := range groups {
+		p := pending{chatID: chatID, lines: group}
+		plain := Render(title, group, ix.o.Zone, ix.o.Shape, nil, "")
+		p.hash, p.text = Hash(plain), plain
+		if ix.o.Embeddings.Locality() == llm.Cloud {
+			p.text = Render(title, group, ix.o.Zone, ix.o.Shape, masking.NewSession(), before)
 		}
-		for _, group := range groups {
-			p := pending{chatID: chatID, lines: group}
-			plain := Render(title, group, ix.o.Zone, ix.o.Shape, nil, "")
-			p.hash, p.text = Hash(plain), plain
-			if ix.o.Embeddings.Locality() == llm.Cloud {
-				p.text = Render(title, group, ix.o.Zone, ix.o.Shape, masking.NewSession(), before)
-			}
-			out = append(out, p)
-			before = ""
-			for _, l := range group[max(0, len(group)-3):] {
-				before += l.Text + "\n"
-			}
+		out = append(out, p)
+		before = ""
+		for _, l := range group[max(0, len(group)-3):] {
+			before += l.Text + "\n"
 		}
-		start = end
 	}
 	return out, nil
 }
