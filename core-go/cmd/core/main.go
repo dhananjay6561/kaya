@@ -130,10 +130,12 @@ func run(cfg config.Config, logger *slog.Logger) error {
 	}
 	switches := pause.NewStored(db)
 	replies, err := chat.New(chat.Options{
-		LLM:            model,
-		Logger:         logger,
-		Zone:           zone,
-		History:        func(ctx context.Context, _ chat.Question) ([]memory.Exchange, error) { return memory.ReadConversation(ctx, db, 0) },
+		LLM:    model,
+		Logger: logger,
+		Zone:   zone,
+		History: func(ctx context.Context, _ chat.Question) ([]memory.Exchange, error) {
+			return memory.ReadConversation(ctx, db, 0)
+		},
 		DatabaseAway:   databaseAway,
 		NewMaskSession: func() chat.MaskSession { return masking.NewSession() },
 	})
