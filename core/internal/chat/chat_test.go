@@ -10,6 +10,7 @@ import (
 	"net/http/httptest"
 	"os"
 	"reflect"
+	"slices"
 	"strings"
 	"sync"
 	"testing"
@@ -549,19 +550,22 @@ func TestReplySendsGroqTheSameRequestAsTheTypeScriptCore(t *testing.T) {
 
 func TestReplyBringsBackOlderExchangesMaskedAndAnswersWithoutThemWhenRecallFails(t *testing.T) {
 	cloud := cloudStub{llm.NewStub(llm.StubOptions{Reply: func(llm.Request) string { return "It was [PHONE_1]." }})}
-	old := memory.Exchange{Question: "what is the plumber's number", Answer: "It is 9876543210.", At: now.Add(-60 * 24 * time.Hour)}
+	old := memory.Exchange{ID: 5, Question: "what is the plumber's number", Answer: "It is 9876543210.", At: now.Add(-60 * 24 * time.Hour)}
+	recent := memory.Exchange{ID: 40, Question: "hi", Answer: "hello", At: now.Add(-time.Hour)}
 	var asked []string
+	var excluded []int64
+	var before time.Time
 	c := newChat(t, Options{
-		LLM: cloud, NewMaskSession: realMasking,
-		Recall: func(_ context.Context, q Question) ([]memory.Exchange, error) {
-			asked = append(asked, q.Text)
+		LLM: cloud, NewMaskSession: realMasking, History: history(recent),
+		Recall: func(_ context.Context, q Question, exclude []int64, cut time.Time) ([]memory.Exchange, error) {
+			asked, excluded, before = append(asked, q.Text), exclude, cut
 			return []memory.Exchange{old}, nil
 		},
 	})
 	got := reply(t, c, "plumber ka number kya tha?")
 	sent := cloud.Requests()[0].Messages
-	if len(asked) != 1 || asked[0] != "plumber ka number kya tha?" {
-		t.Fatalf("recall asked %q", asked)
+	if len(asked) != 1 || asked[0] != "plumber ka number kya tha?" || !slices.Equal(excluded, []int64{40}) || !before.Equal(recent.At) {
+		t.Fatalf("recall asked %q excluding %v before %v", asked, excluded, before)
 	}
 	if sent[1].Content != "(sent 60 days ago) what is the plumber's number" || sent[2].Content != "It is [PHONE_1]." {
 		t.Fatalf("sent %+v", sent)
@@ -572,10 +576,52 @@ func TestReplyBringsBackOlderExchangesMaskedAndAnswersWithoutThemWhenRecallFails
 
 	stub := llm.NewStub(llm.StubOptions{Reply: func(llm.Request) string { return "fine" }})
 	c = newChat(t, Options{
-		LLM:    stub,
-		Recall: func(context.Context, Question) ([]memory.Exchange, error) { return nil, errors.New("voyage away") },
+		LLM: stub,
+		Recall: func(context.Context, Question, []int64, time.Time) ([]memory.Exchange, error) {
+			return nil, errors.New("voyage away")
+		},
 	})
 	if got := reply(t, c, "hi"); got.Text != "fine" || len(stub.Requests()[0].Messages) != 2 {
 		t.Fatalf("a failed recall broke the answer: %+v", got)
+	}
+
+	away := errors.New("connect ECONNREFUSED")
+	c = newChat(t, Options{
+		LLM: stub, DatabaseAway: func(err error) bool { return errors.Is(err, away) },
+		Recall: func(context.Context, Question, []int64, time.Time) ([]memory.Exchange, error) { return nil, away },
+	})
+	if _, err := c.Reply(bg, q("hi")); !errors.Is(err, away) {
+		t.Fatalf("a recall that found the database away did not fail the question: %v", err)
+	}
+}
+
+func TestReplyDropsRecalledExchangesWhenTooLongAndKeepsThemForTheLowEffortRetry(t *testing.T) {
+	old := memory.Exchange{ID: 5, Question: "old question", Answer: "old answer", At: now.Add(-60 * 24 * time.Hour)}
+	recall := func(context.Context, Question, []int64, time.Time) ([]memory.Exchange, error) {
+		return []memory.Exchange{old}, nil
+	}
+	var sizes []int
+	tooLong := &scripted{responses: func(r llm.Request) (llm.Completion, error) {
+		sizes = append(sizes, len(r.Messages))
+		if len(r.Messages) > 2 {
+			return llm.Completion{}, &llm.Error{Provider: "groq", Code: llm.TooLong, Status: 413}
+		}
+		return llm.Completion{Text: "short", FinishReason: llm.FinishStop}, nil
+	}}
+	reply(t, newChat(t, Options{LLM: tooLong, Recall: recall}), "hi")
+	if !slices.Equal(sizes, []int{4, 2}) {
+		t.Fatalf("sizes %v", sizes)
+	}
+	var retried [][]llm.Message
+	lowEffort := &scripted{responses: func(r llm.Request) (llm.Completion, error) {
+		retried = append(retried, r.Messages)
+		if r.Effort == llm.Low {
+			return llm.Completion{Text: "here", FinishReason: llm.FinishStop}, nil
+		}
+		return llm.Completion{FinishReason: llm.FinishLength}, nil
+	}}
+	reply(t, newChat(t, Options{LLM: lowEffort, Recall: recall}), "hi")
+	if len(retried) != 2 || len(retried[1]) != 4 || !strings.Contains(retried[1][1].Content, "old question") {
+		t.Fatalf("the low-effort retry lost the recalled exchange: %+v", retried)
 	}
 }

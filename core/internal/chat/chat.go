@@ -44,9 +44,10 @@ type Options struct {
 	Zone   *time.Location
 	// History reads the conversation so far for a question; nil means none.
 	History func(ctx context.Context, q Question) ([]memory.Exchange, error)
-	// Recall finds older exchanges that may bear on a question, beyond the recent conversation;
+	// Recall finds older exchanges that may bear on a question, best first, leaving out exclude
+	// (the recent exchanges the context carries, by question id) and anything from before on;
 	// nil means none. A failure is handled like History's.
-	Recall func(ctx context.Context, q Question) ([]memory.Exchange, error)
+	Recall func(ctx context.Context, q Question, exclude []int64, before time.Time) ([]memory.Exchange, error)
 	// DatabaseAway says whether a History error means the database is down, in which case the
 	// question fails and runs again later; any other error is logged and the question is answered
 	// without the conversation.
@@ -61,6 +62,7 @@ type Options struct {
 type Chat struct{ o Options }
 
 const (
+	maxRecalled     = 3
 	maxAnswerTokens = 3072
 	cutShort        = "\n\n(Cut short here. Ask for less, or for the rest.)"
 )
@@ -92,16 +94,24 @@ func (c *Chat) Reply(ctx context.Context, q Question) (Answer, error) {
 	if o.LLM.Locality() == llm.Cloud {
 		privacy = o.NewMaskSession()
 	}
+	input := func(history, recalled []memory.Exchange) memory.Input {
+		in := memory.Input{
+			System:      SystemPrompt(now, o.Zone, o.LLM.Locality()),
+			History:     history,
+			Recalled:    recalled,
+			MaxRecalled: maxRecalled,
+			Question:    q.Text,
+			Budget:      o.LLM.ContextTokens(),
+			Count:       o.LLM.CountTokens,
+			Now:         now,
+		}
+		if len(recalled) > 0 {
+			in.RecallReserve = in.Budget / 4
+		}
+		return in
+	}
 	ask := func(history, recalled []memory.Exchange, effort llm.Effort) (llm.Completion, error) {
-		built := memory.Build(memory.Input{
-			System:   SystemPrompt(now, o.Zone, o.LLM.Locality()),
-			History:  history,
-			Recalled: recalled,
-			Question: q.Text,
-			Budget:   o.LLM.ContextTokens(),
-			Count:    o.LLM.CountTokens,
-			Now:      now,
-		})
+		built := memory.Build(input(history, recalled))
 		started := time.Now()
 		completion, err := o.LLM.Complete(ctx, llm.Request{
 			Tier: llm.Heavy, Effort: effort, MaxTokens: maxAnswerTokens, Messages: built.Messages,
@@ -123,24 +133,34 @@ func (c *Chat) Reply(ctx context.Context, q Question) (Answer, error) {
 		return completion, nil
 	}
 
+	mask := func(exchanges []memory.Exchange) []memory.Exchange {
+		if privacy == nil {
+			return exchanges
+		}
+		masked := make([]memory.Exchange, len(exchanges))
+		for i, e := range exchanges {
+			e.Answer = privacy.Mask(e.Answer, e.Question)
+			masked[i] = e
+		}
+		return masked
+	}
 	history, err := c.read(ctx, q, o.History, "could not read the conversation; answering without it")
 	if err != nil {
 		return Answer{}, err
 	}
-	recalled, err := c.read(ctx, q, o.Recall, "could not recall older exchanges; answering without them")
-	if err != nil {
-		return Answer{}, err
-	}
-	if privacy != nil {
-		mask := func(exchanges []memory.Exchange) []memory.Exchange {
-			masked := make([]memory.Exchange, len(exchanges))
-			for i, e := range exchanges {
-				e.Answer = privacy.Mask(e.Answer, e.Question)
-				masked[i] = e
-			}
-			return masked
+	history = mask(history)
+	var recalled []memory.Exchange
+	if o.Recall != nil {
+		// What the recent conversation will carry decides what recall looks beyond, so a recent
+		// talk on the same topic neither crowds out an older one nor comes back twice.
+		recent := memory.Build(input(history, nil))
+		recalled, err = c.read(ctx, q, func(ctx context.Context, q Question) ([]memory.Exchange, error) {
+			return o.Recall(ctx, q, recent.Kept, recent.Oldest)
+		}, "could not recall older exchanges; answering without them")
+		if err != nil {
+			return Answer{}, err
 		}
-		history, recalled = mask(history), mask(recalled)
+		recalled = mask(recalled)
 	}
 	sent, sentRecalled := history, recalled
 	completion, err := ask(sent, sentRecalled, llm.Medium)
