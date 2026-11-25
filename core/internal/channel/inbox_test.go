@@ -464,6 +464,34 @@ func TestStopsAtOnceAndAnOrderlyStopNeverCountsAgainstTheCommand(t *testing.T) {
 	}
 }
 
+func TestTakesTheLockSoonAfterAnotherWorkerLetsItGo(t *testing.T) {
+	r := newInboxRig(t)
+	r.record(r.message(fixture{body: str("waiting for the lock")}), slash)
+	other, err := r.admin.Hijack(bg)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer other.Close(bg)
+	if _, err := other.Exec(bg, "SELECT pg_advisory_lock($1)", inboxLock); err != nil {
+		t.Fatal(err)
+	}
+	entered := make(chan struct{})
+	var once sync.Once
+	r.start(func(context.Context, IncomingMessage) (Handled, error) {
+		once.Do(func() { close(entered) })
+		return Handled{}, nil
+	}, nil, nil)
+	time.Sleep(100 * time.Millisecond)
+	if _, err := other.Exec(bg, "SELECT pg_advisory_unlock($1)", inboxLock); err != nil {
+		t.Fatal(err)
+	}
+	select {
+	case <-entered:
+	case <-time.After(5 * time.Second):
+		t.Fatal("the command waited for the next poll after the lock was let go")
+	}
+}
+
 func TestGivesUpOnACommandStartedTooManyTimes(t *testing.T) {
 	r := newInboxRig(t)
 	r.record(r.message(fixture{body: str("crashes core every time")}), slash)

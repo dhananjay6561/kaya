@@ -197,6 +197,13 @@ func (in *Inbox) run(ctx context.Context, deliver Deliver, ready func() bool) {
 	nextPurge := time.Time{}
 	for ctx.Err() == nil {
 		worked, err := in.step(ctx, lock, deliver, ready)
+		if errors.Is(err, errLockBusy) {
+			// Another worker holds the lock, or the last one's connection is still closing: try
+			// again soon rather than after a whole poll.
+			in.sleep(ctx, delay)
+			delay = min(delay*2, in.o.RetryMax)
+			continue
+		}
 		if err != nil {
 			if ctx.Err() != nil {
 				return
@@ -271,8 +278,13 @@ func (lock *lockHolder) alive(ctx context.Context) bool {
 	return lock.conn.Ping(ping) == nil
 }
 
+// release unlocks before closing, so the next worker can take the lock at once instead of waiting
+// for Postgres to notice the connection is gone.
 func (lock *lockHolder) release() {
 	if lock.conn != nil {
+		unlock, cancel := context.WithTimeout(context.Background(), time.Second)
+		_, _ = lock.conn.Exec(unlock, "SELECT pg_advisory_unlock($1)", inboxLock)
+		cancel()
 		_ = lock.conn.Close(context.Background())
 		lock.conn = nil
 	}
@@ -288,6 +300,9 @@ type commandRow struct {
 	urgent    bool
 }
 
+// errLockBusy means another worker holds the lock.
+var errLockBusy = errors.New("another worker holds the command lock")
+
 // errLockLost ends a delivery whose worker lock went away mid-way, since another worker may now
 // take the same command.
 var errLockLost = errors.New("the command worker lock was lost")
@@ -301,8 +316,11 @@ func (in *Inbox) step(ctx context.Context, lock *lockHolder, deliver Deliver, re
 		return false, nil
 	}
 	held, err := lock.holds(ctx, in.o.DB)
-	if err != nil || !held {
+	if err != nil {
 		return false, err
+	}
+	if !held {
+		return false, errLockBusy
 	}
 	db, cancel := context.WithTimeout(context.WithoutCancel(ctx), dbWork)
 	defer cancel()
