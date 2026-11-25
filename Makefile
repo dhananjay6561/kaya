@@ -141,7 +141,7 @@ media: ## download the file of one message: make media id=<messages.id> (the gat
 send: export KAYA_TEXT := $(text)
 send: ## send a message to your own chat through Kaya: make send text="hello" (the stack must be running and paired)
 	@test -n "$(text)" || { echo 'usage: make send text="hello"'; exit 1; }
-	$(COMPOSE) exec -T -e KAYA_TEXT core /nodejs/bin/node dist/send.js
+	$(COMPOSE) exec -T -e KAYA_TEXT core /core send
 
 migrate: ## apply pending migrations
 	$(COMPOSE) run --rm migrate

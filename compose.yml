@@ -104,7 +104,7 @@ services:
     <<: *service
     build:
       context: .
-      dockerfile: core/Dockerfile
+      dockerfile: core-go/Dockerfile
       args:
         VERSION: ${VERSION:-dev}
     environment:
@@ -124,7 +124,7 @@ services:
     volumes:
       - ${DATA_DIR:-./data}/core:/data
     healthcheck:
-      test: ["CMD", "/nodejs/bin/node", "dist/healthcheck.js"]
+      test: ["CMD", "/core", "healthcheck"]
       interval: 10s
       timeout: 5s
       retries: 3
