@@ -194,6 +194,21 @@ describe("groq", () => {
     assert.ok(calls <= 2);
   });
 
+  it("calls an attempt with no time left a timeout", async () => {
+    const fake: typeof fetch = (_input, init) =>
+      new Promise((_, reject) => {
+        init?.signal?.addEventListener("abort", () => reject(init.signal?.reason));
+      });
+    const llm = createGroqLlm(
+      { apiKey: "k", heavyModel: "h", routineModel: "r", contextTokens: 4_000 },
+      { fetch: fake, deadlineMs: -5 },
+    );
+    await assert.rejects(
+      llm.complete(ask),
+      (err: unknown) => err instanceof LlmError && err.code === "timeout",
+    );
+  });
+
   it("stops waiting between tries when the caller gives up", async () => {
     const controller = new AbortController();
     const { llm, calls } = groq([() => failure(503), () => ok("never")], { retryBaseMs: 5_000 });

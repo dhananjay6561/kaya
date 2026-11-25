@@ -96,7 +96,7 @@ export function createGroqLlm(config: GroqConfig, options: GroqOptions = {}): Ll
     signal: AbortSignal | undefined,
     budgetMs: number,
   ): Promise<Completion> {
-    const timeout = AbortSignal.timeout(Math.min(timeoutMs, budgetMs));
+    const timeout = AbortSignal.timeout(Math.max(0, Math.min(timeoutMs, budgetMs)));
     const stopped = (): unknown => {
       if (signal?.aborted) return signal.reason;
       if (timeout.aborted) return new LlmError("groq", "timeout");
