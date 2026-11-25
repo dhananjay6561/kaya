@@ -104,7 +104,7 @@ services:
     <<: *service
     build:
       context: .
-      dockerfile: core-go/Dockerfile
+      dockerfile: core/Dockerfile
       args:
         VERSION: ${VERSION:-dev}
     environment:
