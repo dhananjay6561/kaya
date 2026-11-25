@@ -560,3 +560,19 @@ func sameJSON(t *testing.T, a, b []byte) bool {
 	}
 	return reflect.DeepEqual(x, y)
 }
+
+func TestGroqAsksForJSONThatFollowsTheSchema(t *testing.T) {
+	g := newFake(t).llm(GroqOptions{})
+	body, err := g.body(Request{
+		Tier: Routine, Messages: []Message{{Role: User, Content: "x"}},
+		Schema: &Schema{Name: "plan", Schema: json.RawMessage(`{"type":"object"}`)},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	want := `{"model":"openai/gpt-oss-20b","messages":[{"role":"user","content":"x"}],"max_completion_tokens":1024,"reasoning_effort":"low","include_reasoning":false,
+		"response_format":{"type":"json_schema","json_schema":{"name":"plan","strict":true,"schema":{"type":"object"}}}}`
+	if !sameJSON(t, body, []byte(want)) {
+		t.Fatalf("body = %s", body)
+	}
+}
