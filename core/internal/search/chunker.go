@@ -68,10 +68,6 @@ var (
 	justCode  = regexp.MustCompile(`^\d(?:[ -]?\d){3,7}$`)
 )
 
-// MentionsACode says whether text talks about a code, PIN or OTP, which makes a bare number in or
-// near it one to mask.
-func MentionsACode(text string) bool { return codeWords.MatchString(strings.ToLower(text)) }
-
 // Render writes a chunk as its chat's name, then each day and "time sender: text" lines in zone.
 //
 // With a masker, the messages are masked together, one to a line, so a word in one message counts
@@ -94,7 +90,7 @@ func Render(title string, lines []Line, zone *time.Location, s Shape, m Masker, 
 		mask = func(text string) string { return m.Mask(text, "") }
 		joined := strings.Join(texts, "\n")
 		hint := ""
-		if codeShaped || MentionsACode(before+"\n"+joined) {
+		if codeShaped || codeWords.MatchString(strings.ToLower(before+"\n"+joined)) {
 			hint = "otp"
 		}
 		if masked := strings.Split(m.Mask(joined, hint), "\n"); len(masked) == len(texts) {

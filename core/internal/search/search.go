@@ -156,10 +156,13 @@ func NewSearcher(db *store.DB, embedder embeddings.Provider) *Searcher {
 	}
 }
 
-// queryTTL is how long a query's vector, or its failure, is kept: a question's recall and excerpts
-// search with the same words, so it is embedded once, and a service that just failed is not asked
-// again within the same reply.
-const queryTTL = time.Minute
+// queryTTL is how long a query's vector is kept, and failedTTL its failure: a question's recall
+// and excerpts search with the same words, so it is embedded once, and a service that just failed
+// is not asked again within the same reply, though it is when the question is asked again.
+const (
+	queryTTL  = time.Minute
+	failedTTL = 10 * time.Second
+)
 
 type embedded struct {
 	vector []float32
@@ -169,7 +172,7 @@ type embedded struct {
 
 func (s *Searcher) embed(ctx context.Context, query string) ([]float32, error) {
 	s.mu.Lock()
-	if e, ok := s.queries[query]; ok && time.Since(e.at) < queryTTL {
+	if e, ok := s.queries[query]; ok && (e.err == nil && time.Since(e.at) < queryTTL || time.Since(e.at) < failedTTL) {
 		s.mu.Unlock()
 		return e.vector, e.err
 	}

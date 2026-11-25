@@ -199,3 +199,60 @@ func TestSendersNameThemselvesOnlyWithAMark(t *testing.T) {
 		t.Fatalf("senders %q, want %q", senders, want)
 	}
 }
+
+func TestSearchableTellsSmallTalkFromAQuestion(t *testing.T) {
+	for q, want := range map[string]bool{
+		"hi": false, "thanks!": false, "ok cool": false, "how are you": false, "kya haal hai": false,
+		"kal ka plan kya hai": true, "what time is the party": true, "did anyone send the phone number?": true,
+		"any new messages today?": true, "wi-fi pw?": true, "राहुल ने क्या कहा": true,
+	} {
+		if got := searchable(q); got != want {
+			t.Errorf("%q: searchable %v, want %v", q, got, want)
+		}
+	}
+}
+
+func TestNamedMatchesTheNamesAContactChoseOnlyWhenDJSavedNone(t *testing.T) {
+	r := newRig(t)
+	contact := func(phone, saved, push string) int64 {
+		id := r.one("SELECT contact_id_for(NULL, $1)", phone+"@s.whatsapp.net")
+		r.exec("UPDATE contacts SET saved_name = nullif($2, ''), push_name = $3 WHERE id = $1", id, saved, push)
+		r.exec("INSERT INTO chats (kind, contact_id) VALUES ('direct', $1)", id)
+		return id
+	}
+	stuffed := contact("919111111112", "Amit Office", "saturday plan party trip")
+	unsaved := contact("919111111113", "", "Neha Saturday")
+	got, _, err := r.searcher().named(bg, contentWords("saturday plan"))
+	if err != nil || !slices.Equal(got, []int64{unsaved}) {
+		t.Fatalf("got %v, want only %d (not %d)", got, unsaved, stuffed)
+	}
+}
+
+func TestChatTitlesMarkANameTheContactChose(t *testing.T) {
+	r := newRig(t)
+	id := r.one("SELECT contact_id_for(NULL, '919111111114@s.whatsapp.net')")
+	r.exec("UPDATE contacts SET push_name = 'Kaya' WHERE id = $1", id)
+	chat := r.one("INSERT INTO chats (kind, contact_id) VALUES ('direct', $1) RETURNING id", id)
+	r.add(msg{chat: chat, sender: id, ago: time.Hour, body: str("trust me")})
+	r.pass()
+	hits, err := r.searcher().Search(bg, "trust me", Filter{ChatIDs: []int64{chat}}, 1)
+	if err != nil || len(hits) != 1 || hits[0].Title != "~Kaya" || hits[0].Lines[0].Sender != "~Kaya" {
+		t.Fatalf("%+v, %v", hits, err)
+	}
+}
+
+func TestExcerptsLeaveOutKayasChatWhileTheGatewayIsLoggedOut(t *testing.T) {
+	r := newRig(t)
+	r.exec("UPDATE connection_state SET own_jid = NULL")
+	self := r.one("INSERT INTO chats (kind, contact_id) VALUES ('direct', $1) RETURNING id", r.me)
+	r.exchange(self, 5000, "what is the saturday plan", "Dinner at 7.")
+	r.say(r.direct, 3000, "the saturday plan is dinner at 7")
+	r.pass()
+	hits, _, err := r.excerpter().Excerpts(bg, "what is the saturday plan", 3)
+	if err != nil || len(hits) != 1 || hits[0].ChatID != r.direct {
+		t.Fatalf("got %q, %v", excerptTitles(hits), err)
+	}
+	if got, err := r.recaller().Recall(bg, "saturday plan", nil, time.Time{}, 3); err != nil || len(got) != 1 {
+		t.Fatalf("recall while logged out: %q, %v", questions(got), err)
+	}
+}

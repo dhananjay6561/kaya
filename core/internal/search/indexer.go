@@ -230,8 +230,8 @@ SELECT m.id, m.chat_id, m.sent_at, m.updated_at,
             ELSE (SELECT CASE WHEN lower(n) IN ('me', 'kaya') THEN '~' || n ELSE n END FROM (
                     SELECT coalesce(nullif(c.saved_name, ''), nullif(c.first_name, ''), '~' || nullif(c.push_name, ''),
                                     '~' || nullif(c.business_name, ''), '+' || nullif(split_part(c.pn, '@', 1), ''), 'Someone') AS n) named) END,
-       coalesce(nullif(ch.name, ''), nullif(cc.saved_name, ''), nullif(cc.first_name, ''), nullif(cc.push_name, ''),
-                nullif(cc.business_name, ''), '+' || nullif(split_part(cc.pn, '@', 1), ''), 'a chat')
+       coalesce(nullif(ch.name, ''), nullif(cc.saved_name, ''), nullif(cc.first_name, ''), '~' || nullif(cc.push_name, ''),
+                '~' || nullif(cc.business_name, ''), '+' || nullif(split_part(cc.pn, '@', 1), ''), 'a chat')
 FROM messages m
 JOIN chats ch ON ch.id = m.chat_id
 LEFT JOIN contacts c ON c.id = m.sender_id
