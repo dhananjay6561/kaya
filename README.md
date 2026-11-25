@@ -14,8 +14,8 @@ when a task needs one.
 > **Status: early development.** The WhatsApp side (pairing, message and history storage, media,
 > sending) and the command channel are built and checked on a real phone. In your own chat Kaya
 > already answers through Groq, remembers your conversation with it, and masks private details
-> before anything reaches the cloud. Your chats are being turned into a search index. Answers from
-> your other chats, tools and acting for you are on the roadmap. See [Project status and roadmap](#project-status-and-roadmap).
+> before anything reaches the cloud. It searches your chats by meaning and answers questions about
+> them with sources. Tools and acting for you are on the roadmap. See [Project status and roadmap](#project-status-and-roadmap).
 
 ## Contents
 
@@ -97,6 +97,11 @@ contact, and it works with everything your WhatsApp account can see.
   match as typed), fused into one ranking, with filters by chat, contact and date. Each question you
   ask Kaya also brings back up to three older exchanges with it that bear on the question, beyond
   the recent conversation. Try it from a terminal: `docker compose exec core /core search "money"`.
+- **Answers from your chats.** Ask "what did Rahul say about Saturday?" and Kaya searches your other
+  chats, narrowing to the people or groups your question names, and gives the model up to three
+  excerpts with who said what, in which chat and when, so the answer can say where it came from.
+  The excerpts are masked, marked as data the model must never obey, and escaped so no message can
+  break out of them. Kaya never sees a whole chat, only the excerpts it found.
 - **Least-privilege database logins.** The gateway and core each have their own Postgres role.
   Core, the part that will talk to an LLM, can read chats but cannot see the WhatsApp session, its
   encryption keys, or the keys needed to fetch media.
@@ -150,8 +155,10 @@ Most of the enforcement arrives with the agent stages. Some of it is already in 
   and expires within 24 hours. The gateway is the last gate before the WhatsApp socket.
 - Events between services carry row ids, never message text, so queues and logs never hold chat
   content.
-- Masking runs on everything sent to Groq that you did not type yourself, today Kaya's own past
-  answers, and on every chunk of chat text sent to Voyage to be embedded. Contact and group names
+- Masking runs on everything sent to Groq that you did not type yourself (Kaya's own past answers
+  and the chat excerpts it finds for a question) and on every chunk of chat text sent to Voyage to
+  be embedded. Excerpts reach the model marked as data, never instructions, and escaped so a planted
+  message cannot close its block. Contact and group names
   go as they are. Only placeholders and per-kind counts ever appear in logs.
 - The gateway container gets only the settings it needs and never sees API keys. WhatsApp addresses
   and raw protocol messages are masked in its logs.
