@@ -128,9 +128,11 @@ func TestSplitsIntoPiecesThatCoverTheText(t *testing.T) {
 	}
 }
 
+var raceDetector bool
+
 func TestStaysFastOnLongText(t *testing.T) {
-	if testing.Short() {
-		t.Skip("timing")
+	if testing.Short() || raceDetector {
+		t.Skip("timing means nothing in short mode or under the race detector")
 	}
 	Load()
 	const size = 64 << 10
@@ -146,7 +148,9 @@ func TestStaysFastOnLongText(t *testing.T) {
 	} {
 		started := time.Now()
 		Count(text)
-		if took := time.Since(started); took > 200*time.Millisecond {
+		took := time.Since(started)
+		t.Logf("%s: %v", name, took)
+		if took > 200*time.Millisecond {
 			t.Errorf("%s: %v", name, took)
 		}
 	}

@@ -5,3 +5,4 @@
 core-go/bin
 **/*.env
 **/.env
+core-go/**/testdata
