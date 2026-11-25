@@ -44,7 +44,7 @@ func TestExcerptsSearchTheChatsAQuestionNamesFirst(t *testing.T) {
 	s := r.excerpter()
 	only := func(q string, want string) {
 		t.Helper()
-		hits, _, err := s.Excerpts(bg, q, 3)
+		hits, _, err := s.Excerpts(bg, q, "", 3)
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -61,7 +61,7 @@ func TestExcerptsSearchTheChatsAQuestionNamesFirst(t *testing.T) {
 	only("what did Rahul say about the saturday plan", "Rahul: saturday plan is dinner at 7")
 	only("saturday plan from priya", "College Gang: saturday plan is a movie")
 	only("college gang saturday plan", "College Gang: saturday plan is a movie")
-	hits, _, err := s.Excerpts(bg, "saturday plan", 3)
+	hits, _, err := s.Excerpts(bg, "saturday plan", "", 3)
 	if err != nil || len(hits) != 2 {
 		t.Fatalf("an unnamed question should search every chat but Kaya's: %q, %v", excerptTitles(hits), err)
 	}
@@ -73,7 +73,7 @@ func TestExcerptsFallBackToEveryChatWhenTheNamedOnesHaveNothing(t *testing.T) {
 	r.say(r.direct, 3000, "unrelated cricket score")
 	r.say(other, 3000, "the passport office visit is on monday")
 	r.pass()
-	hits, _, err := r.searcher().Excerpts(bg, "Rahul passport office visit monday", 3)
+	hits, _, err := r.searcher().Excerpts(bg, "Rahul passport office visit monday", "", 3)
 	if err != nil || len(hits) == 0 || hits[0].Title != "Trip" {
 		t.Fatalf("got %q, %v", excerptTitles(hits), err)
 	}
@@ -83,7 +83,7 @@ func TestExcerptsHoldChunksToTheMeaningBar(t *testing.T) {
 	r := newRig(t)
 	r.say(r.direct, 3000, "ok see you")
 	r.pass()
-	if hits, _, err := r.searcher().Excerpts(bg, "what is the capital of peru", 3); err != nil || len(hits) != 0 {
+	if hits, _, err := r.searcher().Excerpts(bg, "what is the capital of peru", "", 3); err != nil || len(hits) != 0 {
 		t.Fatalf("an unrelated chunk was shown: %q, %v", excerptTitles(hits), err)
 	}
 }
@@ -96,7 +96,7 @@ func TestExcerptsLeaveOutKayasOwnChatHoweverMuchOfItMatches(t *testing.T) {
 	}
 	r.say(r.direct, 3000, "the saturday plan is dinner at 7")
 	r.pass()
-	hits, searched, err := r.excerpter().Excerpts(bg, "what is the saturday plan", 3)
+	hits, searched, err := r.excerpter().Excerpts(bg, "what is the saturday plan", "", 3)
 	if err != nil || !searched || len(hits) != 1 || hits[0].ChatID != r.direct {
 		t.Fatalf("got %q, %v, %v", excerptTitles(hits), searched, err)
 	}
@@ -108,7 +108,7 @@ func TestExcerptsLeaveOutNotesToSelfBeforeAnyExchange(t *testing.T) {
 	r.add(msg{chat: self, fromMe: true, ago: 3000 * time.Minute, body: str("saturday plan note to self")})
 	r.say(r.direct, 3000, "saturday plan is dinner")
 	r.pass()
-	hits, _, err := r.excerpter().Excerpts(bg, "saturday plan", 3)
+	hits, _, err := r.excerpter().Excerpts(bg, "saturday plan", "", 3)
 	if err != nil || len(hits) != 1 || hits[0].ChatID != r.direct {
 		t.Fatalf("got %q, %v", excerptTitles(hits), err)
 	}
@@ -118,7 +118,7 @@ func TestExcerptsDoNotSearchAQuestionWithNothingInIt(t *testing.T) {
 	r := newRig(t)
 	r.say(r.direct, 3000, "hi thanks")
 	r.pass()
-	if hits, searched, err := r.excerpter().Excerpts(bg, "hi, thanks!", 3); err != nil || searched || hits != nil {
+	if hits, searched, err := r.excerpter().Excerpts(bg, "hi, thanks!", "", 3); err != nil || searched || hits != nil {
 		t.Fatalf("got %q, %v, %v", excerptTitles(hits), searched, err)
 	}
 }
@@ -155,7 +155,7 @@ func TestExcerptsLetABetterAnswerBeatAChanceNameMatch(t *testing.T) {
 	r.say(football, 3000, "football practice saturday morning bring boots")
 	r.say(r.direct, 3000, "the party on saturday is at 9 pm")
 	r.pass()
-	hits, _, err := r.excerpter().Excerpts(bg, "what time is the party on saturday", 3)
+	hits, _, err := r.excerpter().Excerpts(bg, "what time is the party on saturday", "", 3)
 	if err != nil || len(hits) == 0 || hits[0].ChatID != r.direct {
 		t.Fatalf("got %q, %v", excerptTitles(hits), err)
 	}
@@ -166,7 +166,7 @@ func TestExcerptsCarryTheMessagesBeforeThem(t *testing.T) {
 	r.say(r.direct, 300, "bhai login code bhej do")
 	r.say(r.direct, 200, "482913 hai jaldi daal")
 	r.pass()
-	hits, _, err := r.excerpter().Excerpts(bg, "482913 jaldi daal", 1)
+	hits, _, err := r.excerpter().Excerpts(bg, "482913 jaldi daal", "", 1)
 	if err != nil || len(hits) != 1 || hits[0].Lines[0].Text != "482913 hai jaldi daal" || hits[0].Before != "bhai login code bhej do" {
 		t.Fatalf("got %+v, %v", hits, err)
 	}
@@ -248,11 +248,51 @@ func TestExcerptsLeaveOutKayasChatWhileTheGatewayIsLoggedOut(t *testing.T) {
 	r.exchange(self, 5000, "what is the saturday plan", "Dinner at 7.")
 	r.say(r.direct, 3000, "the saturday plan is dinner at 7")
 	r.pass()
-	hits, _, err := r.excerpter().Excerpts(bg, "what is the saturday plan", 3)
+	hits, _, err := r.excerpter().Excerpts(bg, "what is the saturday plan", "", 3)
 	if err != nil || len(hits) != 1 || hits[0].ChatID != r.direct {
 		t.Fatalf("got %q, %v", excerptTitles(hits), err)
 	}
 	if got, err := r.recaller().Recall(bg, "saturday plan", nil, time.Time{}, 3); err != nil || len(got) != 1 {
 		t.Fatalf("recall while logged out: %q, %v", questions(got), err)
+	}
+}
+
+func TestExcerptsTakeTheNamesOfAFollowUpFromTheQuestionBefore(t *testing.T) {
+	r := newRig(t)
+	teja := r.one("SELECT contact_id_for(NULL, '919111111115@s.whatsapp.net')")
+	r.exec("UPDATE contacts SET saved_name = 'Tejashree' WHERE id = $1", teja)
+	chat := r.one("INSERT INTO chats (kind, contact_id) VALUES ('direct', $1) RETURNING id", teja)
+	r.add(msg{chat: chat, sender: teja, ago: 3000 * time.Minute, body: str("did you submit the assignment")})
+	r.say(r.direct, 3000, "did you submit the form")
+	r.pass()
+	s := r.excerpter()
+	s.ExcerptDistance = 0
+	hits, _, err := s.Excerpts(bg, "did you submit", "tejashree ne kya pucha", 3)
+	if err != nil || len(hits) != 1 || hits[0].ChatID != chat {
+		t.Fatalf("got %q, %v", excerptTitles(hits), err)
+	}
+	hits, _, err = s.Excerpts(bg, "rahul did you submit", "tejashree ne kya pucha", 3)
+	if err != nil || len(hits) != 1 || hits[0].ChatID != r.direct {
+		t.Fatalf("a question that names someone took the names before it: %q, %v", excerptTitles(hits), err)
+	}
+}
+
+func TestExcerptsAboutRecentMessagesPutTheNewestFirst(t *testing.T) {
+	r := newRig(t)
+	teja := r.one("SELECT contact_id_for(NULL, '919111111116@s.whatsapp.net')")
+	r.exec("UPDATE contacts SET saved_name = 'Tejashree' WHERE id = $1", teja)
+	chat := r.one("INSERT INTO chats (kind, contact_id) VALUES ('direct', $1) RETURNING id", teja)
+	r.add(msg{chat: chat, sender: teja, ago: 9000 * time.Minute, body: str("tejashree asked what happened are you fine")})
+	r.add(msg{chat: chat, sender: teja, ago: 3000 * time.Minute, body: str("can you send the notes")})
+	r.add(msg{chat: chat, sender: teja, ago: 600 * time.Minute, body: str("coming to college tomorrow?")})
+	r.pass()
+	s := r.excerpter()
+	hits, _, err := s.Excerpts(bg, "recentlykya pucha", "tejashree ne kya pucha", 3)
+	if err != nil || len(hits) < 2 || hits[0].Lines[0].Text != "coming to college tomorrow?" || hits[1].Lines[0].Text != "can you send the notes" {
+		t.Fatalf("got %q, %v", excerptTitles(hits), err)
+	}
+	hits, _, err = s.Excerpts(bg, "what did tejashree ask", "", 3)
+	if err != nil || len(hits) == 0 || hits[0].Lines[0].Text != "tejashree asked what happened are you fine" {
+		t.Fatalf("a question not about recent messages: %q, %v", excerptTitles(hits), err)
 	}
 }

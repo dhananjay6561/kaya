@@ -52,9 +52,10 @@ type Options struct {
 	// nil means none. A failure is handled like History's.
 	Recall func(ctx context.Context, q Question, exclude []int64, before time.Time) ([]memory.Exchange, error)
 	// Excerpts finds passages of DJ's other chats that may answer a question, best first, and says
-	// whether it searched; nil means none. A failure is handled like History's, and the model is
-	// told the search failed.
-	Excerpts func(ctx context.Context, q Question) ([]search.Excerpt, bool, error)
+	// whether it searched; earlier is his previous question when he asked it moments ago, so a
+	// follow-up can be searched with it. nil means none. A failure is handled like History's, and
+	// the model is told the search failed.
+	Excerpts func(ctx context.Context, q Question, earlier string) ([]search.Excerpt, bool, error)
 	// DatabaseAway says whether a History error means the database is down, in which case the
 	// question fails and runs again later; any other error is logged and the question is answered
 	// without the conversation.
@@ -70,6 +71,7 @@ type Chat struct{ o Options }
 
 const (
 	maxRecalled     = 3
+	followUp        = 30 * time.Minute
 	maxAnswerTokens = 3072
 	cutShort        = "\n\n(Cut short here. Ask for less, or for the rest.)"
 )
@@ -166,7 +168,11 @@ func (c *Chat) Reply(ctx context.Context, q Question) (Answer, error) {
 		return Answer{}, err
 	}
 	history = mask(history)
-	if excerpts, chatSearch, err = c.excerpts(ctx, q, privacy); err != nil {
+	earlier := ""
+	if n := len(history); n > 0 && now.Sub(history[n-1].At) <= followUp {
+		earlier = history[n-1].Question
+	}
+	if excerpts, chatSearch, err = c.excerpts(ctx, q, earlier, privacy); err != nil {
 		return Answer{}, err
 	}
 	var recalled []memory.Exchange
@@ -232,11 +238,11 @@ func (c *Chat) Reply(ctx context.Context, q Question) (Answer, error) {
 // excerpts renders the passages Excerpts finds, masked for a cloud model with the question's mask
 // session, so placeholders match the rest of the request and are put back in the answer, and says
 // what the search did.
-func (c *Chat) excerpts(ctx context.Context, q Question, privacy MaskSession) ([]string, memory.ChatSearch, error) {
+func (c *Chat) excerpts(ctx context.Context, q Question, earlier string, privacy MaskSession) ([]string, memory.ChatSearch, error) {
 	if c.o.Excerpts == nil {
 		return nil, memory.NotSearched, nil
 	}
-	found, searched, err := c.o.Excerpts(ctx, q)
+	found, searched, err := c.o.Excerpts(ctx, q, earlier)
 	switch {
 	case err == nil:
 	case ctx.Err() != nil:

@@ -235,7 +235,10 @@ Folders appear when a phase needs them; empty placeholders are not committed.
   names they chose) with Postgres full text search (GIN indexes on both), keeping the 20
   best-ranked of each. Chunks of those people or groups are
   searched within cosine distance 0.7 with a 0.1 head start, alongside all chats within 0.6, and the
-  results merged. The query is embedded once and shared with recall. Each excerpt is rendered like
+  results merged. A question naming nobody within 30 minutes of the previous one is a follow-up:
+  the previous question's names are used and both are searched together. A question about recent
+  messages that names someone gets their two newest chunks first. The query is embedded once and
+  shared with recall. Each excerpt is rendered like
   a chunk, with self-chosen sender and chat names marked `~`, and masked with the question's mask session for
   a cloud model, using the messages just before it as context. The excerpts go in a user message of
   their own just before the question, inside tags named afresh for each request, with angle

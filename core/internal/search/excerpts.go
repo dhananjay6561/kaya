@@ -3,6 +3,7 @@ package search
 import (
 	"context"
 	"errors"
+	"regexp"
 	"slices"
 	"strings"
 	"unicode"
@@ -39,7 +40,7 @@ func init() {
 		bole kahi baat bata batao bataya bataye bolo raha rahi rahe wala wali wale aur bhi abhi kal aaj parso mera meri
 		mere tera teri tere uska uski uske unka unki unke apna apni apne yeh woh voh wo ye isko usko inko unko mujhe tujhe
 		hum tum aap ka ki ke ko se me mein par pe tak liye bhai bhaiya yaar yar kuch nahi nhi haan han acha accha achha
-		thik theek sab log logo koi kisi sir madam bro dude ji jee bhej bhejo bheja bheji diya diye kiya kiye kar karo
+		thik theek recent recently latest lately newest sab log logo koi kisi sir madam bro dude ji jee bhej bhejo bheja bheji diya diye kiya kiye kar karo
 		krna karna hua hui hue gaya gayi gaye dekh dekho suno sun क्या कहा कहाँ कहां कब कौन किसने किसको क्यों कैसे
 		कितना है हैं था थी थे और भी बोला बोली बोले बताया बताओ बताना मेरा मेरी तेरा उसका उसकी आज कल`) {
 		commonWords[w] = true
@@ -155,12 +156,23 @@ type Excerpt struct {
 	Before string
 }
 
+// recently matches a question about the newest messages ("what did she ask recently", "latest",
+// "abhi kya bola"), also run into the next word as typed in a hurry ("recentlykya").
+var recently = regexp.MustCompile(`recent|latest|lately|newest|\blast\b|\babhi\b|haal hi`)
+
+// newest is how many of the latest chunks of the people or groups a question names come first when
+// it asks about recent messages.
+const newest = 2
+
 // Excerpts finds up to limit chunks of DJ's other chats (never his own chat with Kaya, which
 // Recall covers) that bear on question, best first, and says whether it searched: a question with
-// no words of substance ("hi", "thanks") is not searched. Chunks of the people or groups the question names are searched alongside
-// every chat, with a looser bar and a head start, so a name that matches by chance cannot hide a
-// better answer elsewhere.
-func (s *Searcher) Excerpts(ctx context.Context, question string, limit int) ([]Excerpt, bool, error) {
+// no words of substance ("hi", "thanks") is not searched. Chunks of the people or groups the
+// question names are searched alongside every chat, with a looser bar and a head start, so a name
+// that matches by chance cannot hide a better answer elsewhere; when it asks about recent
+// messages, their newest chunks come first. earlier is DJ's previous question when he asked it
+// moments ago: a question that names nobody may be a follow-up ("and recently?"), so the names in
+// earlier are used and both are searched together.
+func (s *Searcher) Excerpts(ctx context.Context, question, earlier string, limit int) ([]Excerpt, bool, error) {
 	if limit <= 0 || !searchable(question) {
 		return nil, false, nil
 	}
@@ -177,6 +189,15 @@ func (s *Searcher) Excerpts(ctx context.Context, question string, limit int) ([]
 	if err != nil {
 		return nil, true, err
 	}
+	query := question
+	if len(contacts)+len(chats) == 0 && strings.TrimSpace(earlier) != "" {
+		if contacts, chats, err = s.named(ctx, contentWords(earlier)); err != nil {
+			return nil, true, err
+		}
+		if len(contacts)+len(chats) > 0 {
+			query = earlier + "\n" + question
+		}
+	}
 	type found struct {
 		hit   Hit
 		score float64
@@ -184,7 +205,7 @@ func (s *Searcher) Excerpts(ctx context.Context, question string, limit int) ([]
 	best := map[int64]found{}
 	consider := func(f Filter, bar, bonus float64) error {
 		f.ExcludeChatIDs = exclude
-		hits, err := s.Search(ctx, question, f, limit+5)
+		hits, err := s.Search(ctx, query, f, limit+5)
 		if err != nil {
 			return err
 		}
@@ -210,6 +231,26 @@ func (s *Searcher) Excerpts(ctx context.Context, question string, limit int) ([]
 	}
 	if err := consider(Filter{}, s.ExcerptDistance, 0); err != nil {
 		return nil, true, err
+	}
+	if recently.MatchString(strings.ToLower(question)) && len(contacts)+len(chats) > 0 {
+		var latest []Hit
+		for _, f := range []Filter{{ContactIDs: contacts}, {ChatIDs: chats}} {
+			if len(f.ContactIDs)+len(f.ChatIDs) == 0 {
+				continue
+			}
+			f.ExcludeChatIDs = exclude
+			hits, err := s.Latest(ctx, f, newest)
+			if err != nil {
+				return nil, true, err
+			}
+			latest = append(latest, hits...)
+		}
+		slices.SortStableFunc(latest, func(a, b Hit) int {
+			return b.Lines[len(b.Lines)-1].SentAt.Compare(a.Lines[len(a.Lines)-1].SentAt)
+		})
+		for i, h := range latest[:min(newest, len(latest))] {
+			best[h.ChunkID] = found{hit: h, score: -10 + float64(i)}
+		}
 	}
 	all := make([]found, 0, len(best))
 	for _, f := range best {
