@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"errors"
 	"io"
+	"math"
 	"net"
 	"net/http"
 	"net/http/httptest"
@@ -291,6 +292,47 @@ func TestGroqReadsARetryAfterDate(t *testing.T) {
 	}
 }
 
+func TestGroqReadsRetryAfterAsJavaScriptsNumberDid(t *testing.T) {
+	g := newFake(t).llm(GroqOptions{Now: func() time.Time { return time.Date(2026, 11, 25, 9, 0, 0, 0, time.UTC) }})
+	for header, want := range map[string]time.Duration{
+		"5":                             5 * time.Second,
+		" 2.5 ":                         2500 * time.Millisecond,
+		"   ":                           0,
+		"0x10":                          16 * time.Second,
+		"1e1":                           10 * time.Second,
+		"-3":                            0,
+		"1e300":                         math.MaxInt64,
+		"2026-11-25T09:00:30Z":          30 * time.Second,
+		"Wed, 25 Nov 2026 09:00:20 GMT": 20 * time.Second,
+	} {
+		got := g.retryAfter(header)
+		if got == nil || *got != want {
+			t.Errorf("retryAfter(%q) = %v, want %v", header, got, want)
+		}
+	}
+	for _, header := range []string{"Infinity", "NaN", "soon", "1_000", "0x"} {
+		if got := g.retryAfter(header); got != nil {
+			t.Errorf("retryAfter(%q) = %v, want none", header, *got)
+		}
+	}
+}
+
+func TestGroqGivesUpAtOnceOnAnEnormousRetryAfter(t *testing.T) {
+	f := newFake(t, failure(429, "", "Retry-After", "1e300"), ok("never"))
+	_, err := f.llm(GroqOptions{}).Complete(bg, ask)
+	if e := llmError(t, err); e.Code != RateLimited || f.count() != 1 {
+		t.Fatalf("err = %+v after %d calls", e, f.count())
+	}
+}
+
+func TestGroqCallsAnAttemptWithNoTimeLeftATimeout(t *testing.T) {
+	f := newFake(t, ok("never"))
+	_, err := f.llm(GroqOptions{Deadline: -5 * time.Millisecond}).Complete(bg, ask)
+	if e := llmError(t, err); e.Code != Timeout {
+		t.Fatalf("err = %+v", e)
+	}
+}
+
 func TestGroqDoublesItsWaitAndGivesUpRatherThanWaitTooLong(t *testing.T) {
 	f := newFake(t, failure(503, ""), failure(503, ""), ok("x"))
 	_, err := f.llm(GroqOptions{RetryBase: 6 * time.Millisecond, MaxRetryWait: 10 * time.Millisecond}).Complete(bg, ask)
@@ -406,6 +448,7 @@ func TestGroqCallsAMalformedAnswerWhatItIs(t *testing.T) {
 
 func TestGroqAcceptsWhatTheTypeScriptSchemaAccepted(t *testing.T) {
 	for _, body := range []string{
+		"\ufeff" + `{"model":"m","choices":[{"message":{}}],"usage":{"prompt_tokens":1,"completion_tokens":1}}`,
 		`{"model":"m","choices":[{"message":{}}],"usage":{"prompt_tokens":83.0,"completion_tokens":1}}`,
 		`{"model":"m","choices":[{"message":{"content":null},"finish_reason":null}],"usage":{"prompt_tokens":1,"completion_tokens":1},"x":1}`,
 	} {

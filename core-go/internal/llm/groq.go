@@ -18,6 +18,7 @@ import (
 
 	"github.com/dhananjay6561/kaya/core/internal/config"
 	"github.com/dhananjay6561/kaya/core/internal/llm/o200k"
+	"github.com/dhananjay6561/kaya/core/internal/text"
 )
 
 // GroqOptions tune the Groq client. Zero values take the defaults.
@@ -34,6 +35,8 @@ type GroqOptions struct {
 	Client       *http.Client
 	Now          func() time.Time
 }
+
+var utf8BOM = []byte("\xef\xbb\xbf")
 
 const (
 	framingTokens   = 4
@@ -252,7 +255,7 @@ func (g *Groq) problem(resp *http.Response, raw []byte) *Error {
 		} `json:"error"`
 	}
 	e := &Error{Provider: "groq", Status: resp.StatusCode}
-	if json.Unmarshal(raw, &answer) == nil && answer.Error != nil {
+	if json.Unmarshal(bytes.TrimPrefix(raw, utf8BOM), &answer) == nil && answer.Error != nil {
 		if code, ok := answer.Error.Code.(string); ok && safeDetail.MatchString(code) {
 			e.Detail = code
 		}
@@ -281,15 +284,52 @@ func (g *Groq) retryAfter(header string) *time.Duration {
 		return nil
 	}
 	var d time.Duration
-	if seconds, err := strconv.ParseFloat(strings.TrimSpace(header), 64); err == nil && !math.IsInf(seconds, 0) && !math.IsNaN(seconds) {
-		d = time.Duration(seconds * float64(time.Second))
-	} else if at, err := http.ParseTime(header); err == nil {
+	if seconds, ok := jsNumber(header); ok {
+		if seconds*float64(time.Second) >= math.MaxInt64 {
+			d = math.MaxInt64
+		} else {
+			d = time.Duration(seconds * float64(time.Second))
+		}
+	} else if at, ok := parseDate(header); ok {
 		d = at.Sub(g.o.Now())
 	} else {
 		return nil
 	}
 	d = max(d, 0)
 	return &d
+}
+
+// jsNumber reads s the way JavaScript's Number does: blank is 0, and 0x, 0o and 0b prefixes are
+// read in their base. Infinity and NaN are not finite, so they are not numbers here.
+func jsNumber(s string) (float64, bool) {
+	s = strings.TrimFunc(s, text.IsSpace)
+	if s == "" {
+		return 0, true
+	}
+	if len(s) > 2 && s[0] == '0' {
+		if base := map[byte]int{'x': 16, 'X': 16, 'o': 8, 'O': 8, 'b': 2, 'B': 2}[s[1]]; base != 0 {
+			n, err := strconv.ParseUint(s[2:], base, 64)
+			return float64(n), err == nil
+		}
+	}
+	if strings.ContainsAny(s, "_xXpP") {
+		return 0, false
+	}
+	n, err := strconv.ParseFloat(s, 64)
+	if err != nil || math.IsInf(n, 0) || math.IsNaN(n) {
+		return 0, false
+	}
+	return n, true
+}
+
+func parseDate(s string) (time.Time, bool) {
+	if at, err := http.ParseTime(s); err == nil {
+		return at, true
+	}
+	if at, err := time.Parse(time.RFC3339Nano, strings.TrimSpace(s)); err == nil {
+		return at, true
+	}
+	return time.Time{}, false
 }
 
 // decodeAnswer reads a completion as strictly as the TypeScript core's schema did: a missing
@@ -308,7 +348,7 @@ func decodeAnswer(raw []byte) (Completion, bool) {
 			CompletionTokens *float64 `json:"completion_tokens"`
 		} `json:"usage"`
 	}
-	if err := json.Unmarshal(raw, &answer); err != nil {
+	if err := json.Unmarshal(bytes.TrimPrefix(raw, utf8BOM), &answer); err != nil {
 		return Completion{}, false
 	}
 	if answer.Model == nil || len(answer.Choices) == 0 || answer.Usage == nil ||
@@ -342,8 +382,12 @@ func decodeAnswer(raw []byte) (Completion, bool) {
 func networkDetail(err error) string {
 	var dns *net.DNSError
 	switch {
+	case errors.As(err, &dns) && dns.IsTemporary:
+		return "eai_again"
 	case errors.As(err, &dns):
 		return "enotfound"
+	case errors.Is(err, syscall.ETIMEDOUT):
+		return "etimedout"
 	case errors.Is(err, syscall.ECONNREFUSED):
 		return "econnrefused"
 	case errors.Is(err, syscall.ECONNRESET):
