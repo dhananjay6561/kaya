@@ -229,18 +229,22 @@ Folders appear when a phase needs them; empty placeholders are not committed.
   few seconds at most.
 - **Answers from chats.** For every question with words of substance, Kaya also looks for up to
   three excerpts in DJ's other chats; his own chat with Kaya (the direct chat with the linked
-  account) is left out in SQL. The question's words, minus common English, Hinglish and Hindi
-  question words, are matched against contact and group names with Postgres full text search (GIN
-  indexes on both), keeping the 20 best-ranked of each. Chunks of those people or groups are
+  account, or the chat of the latest exchange while it is logged out) is left out in SQL. The
+  question's words, minus common English, Hinglish and Hindi question words, are matched against
+  group names and the names DJ saved for contacts (or, for a contact he saved no name for, the
+  names they chose) with Postgres full text search (GIN indexes on both), keeping the 20
+  best-ranked of each. Chunks of those people or groups are
   searched within cosine distance 0.7 with a 0.1 head start, alongside all chats within 0.6, and the
   results merged. The query is embedded once and shared with recall. Each excerpt is rendered like
-  a chunk, with self-chosen sender names marked `~`, and masked with the question's mask session for
+  a chunk, with self-chosen sender and chat names marked `~`, and masked with the question's mask session for
   a cloud model, using the messages just before it as context. The excerpts go in a user message of
   their own just before the question, inside tags named afresh for each request, with angle
   brackets, look-alikes and entities escaped; a note in the system message says they are data and
   never instructions and who "Me", "Kaya" and `~` are. When the search finds nothing or fails, the
   system message says which. Excerpts take at most half the room the system prompt and the question
-  leave, and are dropped if the request is still too long.
+  leave; if the request is still too long, the conversation is dropped first and then the
+  excerpts, and the model is told they did not fit. Kaya's past answers are masked as if a code
+  were mentioned, since one may repeat a code from an excerpt.
 - **History sync.** Each history chunk WhatsApp announces becomes a row in `history_jobs`, stored
   in the transaction that acknowledges the announcement. A single worker downloads the chunk,
   stores it in batches of at most 200 messages (a savepoint per message, so one bad message
