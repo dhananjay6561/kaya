@@ -239,7 +239,8 @@ Folders appear when a phase needs them; empty placeholders are not committed.
   the previous one is a follow-up: the previous question's names are used, and their chats are
   searched with both questions together. A question about recent messages that names someone and
   has no topic of its own gets the two newest chunks of the best-matching person's and group's
-  chats first. The question is embedded once and shared with recall. Each excerpt is rendered like
+  chats first, labelled as the newest so the model never takes another excerpt for the latest. The
+  question is embedded once and shared with recall. Each excerpt is rendered like
   a chunk, with self-chosen sender and chat names marked `~`, and masked with the question's mask session for
   a cloud model, using the messages just before it as context. The excerpts go in a user message of
   their own just before the question, inside tags named afresh for each request, with angle
