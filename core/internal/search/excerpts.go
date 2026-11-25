@@ -46,14 +46,37 @@ func init() {
 	}
 }
 
+// smallTalk are words that alone give a question nothing to search the chats for.
+var smallTalk = map[string]bool{}
+
+func init() {
+	for _, w := range strings.Fields(`hi hii hiii hey hello helo yo sup thanks thank thx tysm ok okay okk cool nice good great
+		awesome yes yeah yep yup nope haan han acha accha achha theek thik bye gm gn morning night how are you doing kaise
+		kese ho hai tum aap kya haal whats what up hmm lol`) {
+		smallTalk[w] = true
+	}
+}
+
+// searchable says whether question has anything to search the chats for: a word of two or more
+// characters that is not small talk.
+func searchable(question string) bool {
+	for _, w := range strings.FieldsFunc(strings.ToLower(question), notWordRune) {
+		if len([]rune(w)) >= 2 && !smallTalk[w] {
+			return true
+		}
+	}
+	return false
+}
+
+func notWordRune(r rune) bool {
+	return !unicode.IsLetter(r) && !unicode.IsDigit(r) && !unicode.Is(unicode.Mn, r) && !unicode.Is(unicode.Mc, r)
+}
+
 // contentWords are the words of a question that carry meaning: at least three characters (a mark
 // such as a Devanagari vowel sign counts with its letter) and not a common word.
 func contentWords(question string) []string {
-	split := func(r rune) bool {
-		return !unicode.IsLetter(r) && !unicode.IsDigit(r) && !unicode.Is(unicode.Mn, r) && !unicode.Is(unicode.Mc, r)
-	}
 	var out []string
-	for _, w := range strings.FieldsFunc(strings.ToLower(question), split) {
+	for _, w := range strings.FieldsFunc(strings.ToLower(question), notWordRune) {
 		if len([]rune(w)) >= 3 && !commonWords[w] && !slices.Contains(out, w) {
 			out = append(out, w)
 		}
@@ -61,8 +84,12 @@ func contentWords(question string) []string {
 	return out
 }
 
-const contactNames = `to_tsvector('simple', coalesce(c.saved_name, '') || ' ' || coalesce(c.first_name, '') || ' ' ||
-	coalesce(c.push_name, '') || ' ' || coalesce(c.business_name, ''))`
+// contactNames are the names DJ saved for a contact or, only when he saved none, the ones they
+// chose for themselves, so nobody can steer the search toward their chats with a name full of
+// question words.
+const contactNames = `to_tsvector('simple', CASE WHEN coalesce(c.saved_name, '') = '' AND coalesce(c.first_name, '') = ''
+	THEN coalesce(c.push_name, '') || ' ' || coalesce(c.business_name, '')
+	ELSE coalesce(c.saved_name, '') || ' ' || coalesce(c.first_name, '') END)`
 
 // named finds who a question names: contacts with a chat or a message, and group chats, whose
 // names have the most of the question's words, at most 20 of each.
@@ -99,16 +126,22 @@ func (s *Searcher) named(ctx context.Context, words []string) (contacts, chats [
 	return contacts, chats, err
 }
 
-// selfChat is DJ's own chat with Kaya: the direct chat with the account the gateway is linked to.
-// It is zero before the gateway has said which account that is.
+// selfChat is DJ's own chat with Kaya: the direct chat with the account the gateway is linked to
+// or, while it is not linked (logged out), the chat of the latest exchange. It is zero before
+// either is known.
 func (s *Searcher) selfChat(ctx context.Context) (int64, error) {
 	var id int64
 	err := s.DB.QueryRow(ctx, `
-		SELECT ch.id FROM connection_state cs
-		JOIN contacts c ON cs.own_jid IN (c.pn, c.lid)
-		JOIN chats ch ON ch.kind = 'direct' AND ch.contact_id = c.id
-		WHERE cs.own_jid IS NOT NULL
-		ORDER BY cs.occurred_at DESC LIMIT 1`).Scan(&id)
+		SELECT id FROM (
+			(SELECT ch.id, 0 AS rank FROM connection_state cs
+			 JOIN contacts c ON cs.own_jid IN (c.pn, c.lid)
+			 JOIN chats ch ON ch.kind = 'direct' AND ch.contact_id = c.id
+			 WHERE cs.own_jid IS NOT NULL
+			 ORDER BY cs.occurred_at DESC LIMIT 1)
+			UNION ALL
+			(SELECT m.chat_id, 1 FROM exchanges e JOIN messages m ON m.id = e.question_message_id
+			 ORDER BY e.id DESC LIMIT 1)) known
+		ORDER BY rank LIMIT 1`).Scan(&id)
 	if errors.Is(err, pgx.ErrNoRows) {
 		return 0, nil
 	}
@@ -128,10 +161,10 @@ type Excerpt struct {
 // every chat, with a looser bar and a head start, so a name that matches by chance cannot hide a
 // better answer elsewhere.
 func (s *Searcher) Excerpts(ctx context.Context, question string, limit int) ([]Excerpt, bool, error) {
-	words := contentWords(question)
-	if limit <= 0 || len(words) == 0 {
+	if limit <= 0 || !searchable(question) {
 		return nil, false, nil
 	}
+	words := contentWords(question)
 	self, err := s.selfChat(ctx)
 	if err != nil {
 		return nil, true, err
