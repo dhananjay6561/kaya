@@ -119,7 +119,7 @@ func newChat(t *testing.T, o Options) *Chat {
 	if o.Zone == nil {
 		o.Zone = time.UTC
 	}
-	if o.History != nil && o.DatabaseAway == nil {
+	if (o.History != nil || o.Recall != nil) && o.DatabaseAway == nil {
 		o.DatabaseAway = func(error) bool { return false }
 	}
 	if o.Now == nil {
@@ -544,5 +544,38 @@ func TestReplySendsGroqTheSameRequestAsTheTypeScriptCore(t *testing.T) {
 		if got.Text != c.Want.Text || got.Remember != c.Want.Remember {
 			t.Errorf("%s: got %+v, want %+v", c.Question, got, c.Want)
 		}
+	}
+}
+
+func TestReplyBringsBackOlderExchangesMaskedAndAnswersWithoutThemWhenRecallFails(t *testing.T) {
+	cloud := cloudStub{llm.NewStub(llm.StubOptions{Reply: func(llm.Request) string { return "It was [PHONE_1]." }})}
+	old := memory.Exchange{Question: "what is the plumber's number", Answer: "It is 9876543210.", At: now.Add(-60 * 24 * time.Hour)}
+	var asked []string
+	c := newChat(t, Options{
+		LLM: cloud, NewMaskSession: realMasking,
+		Recall: func(_ context.Context, q Question) ([]memory.Exchange, error) {
+			asked = append(asked, q.Text)
+			return []memory.Exchange{old}, nil
+		},
+	})
+	got := reply(t, c, "plumber ka number kya tha?")
+	sent := cloud.Requests()[0].Messages
+	if len(asked) != 1 || asked[0] != "plumber ka number kya tha?" {
+		t.Fatalf("recall asked %q", asked)
+	}
+	if sent[1].Content != "(sent 60 days ago) what is the plumber's number" || sent[2].Content != "It is [PHONE_1]." {
+		t.Fatalf("sent %+v", sent)
+	}
+	if got.Text != "It was 9876543210." {
+		t.Fatalf("got %q", got.Text)
+	}
+
+	stub := llm.NewStub(llm.StubOptions{Reply: func(llm.Request) string { return "fine" }})
+	c = newChat(t, Options{
+		LLM:    stub,
+		Recall: func(context.Context, Question) ([]memory.Exchange, error) { return nil, errors.New("voyage away") },
+	})
+	if got := reply(t, c, "hi"); got.Text != "fine" || len(stub.Requests()[0].Messages) != 2 {
+		t.Fatalf("a failed recall broke the answer: %+v", got)
 	}
 }

@@ -44,6 +44,9 @@ type Options struct {
 	Zone   *time.Location
 	// History reads the conversation so far for a question; nil means none.
 	History func(ctx context.Context, q Question) ([]memory.Exchange, error)
+	// Recall finds older exchanges that may bear on a question, beyond the recent conversation;
+	// nil means none. A failure is handled like History's.
+	Recall func(ctx context.Context, q Question) ([]memory.Exchange, error)
 	// DatabaseAway says whether a History error means the database is down, in which case the
 	// question fails and runs again later; any other error is logged and the question is answered
 	// without the conversation.
@@ -67,7 +70,7 @@ func New(o Options) (*Chat, error) {
 	switch {
 	case o.LLM == nil || o.Logger == nil || o.Zone == nil:
 		return nil, errors.New("chat needs a model, a logger and a time zone")
-	case o.History != nil && o.DatabaseAway == nil:
+	case (o.History != nil || o.Recall != nil) && o.DatabaseAway == nil:
 		return nil, errors.New("chat needs DatabaseAway to read history")
 	case o.LLM.Locality() == llm.Cloud && o.NewMaskSession == nil:
 		return nil, errors.New("chat needs masking to send the conversation to a cloud model")
@@ -89,10 +92,11 @@ func (c *Chat) Reply(ctx context.Context, q Question) (Answer, error) {
 	if o.LLM.Locality() == llm.Cloud {
 		privacy = o.NewMaskSession()
 	}
-	ask := func(history []memory.Exchange, effort llm.Effort) (llm.Completion, error) {
+	ask := func(history, recalled []memory.Exchange, effort llm.Effort) (llm.Completion, error) {
 		built := memory.Build(memory.Input{
 			System:   SystemPrompt(now, o.Zone, o.LLM.Locality()),
 			History:  history,
+			Recalled: recalled,
 			Question: q.Text,
 			Budget:   o.LLM.ContextTokens(),
 			Count:    o.LLM.CountTokens,
@@ -113,37 +117,45 @@ func (c *Chat) Reply(ctx context.Context, q Question) (Answer, error) {
 			"counted_tokens", built.Tokens,
 			"exchanges", built.Exchanges,
 			"left_out", built.LeftOut,
+			"recalled", built.Recalled,
 			"ms", time.Since(started).Milliseconds(),
 		)
 		return completion, nil
 	}
 
-	history, err := c.history(ctx, q)
+	history, err := c.read(ctx, q, o.History, "could not read the conversation; answering without it")
+	if err != nil {
+		return Answer{}, err
+	}
+	recalled, err := c.read(ctx, q, o.Recall, "could not recall older exchanges; answering without them")
 	if err != nil {
 		return Answer{}, err
 	}
 	if privacy != nil {
-		masked := make([]memory.Exchange, len(history))
-		for i, e := range history {
-			e.Answer = privacy.Mask(e.Answer, e.Question)
-			masked[i] = e
+		mask := func(exchanges []memory.Exchange) []memory.Exchange {
+			masked := make([]memory.Exchange, len(exchanges))
+			for i, e := range exchanges {
+				e.Answer = privacy.Mask(e.Answer, e.Question)
+				masked[i] = e
+			}
+			return masked
 		}
-		history = masked
+		history, recalled = mask(history), mask(recalled)
 	}
-	sent := history
-	completion, err := ask(sent, llm.Medium)
+	sent, sentRecalled := history, recalled
+	completion, err := ask(sent, sentRecalled, llm.Medium)
 	var failed *llm.Error
-	if err != nil && errors.As(err, &failed) && failed.Code == llm.TooLong && len(history) > 0 {
+	if err != nil && errors.As(err, &failed) && failed.Code == llm.TooLong && len(history)+len(recalled) > 0 {
 		o.Logger.Warn("the request was too long with the conversation; asking without it")
-		sent = nil
-		completion, err = ask(sent, llm.Medium)
+		sent, sentRecalled = nil, nil
+		completion, err = ask(sent, sentRecalled, llm.Medium)
 	}
 	if err != nil {
 		return Answer{}, err
 	}
 	if text.Trim(completion.Text) == "" && completion.FinishReason == llm.FinishLength {
 		o.Logger.Warn("the model spent its room thinking; asking again with less effort")
-		if completion, err = ask(sent, llm.Low); err != nil {
+		if completion, err = ask(sent, sentRecalled, llm.Low); err != nil {
 			return Answer{}, err
 		}
 	}
@@ -171,20 +183,22 @@ func (c *Chat) Reply(ctx context.Context, q Question) (Answer, error) {
 	return Answer{Text: answer, Remember: true}, nil
 }
 
-func (c *Chat) history(ctx context.Context, q Question) ([]memory.Exchange, error) {
-	if c.o.History == nil {
+// read gets exchanges from source. When the database is away the question fails and runs again
+// later; any other failure is logged and the question is answered without them.
+func (c *Chat) read(ctx context.Context, q Question, source func(context.Context, Question) ([]memory.Exchange, error), failed string) ([]memory.Exchange, error) {
+	if source == nil {
 		return nil, nil
 	}
-	history, err := c.o.History(ctx, q)
+	exchanges, err := source(ctx, q)
 	switch {
 	case err == nil:
-		return history, nil
+		return exchanges, nil
 	case ctx.Err() != nil:
 		return nil, context.Cause(ctx)
 	case c.o.DatabaseAway(err):
 		return nil, err
 	default:
-		c.o.Logger.Warn("could not read the conversation; answering without it", logging.Err(err))
+		c.o.Logger.Warn(failed, logging.Err(err))
 		return nil, nil
 	}
 }
