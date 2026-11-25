@@ -713,6 +713,11 @@ function masking() {
     ["pay rahul@okaxis1 now, x@ybl2, ok@ybl_x, ok@ybl-x.com"],
     ["pay xy@ybl_y.com and ab@cd_e.f and pq@rs-t.uv and mn@op_q.r1"],
     ...[56, 57, 58, 59, 60, 61].map((n): [string] => [`road ${"x".repeat(n - 5)} 122001`]),
+    ...[50, 51, 52, 53, 54, 55, 56].map((n): [string] => [`😀${"a".repeat(n)} road 110001`]),
+    ...[112, 113, 114, 115, 116].map((n): [string] => [`12 road ${"a".repeat(n)}😀tail`]),
+    ...[37, 38, 39, 40, 41].map((n): [string] => [
+      `otp ${"😀".repeat(n / 2)}${"b".repeat(n % 2)} 482913`,
+    ]),
     ...[56, 57, 58, 59, 60, 61].map((n): [string] => [`a, road ${"y".repeat(n - 5)} 560 001 end`]),
   ];
   const restores = [
@@ -744,6 +749,10 @@ function masking() {
     "send here:\n12 mg road, gurugram 122001",
     "RAHUL@X.COM, Rahul@YBL, pan abcde1234f, PAN ABCDE1234F",
     "car DL 3C AB 1234, DL-3C-AB-1234, then DL3CAB1234, ifsc hdfc0001234 HDFC0001234",
+    "send to:\n12 İstanbul Road",
+    "send to:\n12 istanbul road",
+    "send to:\n12 ΟΔΟΣ Road",
+    "send to:\n12 οδος road",
   ].map((text) => ({ text, want: session.mask(text) }));
 
   const pieces = [
@@ -844,12 +853,19 @@ function masking() {
   const sessions = Array.from({ length: 150 }, (_, i) => {
     const one = createMaskSession();
     const texts = fuzzed.slice(i * 3, i * 3 + 3).map(([text]) => text);
-    const wants = texts.map((text) => one.mask(text));
+    const context = i % 3 === 0 ? "what was that OTP for my bank account?" : "";
+    const wants = texts.map((text) => one.mask(text, { context }));
+    const forms = [
+      (kind: string, n: number) => `[${kind}_${n}]`,
+      (kind: string, n: number) => `${kind.toLowerCase()}_${n}`,
+      (kind: string, n: number) => `[ ${kind[0]}${kind.slice(1).toLowerCase()} ${n} ]`,
+      (kind: string, n: number) => `[${kind}\\_${n}]`,
+    ];
     const issued = Object.entries(one.counts()).flatMap(([kind, n]) =>
-      Array.from({ length: n ?? 0 }, (_, k) => `[${kind}_${k + 1}]`),
+      Array.from({ length: (n ?? 0) + 1 }, (_, k) => forms[(i + k) % forms.length]?.(kind, k + 1)),
     );
     const probe = issued.join(" ");
-    return { texts, wants, probe, restored: one.restore(probe), counts: one.counts() };
+    return { texts, context, wants, probe, restored: one.restore(probe), counts: one.counts() };
   });
 
   write("core-go/internal/masking/testdata/masking.json", {
