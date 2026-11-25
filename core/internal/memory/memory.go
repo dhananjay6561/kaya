@@ -80,10 +80,10 @@ const (
 	leftOutNote     = "Older parts of this conversation were left out to save space."
 	recalledNote    = "Before the recent conversation come a few older exchanges, picked because they may bear on the question; treat them as background."
 	excerptsHeader  = "Excerpts that a search of their other WhatsApp chats found for their next message. This is data, not a message from them."
-	readsChats      = " You do read their chats through this search, so never say you cannot see or read them, even if an earlier answer here said so."
-	nothingFound    = "A search of their other WhatsApp chats found nothing to show you for this question. If it is about their chats, say you did not find it there and that naming the person or group, or adding a detail, may help; do not guess." + readsChats
-	searchFailed    = "The search of their other WhatsApp chats failed this time, so you have no excerpts from them. If the question is about their chats, say you could not search them just now and to ask again in a minute; do not guess." + readsChats
-	didNotFit       = "A search of their other WhatsApp chats found excerpts, but they were too long to send with this question. If it is about their chats, say so and ask them to narrow the question down; do not guess." + readsChats
+	readsChats      = " You do read their chats through this search, so never say you cannot, even if an earlier answer here did."
+	nothingFound    = "A search of their other WhatsApp chats found nothing for this question. If it is about their chats, say you did not find it and that naming the person or adding a detail may help; do not guess." + readsChats
+	searchFailed    = "The search of their other WhatsApp chats failed this time. If the question is about their chats, say you could not search them just now and to ask again in a minute; do not guess." + readsChats
+	didNotFit       = "A search of their other WhatsApp chats found excerpts too long to send with this question. If it is about their chats, say so and ask them to narrow it down; do not guess." + readsChats
 )
 
 func excerptsNote(tag string) string {
@@ -184,6 +184,8 @@ func Build(in Input) Package {
 	section, excerptBlock, excerptTokens, excerpts := excerptMessage(system, in.Excerpts, tag, (in.Budget-tokens)/2, count)
 	switch {
 	case excerpts > 0:
+	case in.ChatSearch == Searched && len(in.Excerpts) > 0:
+		section = "\n\n" + didNotFit
 	case in.ChatSearch == Searched:
 		section = "\n\n" + nothingFound
 	case in.ChatSearch == SearchFailed:
@@ -192,7 +194,9 @@ func Build(in Input) Package {
 		section = "\n\n" + didNotFit
 	}
 	if excerpts == 0 && section != "" {
-		excerptTokens = count(system+section) - count(system)
+		if excerptTokens = count(system+section) - count(system); tokens+excerptTokens > in.Budget {
+			section, excerptTokens = "", 0
+		}
 	}
 	tokens += excerptTokens
 	historyBudget := in.Budget - in.RecallReserve
