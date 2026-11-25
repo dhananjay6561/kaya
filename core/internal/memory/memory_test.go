@@ -360,6 +360,7 @@ func TestBuildSaysWhenTheSearchFoundNothingOrFailed(t *testing.T) {
 		{Searched, nil, "s\n\n" + nothingFound},
 		{Searched, []string{strings.Repeat("y", 2000)}, "s\n\n" + nothingFound},
 		{SearchFailed, nil, "s\n\n" + searchFailed},
+		{DidNotFit, nil, "s\n\n" + didNotFit},
 		{NotSearched, nil, "s"},
 	} {
 		p := Build(Input{System: "s", Question: "q", Excerpts: c.excerpts, ChatSearch: c.search, Budget: 1000, Count: count, Now: at})

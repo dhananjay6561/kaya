@@ -154,12 +154,9 @@ func (c *Chat) Reply(ctx context.Context, q Question) (Answer, error) {
 		masked := make([]memory.Exchange, len(exchanges))
 		for i, e := range exchanges {
 			// An answer may repeat a code from an excerpt, which was masked there because of the
-			// messages around it; the question and answer alone often do not say it is one.
-			context := e.Question
-			if search.MentionsACode(e.Question + "\n" + e.Answer) {
-				context += "\notp"
-			}
-			e.Answer = privacy.Mask(e.Answer, context)
+			// messages around it; the question and answer alone often do not say it is one, so
+			// every answer is masked as if a code were mentioned.
+			e.Answer = privacy.Mask(e.Answer, e.Question+"\notp")
 			masked[i] = e
 		}
 		return masked
@@ -188,12 +185,15 @@ func (c *Chat) Reply(ctx context.Context, q Question) (Answer, error) {
 	sent, sentRecalled := history, recalled
 	completion, err := ask(sent, sentRecalled, llm.Medium)
 	var failed *llm.Error
-	if err != nil && errors.As(err, &failed) && failed.Code == llm.TooLong && len(history)+len(recalled)+len(excerpts) > 0 {
+	tooLong := func(err error) bool { return errors.As(err, &failed) && failed.Code == llm.TooLong }
+	if err != nil && tooLong(err) && len(history)+len(recalled) > 0 {
 		o.Logger.Warn("the request was too long with the conversation; asking without it")
 		sent, sentRecalled = nil, nil
-		if len(excerpts) > 0 {
-			excerpts, chatSearch = nil, memory.SearchFailed
-		}
+		completion, err = ask(sent, sentRecalled, llm.Medium)
+	}
+	if err != nil && tooLong(err) && len(excerpts) > 0 {
+		o.Logger.Warn("the request was too long with the excerpts; asking without them")
+		excerpts, chatSearch = nil, memory.DidNotFit
 		completion, err = ask(sent, sentRecalled, llm.Medium)
 	}
 	if err != nil {

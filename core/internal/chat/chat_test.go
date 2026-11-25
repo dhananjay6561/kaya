@@ -690,17 +690,17 @@ func TestReplyMasksACodeThatOnlyTheMessagesBeforeAnExcerptExplain(t *testing.T) 
 
 func TestReplyMasksACodeRepeatedInAnEarlierAnswer(t *testing.T) {
 	cloud := cloudStub{llm.NewStub(llm.StubOptions{Reply: func(llm.Request) string { return "ok" }})}
-	earlier := []memory.Exchange{{ID: 1, Question: "rahul ka code kya tha?", Answer: "Usne 482913 bheja tha.", At: now.Add(-time.Hour)}}
+	earlier := []memory.Exchange{{ID: 1, Question: "rahul ne kya bheja?", Answer: "Rahul ne 482913 bheja tha, jaldi daalne ko bola.", At: now.Add(-time.Hour)}}
 	c := newChat(t, Options{
 		LLM: cloud, NewMaskSession: realMasking,
 		History: func(context.Context, Question) ([]memory.Exchange, error) { return earlier, nil },
 		Recall: func(context.Context, Question, []int64, time.Time) ([]memory.Exchange, error) {
-			return []memory.Exchange{{ID: 2, Question: "priya ka pin?", Answer: "Priya ne 7731 bataya tha.", At: now.Add(-90 * 24 * time.Hour)}}, nil
+			return []memory.Exchange{{ID: 2, Question: "priya ne kya kaha?", Answer: "Priya ne 773105 bataya tha.", At: now.Add(-90 * 24 * time.Hour)}}, nil
 		},
 	})
 	reply(t, c, "aur kuch?")
 	for _, m := range cloud.Requests()[0].Messages {
-		if strings.Contains(m.Content, "482913") || strings.Contains(m.Content, "7731") {
+		if strings.Contains(m.Content, "482913") || strings.Contains(m.Content, "773105") {
 			t.Fatalf("a code reached the cloud: %q", m.Content)
 		}
 	}
@@ -768,8 +768,26 @@ func TestReplyAsksAgainWithoutExcerptsWhenTheyMadeTheRequestTooLong(t *testing.T
 	}}}
 	c := newChat(t, Options{LLM: tooLong, Excerpts: found(search.Excerpt{Hit: search.Hit{Title: "Rahul", Lines: []search.Line{{SentAt: now, Sender: "Rahul", Text: "hi"}}}})})
 	if got := reply(t, c, "rahul?"); got.Text != "short" || len(tooLong.requests) != 2 || excerptsOf(tooLong.requests[0]) == "" ||
-		!strings.Contains(tooLong.requests[1].Messages[0].Content, "failed this time") {
+		!strings.Contains(tooLong.requests[1].Messages[0].Content, "too long to send with this question") {
 		t.Fatalf("got %+v after %d requests", got, len(tooLong.requests))
+	}
+}
+
+func TestReplyKeepsTheExcerptsWhenDroppingTheConversationIsEnough(t *testing.T) {
+	model := roomy{&scripted{responses: func(r llm.Request) (llm.Completion, error) {
+		if len(r.Messages) > 3 {
+			return llm.Completion{}, &llm.Error{Provider: "groq", Code: llm.TooLong, Status: 413}
+		}
+		return llm.Completion{Text: "short", FinishReason: llm.FinishStop}, nil
+	}}}
+	earlier := []memory.Exchange{{ID: 1, Question: "old", Answer: "answer", At: now.Add(-time.Hour)}}
+	c := newChat(t, Options{
+		LLM:      model,
+		History:  func(context.Context, Question) ([]memory.Exchange, error) { return earlier, nil },
+		Excerpts: found(search.Excerpt{Hit: search.Hit{Title: "Rahul", Lines: []search.Line{{SentAt: now, Sender: "Rahul", Text: "hi"}}}}),
+	})
+	if got := reply(t, c, "rahul?"); got.Text != "short" || len(model.requests) != 2 || excerptsOf(model.requests[1]) == "" {
+		t.Fatalf("got %+v after %+v", got, model.requests)
 	}
 }
 
