@@ -1,0 +1,190 @@
+package chat
+
+import (
+	"context"
+	"errors"
+	"log/slog"
+	"time"
+	"unicode/utf8"
+
+	"github.com/dhananjay6561/kaya/core/internal/llm"
+	"github.com/dhananjay6561/kaya/core/internal/memory"
+	"github.com/dhananjay6561/kaya/core/internal/text"
+	"github.com/dhananjay6561/kaya/kit/logging"
+)
+
+// Question is a plain message from DJ to Kaya.
+type Question struct {
+	ID     string
+	Text   string
+	SentAt time.Time
+}
+
+// Answer is Kaya's reply. Remember is false for a canned reply that must not become part of the
+// conversation.
+type Answer struct {
+	Text     string
+	Remember bool
+}
+
+// MaskSession hides private details in text bound for a cloud model and puts them back in its
+// answer. One session covers one question, every attempt included, so placeholders stay the same.
+type MaskSession interface {
+	// Mask hides details in text; context is the text it answers, which can say what a number is.
+	Mask(text, context string) string
+	Restore(text string) string
+	// Counts is how many details of each kind were hidden.
+	Counts() map[string]int
+}
+
+// Options configure a Chat.
+type Options struct {
+	LLM    llm.Provider
+	Logger *slog.Logger
+	Zone   *time.Location
+	// History reads the conversation so far for a question; nil means none.
+	History func(ctx context.Context, q Question) ([]memory.Exchange, error)
+	// DatabaseAway says whether a History error means the database is down, in which case the
+	// question fails and runs again later; any other error is logged and the question is answered
+	// without the conversation.
+	DatabaseAway func(err error) bool
+	// NewMaskSession is required for a cloud model.
+	NewMaskSession func() MaskSession
+	Now            func() time.Time
+	MaxReplyLength int
+}
+
+// Chat answers DJ's plain messages.
+type Chat struct{ o Options }
+
+const (
+	maxAnswerTokens = 3072
+	cutShort        = "\n\n(Cut short here. Ask for less, or for the rest.)"
+)
+
+// New checks the options and returns a Chat.
+func New(o Options) (*Chat, error) {
+	switch {
+	case o.LLM == nil || o.Logger == nil || o.Zone == nil:
+		return nil, errors.New("chat needs a model, a logger and a time zone")
+	case o.History != nil && o.DatabaseAway == nil:
+		return nil, errors.New("chat needs DatabaseAway to read history")
+	case o.LLM.Locality() == llm.Cloud && o.NewMaskSession == nil:
+		return nil, errors.New("chat needs masking to send the conversation to a cloud model")
+	}
+	if o.Now == nil {
+		o.Now = time.Now
+	}
+	if o.MaxReplyLength == 0 {
+		o.MaxReplyLength = 8000
+	}
+	return &Chat{o: o}, nil
+}
+
+// Reply answers q with the model, carrying as much of the conversation as fits its budget.
+func (c *Chat) Reply(ctx context.Context, q Question) (Answer, error) {
+	o := c.o
+	now := o.Now()
+	var privacy MaskSession
+	if o.LLM.Locality() == llm.Cloud {
+		privacy = o.NewMaskSession()
+	}
+	ask := func(history []memory.Exchange, effort llm.Effort) (llm.Completion, error) {
+		built := memory.Build(memory.Input{
+			System:   SystemPrompt(now, o.Zone, o.LLM.Locality()),
+			History:  history,
+			Question: q.Text,
+			Budget:   o.LLM.ContextTokens(),
+			Count:    o.LLM.CountTokens,
+			Now:      now,
+		})
+		started := time.Now()
+		completion, err := o.LLM.Complete(ctx, llm.Request{
+			Tier: llm.Heavy, Effort: effort, MaxTokens: maxAnswerTokens, Messages: built.Messages,
+		})
+		if err != nil {
+			return completion, err
+		}
+		o.Logger.Info("the model answered",
+			"model", completion.Model,
+			"finish_reason", completion.FinishReason,
+			"input_tokens", completion.Usage.InputTokens,
+			"output_tokens", completion.Usage.OutputTokens,
+			"counted_tokens", built.Tokens,
+			"exchanges", built.Exchanges,
+			"left_out", built.LeftOut,
+			"ms", time.Since(started).Milliseconds(),
+		)
+		return completion, nil
+	}
+
+	history, err := c.history(ctx, q)
+	if err != nil {
+		return Answer{}, err
+	}
+	if privacy != nil {
+		masked := make([]memory.Exchange, len(history))
+		for i, e := range history {
+			e.Answer = privacy.Mask(e.Answer, e.Question)
+			masked[i] = e
+		}
+		history = masked
+	}
+	sent := history
+	completion, err := ask(sent, llm.Medium)
+	var failed *llm.Error
+	if err != nil && errors.As(err, &failed) && failed.Code == llm.TooLong && len(history) > 0 {
+		o.Logger.Warn("the request was too long with the conversation; asking without it")
+		sent = nil
+		completion, err = ask(sent, llm.Medium)
+	}
+	if err != nil {
+		return Answer{}, err
+	}
+	if text.Trim(completion.Text) == "" && completion.FinishReason == llm.FinishLength {
+		o.Logger.Warn("the model spent its room thinking; asking again with less effort")
+		if completion, err = ask(sent, llm.Low); err != nil {
+			return Answer{}, err
+		}
+	}
+
+	reply := completion.Text
+	if privacy != nil {
+		if masked := privacy.Counts(); len(masked) > 0 {
+			o.Logger.Info("private details were masked", "masked", masked)
+		}
+		reply = privacy.Restore(reply)
+	}
+	answer := ToWhatsApp(reply)
+	ranOut := completion.FinishReason == llm.FinishLength
+	if answer == "" {
+		if ranOut {
+			return Answer{Text: "I ran out of room before I could answer. Try a narrower question."}, nil
+		}
+		return Answer{Text: "I had no answer to that. Try asking another way."}, nil
+	}
+	cut := utf8.RuneCountInString(answer) > o.MaxReplyLength
+	answer = ClipTo(answer, o.MaxReplyLength)
+	if ranOut || cut {
+		answer += cutShort
+	}
+	return Answer{Text: answer, Remember: true}, nil
+}
+
+func (c *Chat) history(ctx context.Context, q Question) ([]memory.Exchange, error) {
+	if c.o.History == nil {
+		return nil, nil
+	}
+	history, err := c.o.History(ctx, q)
+	switch {
+	case err == nil:
+		return history, nil
+	case ctx.Err() != nil:
+		return nil, context.Cause(ctx)
+	case c.o.DatabaseAway(err):
+		return nil, err
+	default:
+		c.o.Logger.Warn("could not read the conversation; answering without it", logging.Err(err))
+		return nil, nil
+	}
+}
