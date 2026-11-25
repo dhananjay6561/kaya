@@ -45,7 +45,10 @@ func newScan(escaped, context string) *scan {
 	sc := &scan{units: units, ascii: make([]uint16, n), runes: make([]rune, n), at: make([]int, n+1), taken: make([]bool, n)}
 	var b, lower strings.Builder
 	for i, u := range units {
-		sc.ascii[i] = uint16(asciiDigit(rune(u)))
+		sc.ascii[i] = u
+		if d := asciiDigit(rune(u)); d != rune(u) {
+			sc.ascii[i] = uint16(d) //nolint:gosec // an ASCII digit
+		}
 		r := rune(sc.ascii[i])
 		if utf16.IsSurrogate(r) {
 			r = surrogate

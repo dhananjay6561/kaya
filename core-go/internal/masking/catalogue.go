@@ -51,7 +51,7 @@ func notAfterNumber(plus bool) func(sc *scan, i int) bool {
 		if number(prev) {
 			return false
 		}
-		return !((prev == ' ' || prev == '-') && number(sc.runeAt(i-2)))
+		return prev != ' ' && prev != '-' || !number(sc.runeAt(i-2))
 	}
 }
 
@@ -72,7 +72,7 @@ var rules = []rule{
 			for isWord(sc.runeAt(k)) || sc.runeAt(k) == '-' {
 				k++
 			}
-			return !(sc.runeAt(k) == '.' && isLetter(sc.runeAt(k+1)) && isLetter(sc.runeAt(k+2)))
+			return sc.runeAt(k) != '.' || !isLetter(sc.runeAt(k+1)) || !isLetter(sc.runeAt(k+2))
 		}
 	}),
 	with(newRule(Card, `\d(?:[ .-]?\d){12,18}`, `(?:$|\D)`), func(r *rule) {
@@ -158,7 +158,7 @@ var rules = []rule{
 			if isDigit(p) || strings.ContainsRune(",/_.", p) {
 				return false
 			}
-			return !(p == ':' && isDigit(sc.runeAt(i-2)))
+			return p != ':' || !isDigit(sc.runeAt(i-2))
 		}
 		r.accept = func(sc *scan, value string, start, end int) bool {
 			if year.MatchString(digitsOf(value)) {
