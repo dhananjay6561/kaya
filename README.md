@@ -91,7 +91,12 @@ contact, and it works with everything your WhatsApp account can see.
   chunks and embedded by Voyage `voyage-4`, after masking (names go as they are), into pgvector in
   your own database. Only a hash of each chunk's text is kept, never a second copy of it. Edits,
   deletes and history that arrives late make the affected chunk again; `/status` shows how much of
-  your history is searchable. Searching it comes next.
+  your history is searchable.
+- **Search, and a long memory.** Search finds chunks by meaning (your question's vector against the
+  index) and by words (Postgres full text search, with no language rules so Hinglish and names
+  match as typed), fused into one ranking, with filters by chat, contact and date. Each question you
+  ask Kaya also brings back up to three older exchanges with it that bear on the question, beyond
+  the recent conversation. Try it from a terminal: `docker compose exec core /core search "money"`.
 - **Least-privilege database logins.** The gateway and core each have their own Postgres role.
   Core, the part that will talk to an LLM, can read chats but cannot see the WhatsApp session, its
   encryption keys, or the keys needed to fetch media.
