@@ -139,7 +139,13 @@ func run(cfg config.Config, logger *slog.Logger) error {
 	}
 	switches := pause.NewStored(db)
 	indexer := search.NewIndexer(search.IndexerOptions{DB: db, Embeddings: embedder, Pause: switches, Logger: logger, Zone: zone})
-	searcher := search.NewSearcher(db, embedder)
+	// Recall runs on every question, so its query gets a client that does not retry and a short
+	// deadline: a slow embedding service costs a reply a few seconds, not minutes.
+	queryEmbedder := embedder
+	if cfg.Embeddings.Provider == "voyage" {
+		queryEmbedder = embeddings.NewVoyage(cfg.Embeddings.Voyage, embeddings.VoyageOptions{Timeout: 4 * time.Second, MaxRetries: -1})
+	}
+	searcher := search.NewSearcher(db, queryEmbedder)
 	replies, err := chat.New(chat.Options{
 		LLM:    model,
 		Logger: logger,
@@ -147,8 +153,10 @@ func run(cfg config.Config, logger *slog.Logger) error {
 		History: func(ctx context.Context, _ chat.Question) ([]memory.Exchange, error) {
 			return memory.ReadConversation(ctx, db, 0)
 		},
-		Recall: func(ctx context.Context, q chat.Question) ([]memory.Exchange, error) {
-			return searcher.Recall(ctx, q.Text, memory.DefaultExchanges, 3)
+		Recall: func(ctx context.Context, q chat.Question, exclude []int64, before time.Time) ([]memory.Exchange, error) {
+			ctx, cancel := context.WithTimeout(ctx, 5*time.Second)
+			defer cancel()
+			return searcher.Recall(ctx, q.Text, exclude, before, 10)
 		},
 		DatabaseAway:   databaseAway,
 		NewMaskSession: func() chat.MaskSession { return masking.NewSession() },
