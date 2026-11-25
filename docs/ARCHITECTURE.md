@@ -203,13 +203,14 @@ Folders appear when a phase needs them; empty placeholders are not committed.
 - **Search index.** One worker in core, under its own advisory lock, groups text messages (and
   captions and poll questions) of one chat sent within 10 minutes into chunks of up to 30 messages
   or 1,500 characters, once they are 10 minutes old by when they were sent and when they were
-  stored. Each chunk is written as the chat's name, the day and `time sender: text` lines, masked
-  for a cloud provider, embedded, and stored with a hash of its unmasked text and the model's name;
+  stored, and once the chat's conversation has paused. Each chunk is written as the chat's name,
+  the day and `time sender: text` lines, masked for a cloud provider (with the messages before it
+  as context, and code-shaped numbers masked whenever an OTP, code or PIN is mentioned), embedded, and stored with a hash of its unmasked text and the model's name;
   the text itself is never stored again. `message_chunks` keeps the `updated_at` each message was
   read with, so an edit, a delete, a hard delete or a move to another chat is noticed even if it
   landed during the call, and the chunk is made again only if its text changed. A message that
   lands inside an existing chunk's time span makes that chunk again with it. A chunk the service
-  refuses is stored as skipped, a rate limit halves the batch and waits as asked, a refused key or
+  refuses is stored as skipped (after a probe shows the service takes requests at all), a rate limit halves the batch and waits as asked, a refused key or
   a write the database refuses stops indexing for 10 minutes, and it waits while Kaya is paused.
 - **History sync.** Each history chunk WhatsApp announces becomes a row in `history_jobs`, stored
   in the transaction that acknowledges the announcement. A single worker downloads the chunk,
