@@ -72,6 +72,7 @@ type Chat struct{ o Options }
 const (
 	maxRecalled     = 3
 	followUp        = 30 * time.Minute
+	newestLabel     = "(The newest messages found with the people or group the question names.)"
 	maxAnswerTokens = 3072
 	cutShort        = "\n\n(Cut short here. Ask for less, or for the rest.)"
 )
@@ -263,6 +264,9 @@ func (c *Chat) excerpts(ctx context.Context, q Question, earlier string, privacy
 	out := make([]string, len(found))
 	for i, e := range found {
 		out[i] = search.Render(e.Title, e.Lines, c.o.Zone, search.DefaultShape, masker, e.Before)
+		if e.Newest {
+			out[i] = newestLabel + "\n" + out[i]
+		}
 	}
 	return out, memory.Searched, nil
 }

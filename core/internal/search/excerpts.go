@@ -154,12 +154,15 @@ func (s *Searcher) selfChat(ctx context.Context) (int64, error) {
 type Excerpt struct {
 	Hit
 	Before string
+	// Newest says the chunk is among the newest of the people or group the question names, put
+	// first because the question asked about recent messages.
+	Newest bool
 }
 
 // recently matches a question about the newest messages ("what did she ask recently", "latest",
-// "last message", "abhi kya bola"), also run into the next word as typed in a hurry
-// ("recentlykya"), but not "last week", "at last" or "abhi tak".
-var recently = regexp.MustCompile(`\brecent(?:ly|\b)|\blatest\b|\blately\b|\bnewest\b|\blast (?:message|messages|msg|msgs|text|baat|chat)\b|\babhi (?:kya|kuch)\b|\bhaal hi\b`)
+// "last message", "new msg", "abhi kya bola", "usne ab kya bheja"), also run into the next word as
+// typed in a hurry ("recentlykya"), but not "last week", "at last" or "abhi tak".
+var recently = regexp.MustCompile(`\brecent(?:ly|\b)|\blatest\b|\blately\b|\bnewest\b|\blast (?:message|messages|msg|msgs|text|baat|chat)\b|\babhi (?:kya|kuch)\b|\bab (?:kya|kuch)\b|\bnew (?:message|messages|msg|msgs)\b|\bhaal hi\b`)
 
 // cues are words that make a question lean on the one before it.
 var cues = map[string]bool{}
@@ -219,8 +222,9 @@ func (s *Searcher) Excerpts(ctx context.Context, question, earlier string, limit
 		namedQuery = earlier + "\n" + question
 	}
 	type found struct {
-		hit   Hit
-		score float64
+		hit    Hit
+		score  float64
+		newest bool
 	}
 	best := map[int64]found{}
 	consider := func(query string, f Filter, bar, bonus float64) error {
@@ -273,7 +277,7 @@ func (s *Searcher) Excerpts(ctx context.Context, question, earlier string, limit
 			return b.Lines[len(b.Lines)-1].SentAt.Compare(a.Lines[len(a.Lines)-1].SentAt)
 		})
 		for i, h := range latest[:min(newest, len(latest))] {
-			best[h.ChunkID] = found{hit: h, score: -10 + float64(i)}
+			best[h.ChunkID] = found{hit: h, score: -10 + float64(i), newest: true}
 		}
 	}
 	all := make([]found, 0, len(best))
@@ -298,7 +302,7 @@ func (s *Searcher) Excerpts(ctx context.Context, question, earlier string, limit
 		if err != nil {
 			return nil, true, err
 		}
-		out[i] = Excerpt{Hit: f.hit, Before: before}
+		out[i] = Excerpt{Hit: f.hit, Before: before, Newest: f.newest}
 	}
 	return out, true, nil
 }

@@ -287,12 +287,15 @@ func TestExcerptsAboutRecentMessagesPutTheNewestFirst(t *testing.T) {
 	r.add(msg{chat: chat, sender: teja, ago: 600 * time.Minute, body: str("coming to college tomorrow?")})
 	r.pass()
 	s := r.excerpter()
-	hits, _, err := s.Excerpts(bg, "recentlykya pucha", "tejashree ne kya pucha", 3)
-	if err != nil || len(hits) < 2 || hits[0].Lines[0].Text != "coming to college tomorrow?" || hits[1].Lines[0].Text != "can you send the notes" {
-		t.Fatalf("got %q, %v", excerptTitles(hits), err)
+	for _, q := range [][2]string{{"recentlykya pucha", "tejashree ne kya pucha"}, {"usne ab kya msg kiya hai", "tejashree ne recently kya pucha"}} {
+		hits, _, err := s.Excerpts(bg, q[0], q[1], 3)
+		if err != nil || len(hits) < 2 || hits[0].Lines[0].Text != "coming to college tomorrow?" || hits[1].Lines[0].Text != "can you send the notes" ||
+			!hits[0].Newest || !hits[1].Newest || len(hits) > 2 && hits[2].Newest {
+			t.Fatalf("%q: got %q, %v", q[0], excerptTitles(hits), err)
+		}
 	}
-	hits, _, err = s.Excerpts(bg, "what did tejashree ask", "", 3)
-	if err != nil || len(hits) == 0 || hits[0].Lines[0].Text != "tejashree asked what happened are you fine" {
+	hits, _, err := s.Excerpts(bg, "what did tejashree ask", "", 3)
+	if err != nil || len(hits) == 0 || hits[0].Lines[0].Text != "tejashree asked what happened are you fine" || hits[0].Newest {
 		t.Fatalf("a question not about recent messages: %q, %v", excerptTitles(hits), err)
 	}
 }
@@ -300,7 +303,7 @@ func TestExcerptsAboutRecentMessagesPutTheNewestFirst(t *testing.T) {
 func TestRecentlyAndFollowUpsAreToldFromOrdinaryWords(t *testing.T) {
 	for q, want := range map[string]bool{
 		"recentlykya pucha": true, "what did she ask recently": true, "latest from rahul": true, "uska last message": true,
-		"abhi kya bola": true, "haal hi mein kya hua": true,
+		"abhi kya bola": true, "haal hi mein kya hua": true, "usne ab kya msg kiya hai": true, "koi new msg": true, "ab tak bataya": false,
 		"what did rahul say last week": false, "at last": false, "recentre the map": false, "abhi tak bataya": false,
 		"blast": false, "abhishek": false,
 	} {

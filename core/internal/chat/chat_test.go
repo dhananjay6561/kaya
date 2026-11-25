@@ -825,3 +825,20 @@ func TestReplySearchesAFollowUpWithTheQuestionJustBefore(t *testing.T) {
 		t.Fatalf("system:\n%s", sys)
 	}
 }
+
+func TestReplyMarksTheNewestExcerpts(t *testing.T) {
+	stub := llm.NewStub(llm.StubOptions{Reply: func(llm.Request) string { return "ok" }})
+	line := []search.Line{{SentAt: now, Sender: "Tejashree", Text: "kya chahiye"}}
+	c := newChat(t, Options{LLM: stub, Excerpts: found(
+		search.Excerpt{Hit: search.Hit{Title: "Tejashree", Lines: line}, Newest: true},
+		search.Excerpt{Hit: search.Hit{Title: "College", Lines: line}},
+	)})
+	reply(t, c, "usne ab kya msg kiya")
+	data := excerptsOf(stub.Requests()[0])
+	if strings.Count(data, newestLabel) != 1 || !strings.Contains(data, newestLabel+"\nChat: Tejashree") {
+		t.Fatalf("excerpts:\n%s", data)
+	}
+	if !strings.Contains(stub.Requests()[0].Messages[0].Content, "call a message someone's latest only when") {
+		t.Fatal("the note does not say which excerpts are the newest")
+	}
+}
