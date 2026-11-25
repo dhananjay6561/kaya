@@ -206,7 +206,8 @@ const (
 
 // Search finds up to limit chunks for query. Meaning comes from the embedding service's vectors,
 // words from Postgres full text search over the messages; the two rankings are fused. The query
-// goes to the embedding service as it is: it is DJ's own words.
+// goes to the embedding service as it is: it is DJ's own words, or a search plan made from them and
+// from Kaya's answers, which are masked.
 func (s *Searcher) Search(ctx context.Context, query string, f Filter, limit int) ([]Hit, error) {
 	if oneLine(query) == "" {
 		return nil, ErrEmptyQuery

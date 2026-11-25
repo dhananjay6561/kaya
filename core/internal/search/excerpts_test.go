@@ -50,12 +50,12 @@ func TestPeopleAreFoundInAnyScriptDespiteTypos(t *testing.T) {
 	tanaka, _ := r.contact("田中 太郎", "")
 	s := r.searcher()
 	for name, want := range map[string]int64{"राहुल": hindi, "tejashri": teja, "TEJASHREE": teja, "田中": tanaka} {
-		best, _, unknown, err := s.people(bg, []string{name})
+		best, _, unknown, err := s.people(bg, []string{name}, 0)
 		if err != nil || !slices.Equal(best, []int64{want}) || unknown != nil {
 			t.Fatalf("%q: best %v, unknown %q, %v", name, best, unknown, err)
 		}
 	}
-	if best, _, unknown, err := s.people(bg, []string{"Zorawar"}); err != nil || best != nil || !slices.Equal(unknown, []string{"Zorawar"}) {
+	if best, _, unknown, err := s.people(bg, []string{"Zorawar"}, 0); err != nil || best != nil || !slices.Equal(unknown, []string{"Zorawar"}) {
 		t.Fatalf("an unknown name: %v, %q, %v", best, unknown, err)
 	}
 }
@@ -65,21 +65,21 @@ func TestPeopleMatchOnlySavedNamesAndPreferWhoDJTalksToMost(t *testing.T) {
 	stuffed, _ := r.contact("Amit Office", "saturday plan party")
 	unsaved, _ := r.contact("", "Neha Saturday")
 	s := r.searcher()
-	best, _, _, err := s.people(bg, []string{"saturday"})
+	best, _, _, err := s.people(bg, []string{"saturday"}, 0)
 	if err != nil || !slices.Equal(best, []int64{unsaved}) {
 		t.Fatalf("got %v, want only %d (not %d)", best, unsaved, stuffed)
 	}
 	gym, gymChat := r.contact("Rahul Gym", "")
 	r.say(r.direct, 9000, "old")
 	r.add(msg{chat: gymChat, sender: gym, ago: 60 * time.Minute, body: str("new")})
-	if best, all, _, err := s.people(bg, []string{"rahul"}); err != nil || !slices.Equal(best, []int64{gym}) || !slices.Equal(all, []int64{gym, r.rahul}) {
+	if best, all, _, err := s.people(bg, []string{"rahul"}, 0); err != nil || !slices.Equal(best, []int64{gym}) || !slices.Equal(all, []int64{gym, r.rahul}) {
 		t.Fatalf("best %v, all %v, %v", best, all, err)
 	}
 	for i := range 6 {
 		r.contact(fmt.Sprintf("Rohit Kumar %d", i), "")
 	}
 	verma, _ := r.contact("Rohit Verma", "")
-	if best, all, _, err := s.people(bg, []string{"rohit verma"}); err != nil || best[0] != verma || len(all) > perName {
+	if best, all, _, err := s.people(bg, []string{"rohit verma"}, 0); err != nil || best[0] != verma || len(all) > perName {
 		t.Fatalf("best %v, all %v, %v", best, all, err)
 	}
 }
@@ -249,7 +249,7 @@ func TestExcerptsForTheNewestTakeAPersonAndAGroupTogether(t *testing.T) {
 	gang := r.groupNamed("Priya Birthday")
 	other, otherChat := r.contact("Priyanka", "")
 	r.add(msg{chat: otherChat, sender: other, ago: 100 * time.Minute, body: str("priyanka is not priya")})
-	if _, all, _, err := r.searcher().people(bg, []string{"Priya"}); err != nil || !slices.Contains(all, other) {
+	if _, all, _, err := r.searcher().people(bg, []string{"Priya"}, 0); err != nil || !slices.Contains(all, other) {
 		t.Fatalf("priyanka should be a weaker match: %v, %v", all, err)
 	}
 	r.add(msg{chat: direct, sender: priya, ago: 9000 * time.Minute, body: str("oldest from priya")})
@@ -298,5 +298,45 @@ func TestChatTitlesMarkANameTheContactChose(t *testing.T) {
 	hits, err := r.searcher().Search(bg, "trust me", Filter{ChatIDs: []int64{chat}}, 1)
 	if err != nil || len(hits) != 1 || hits[0].Title != "~Kaya" || hits[0].Lines[0].Sender != "~Kaya" {
 		t.Fatalf("%+v, %v", hits, err)
+	}
+}
+
+func TestNamesMatchAsAWholeAsWordsOrInsideAsTheirScriptNeeds(t *testing.T) {
+	r := newRig(t)
+	priya, _ := r.contact("Priya", "")
+	omkar, _ := r.contact("Omkar", "")
+	ming, _ := r.contact("王小明", "")
+	s := r.searcher()
+	for name, want := range map[string]int64{"Priya Sharma": priya, "小明": ming, "omkar": omkar} {
+		if best, _, _, err := s.people(bg, []string{name}, 0); err != nil || !slices.Equal(best, []int64{want}) {
+			t.Fatalf("%q: best %v, %v", name, best, err)
+		}
+	}
+	if best, _, unknown, err := s.people(bg, []string{"Om"}, 0); err != nil || best != nil || !slices.Equal(unknown, []string{"Om"}) {
+		t.Fatalf("a short name matched part of another: %v, %q, %v", best, unknown, err)
+	}
+	om, _ := r.contact("Om Prakash", "")
+	if best, _, _, err := s.people(bg, []string{"om"}, 0); err != nil || !slices.Equal(best, []int64{om}) {
+		t.Fatalf("a short name as a whole word: %v, %v", best, err)
+	}
+}
+
+func TestPeopleNeverMatchDJHimself(t *testing.T) {
+	r := newRig(t)
+	r.exec("UPDATE contacts SET saved_name = 'Dhananjay' WHERE id = $1", r.me)
+	self := r.one("INSERT INTO chats (kind, contact_id) VALUES ('direct', $1) RETURNING id", r.me)
+	if best, _, unknown, err := r.searcher().people(bg, []string{"Dhananjay"}, self); err != nil || best != nil || len(unknown) != 1 {
+		t.Fatalf("best %v, unknown %q, %v", best, unknown, err)
+	}
+}
+
+func TestExcerptsLookForAGroupAmongPeopleAndCleanWhatTheModelWrote(t *testing.T) {
+	r := newRig(t)
+	team := r.groupNamed("Office Team")
+	r.say(team, 3000, "standup moved to ten")
+	r.pass()
+	found, err := r.excerpter().Excerpts(bg, Plan{Query: "standup\x00 moved", People: []string{"Office Team", "nobody\x00here"}}, 3)
+	if err != nil || len(found.Excerpts) == 0 || found.Excerpts[0].ChatID != team || !slices.Equal(found.Unknown, []string{"nobody here"}) {
+		t.Fatalf("got %q, unknown %q, %v", excerptTitles(found.Excerpts), found.Unknown, err)
 	}
 }
