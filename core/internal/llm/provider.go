@@ -2,6 +2,7 @@ package llm
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"strings"
@@ -42,12 +43,20 @@ const (
 )
 
 // Request asks a model for one completion. A zero Effort or MaxTokens takes the tier's default.
+// With Schema the answer is JSON that the schema allows.
 type Request struct {
 	Tier        Tier
 	Effort      Effort
 	Messages    []Message
 	MaxTokens   int
 	Temperature *float64
+	Schema      *Schema
+}
+
+// Schema is a JSON Schema an answer must follow, with a name for it.
+type Schema struct {
+	Name   string
+	Schema json.RawMessage
 }
 
 // Why a model stopped. Anything a provider reports beyond these counts as FinishStop.

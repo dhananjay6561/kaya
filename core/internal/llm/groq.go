@@ -121,6 +121,18 @@ type groqRequest struct {
 	Temperature      *float64  `json:"temperature,omitempty"`
 	ReasoningEffort  Effort    `json:"reasoning_effort"`
 	IncludeReasoning bool      `json:"include_reasoning"`
+	ResponseFormat   *format   `json:"response_format,omitempty"`
+}
+
+type format struct {
+	Type       string     `json:"type"`
+	JSONSchema jsonSchema `json:"json_schema"`
+}
+
+type jsonSchema struct {
+	Name   string          `json:"name"`
+	Strict bool            `json:"strict"`
+	Schema json.RawMessage `json:"schema"`
 }
 
 func (g *Groq) body(r Request) ([]byte, error) {
@@ -130,6 +142,9 @@ func (g *Groq) body(r Request) ([]byte, error) {
 		MaxTokens:       r.MaxTokens,
 		Temperature:     r.Temperature,
 		ReasoningEffort: r.Effort,
+	}
+	if r.Schema != nil {
+		req.ResponseFormat = &format{Type: "json_schema", JSONSchema: jsonSchema{Name: r.Schema.Name, Strict: true, Schema: r.Schema.Schema}}
 	}
 	if req.MaxTokens == 0 {
 		req.MaxTokens = defaultMaxTokens[r.Tier]
