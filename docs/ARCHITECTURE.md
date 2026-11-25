@@ -215,14 +215,18 @@ Folders appear when a phase needs them; empty placeholders are not committed.
   refuses is stored as skipped (after a probe shows the service takes requests at all), a rate limit halves the batch and waits as asked, a refused key or
   a write the database refuses stops indexing for 10 minutes, and it waits while Kaya is paused.
 - **Search.** A query is embedded as a `query` and matched against the chunks' vectors through a
-  `VectorStore` (pgvector's HNSW index, with iterative scanning so a filter never empties the
+  `VectorStore` (pgvector's HNSW index, with iterative scanning so a filter rarely empties the
   result), and its words against the messages with Postgres full text search (`simple`
   configuration, a GIN index on `messages`, which the migration adds although the gateway owns the
   table). The two rankings are fused by reciprocal rank. Filters narrow by chat, by contact (a chunk
   where they wrote, or their direct chat) and by time. Only vectors from the configured model are
-  compared. For every question in chat, up to three older exchanges with Kaya that share words with
-  it or are close in meaning (cosine distance 0.6 or less) join the context package before the
-  recent conversation, masked like it, if the token budget has room.
+  compared. For every question in chat, Kaya works out which recent exchanges the context will
+  carry, then recalls up to three older exchanges with Kaya from chunks of DJ's own chat that start
+  before the oldest of those and are within cosine distance 0.6 of the question, leaving out the
+  carried ones by id. They join the context package before the recent conversation, masked like
+  it, in a quarter of the budget set aside for them plus what the conversation leaves. The query
+  for recall has a 5-second deadline and no retries, so a slow embedding service costs a reply a
+  few seconds at most.
 - **History sync.** Each history chunk WhatsApp announces becomes a row in `history_jobs`, stored
   in the transaction that acknowledges the announcement. A single worker downloads the chunk,
   stores it in batches of at most 200 messages (a savepoint per message, so one bad message
