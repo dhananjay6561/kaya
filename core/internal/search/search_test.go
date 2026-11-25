@@ -10,6 +10,7 @@ import (
 	"time"
 
 	"github.com/dhananjay6561/kaya/core/internal/embeddings"
+	"github.com/dhananjay6561/kaya/core/internal/memory"
 )
 
 func (r *rig) searcher() *Searcher { return NewSearcher(r.core, r.fake) }
@@ -153,7 +154,23 @@ func (r *rig) exchange(self int64, minutesAgo int, question, answer string) {
 	r.exec("INSERT INTO exchanges (question_message_id, answer_wa_id) VALUES ($1, $2)", q, answerWaID)
 }
 
-func TestRecallFindsOlderExchangesBeyondTheRecentOnes(t *testing.T) {
+// recaller is a searcher whose bar suits the stub's word vectors, which are far apart unless the
+// texts share most of their words.
+func (r *rig) recaller() *Searcher {
+	s := r.searcher()
+	s.RecallDistance = 0.95
+	return s
+}
+
+func questions(exchanges []memory.Exchange) []string {
+	var out []string
+	for _, e := range exchanges {
+		out = append(out, e.Question)
+	}
+	return out
+}
+
+func TestRecallFindsOlderExchangesAndLeavesOutTheExcludedAndOtherChats(t *testing.T) {
 	r := newRig(t)
 	self := r.one("INSERT INTO chats (kind, contact_id) VALUES ('direct', $1) RETURNING id", r.me)
 	r.exchange(self, 90*24*60, "what is the wifi password", "It is sunflower42.")
@@ -162,25 +179,64 @@ func TestRecallFindsOlderExchangesBeyondTheRecentOnes(t *testing.T) {
 	r.exchange(self, 60, "wifi slow today", "Restart the router.")
 	r.say(r.direct, 300, "wifi at the office is down")
 	r.pass()
-	got, err := r.searcher().Recall(bg, "wifi", 1, 5)
+	recent := r.one("SELECT max(question_message_id) FROM exchanges")
+	got, err := r.recaller().Recall(bg, "wifi", []int64{recent}, time.Time{}, 5)
 	if err != nil {
 		t.Fatal(err)
 	}
-	var questions []string
-	for _, e := range got {
-		questions = append(questions, e.Question)
+	if q := questions(got); len(q) != 2 || !slices.Contains(q, "what is the wifi password") || !slices.Contains(q, "wifi router model") {
+		t.Fatalf("recalled %q", q)
 	}
-	want := []string{"what is the wifi password", "wifi router model"}
-	if !slices.Equal(questions, want) {
-		t.Fatalf("recalled %q, want %q (oldest first, the latest left to the conversation, other chats left out)", questions, want)
-	}
-	if got[0].Answer != "It is sunflower42." {
-		t.Fatalf("answer %q", got[0].Answer)
-	}
-	if limited, _ := r.searcher().Recall(bg, "wifi", 1, 1); len(limited) != 1 {
+	if limited, _ := r.recaller().Recall(bg, "wifi", []int64{recent}, time.Time{}, 1); len(limited) != 1 {
 		t.Fatalf("limit not kept: %d", len(limited))
 	}
-	if none, err := newRig(t).searcher().Recall(bg, "wifi", 50, 3); err != nil || none != nil {
+	if none, err := newRig(t).recaller().Recall(bg, "wifi", nil, time.Time{}, 3); err != nil || none != nil {
 		t.Fatalf("recall with no exchanges: %v, %v", none, err)
+	}
+}
+
+func TestRecallIsNotCrowdedOutByARecentConversationOnTheSameTopic(t *testing.T) {
+	r := newRig(t)
+	self := r.one("INSERT INTO chats (kind, contact_id) VALUES ('direct', $1) RETURNING id", r.me)
+	r.exchange(self, 90*24*60, "what is the wifi password", "It is sunflower42.")
+	for i := range 12 {
+		r.exchange(self, 600-i*40, fmt.Sprintf("wifi wifi question %d", i), fmt.Sprintf("wifi answer %d", i))
+	}
+	r.pass()
+	var cut time.Time
+	if err := r.admin.QueryRow(bg, "SELECT min(q.sent_at) FROM exchanges e JOIN messages q ON q.id = e.question_message_id WHERE q.body LIKE 'wifi wifi%'").Scan(&cut); err != nil {
+		t.Fatal(err)
+	}
+	got, err := r.recaller().Recall(bg, "wifi", nil, cut.Add(-time.Second), 3)
+	if err != nil || len(got) != 1 || got[0].Question != "what is the wifi password" {
+		t.Fatalf("recalled %q, %v", questions(got), err)
+	}
+}
+
+func TestRecallPrefersTheExchangeThatMatchesWithinAChunk(t *testing.T) {
+	r := newRig(t)
+	self := r.one("INSERT INTO chats (kind, contact_id) VALUES ('direct', $1) RETURNING id", r.me)
+	for i := range 4 {
+		r.exchange(self, 5000-i, fmt.Sprintf("random question %d about cricket", i), "who knows")
+	}
+	r.exchange(self, 4990, "what is the wifi password", "It is sunflower42.")
+	r.pass()
+	if got := r.one("SELECT count(*) FROM chunks"); got != 1 {
+		t.Fatalf("the exchanges are in %d chunks, want 1", got)
+	}
+	got, err := r.recaller().Recall(bg, "wifi password", nil, time.Time{}, 1)
+	if err != nil || len(got) != 1 || got[0].Question != "what is the wifi password" {
+		t.Fatalf("recalled %q, %v", questions(got), err)
+	}
+}
+
+func TestRecallHoldsEveryChunkToTheMeaningBar(t *testing.T) {
+	r := newRig(t)
+	self := r.one("INSERT INTO chats (kind, contact_id) VALUES ('direct', $1) RETURNING id", r.me)
+	r.exchange(self, 9000, "ok what is the plumber number", "It is the one on the fridge.")
+	r.pass()
+	s := r.searcher()
+	if got, err := s.Recall(bg, "ok", nil, time.Time{}, 3); err != nil || len(got) != 0 {
+		t.Fatalf("a shared word alone recalled %q, %v", questions(got), err)
 	}
 }

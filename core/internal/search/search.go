@@ -92,7 +92,7 @@ func chunkFilter(k string, n int) string {
 		AND (` + arg(1) + `::bigint[] IS NULL
 		     OR EXISTS (SELECT 1 FROM chats c WHERE c.id = ` + k + `.chat_id AND c.contact_id = ANY(` + arg(1) + `))
 		     OR EXISTS (SELECT 1 FROM message_chunks fc JOIN messages fm ON fm.id = fc.message_id
-		                WHERE fc.chunk_id = ` + k + `.id AND NOT fm.from_me AND fm.sender_id = ANY(` + arg(1) + `)))`
+		                WHERE fc.chunk_id = ` + k + `.id AND NOT fm.from_me AND fm.deleted_at IS NULL AND fm.sender_id = ANY(` + arg(1) + `)))`
 }
 
 func filterArgs(f Filter) []any {
@@ -133,11 +133,13 @@ type Searcher struct {
 	DB         *store.DB
 	Embeddings embeddings.Provider
 	Vectors    VectorStore
+	// RecallDistance is the bar Recall holds chunks to; NewSearcher sets RecallDistance.
+	RecallDistance float64
 }
 
 // NewSearcher searches the chunks in db, comparing vectors made by embedder's model.
 func NewSearcher(db *store.DB, embedder embeddings.Provider) *Searcher {
-	return &Searcher{DB: db, Embeddings: embedder, Vectors: &PgVectors{DB: db, Model: embedder.Model()}}
+	return &Searcher{DB: db, Embeddings: embedder, Vectors: &PgVectors{DB: db, Model: embedder.Model()}, RecallDistance: RecallDistance}
 }
 
 // ErrEmptyQuery refuses a search for nothing.
@@ -203,11 +205,11 @@ func (s *Searcher) Search(ctx context.Context, query string, f Filter, limit int
 		}
 		return int(a.ChunkID - b.ChunkID)
 	})
-	if len(ranked) > limit {
-		ranked = ranked[:limit]
-	}
-	out := make([]Hit, 0, len(ranked))
+	out := make([]Hit, 0, max(0, limit))
 	for _, h := range ranked {
+		if len(out) >= limit {
+			break
+		}
 		lines, err := readLines(ctx, s.DB, linesSQL+`
 			AND m.id IN (SELECT message_id FROM message_chunks WHERE chunk_id = $1)
 			ORDER BY m.sent_at, m.id`, h.ChunkID)
@@ -249,13 +251,20 @@ func (s *Searcher) words(ctx context.Context, query string, f Filter) ([]int64, 
 	return out, err
 }
 
-// RecallDistance is how far in meaning an old exchange found by meaning alone may be from the
-// question and still be recalled.
+// RecallDistance is how far in meaning a chunk may be from the question and still have its
+// exchanges recalled. The nearest chunks always come back, related or not, and even a shared word
+// like "ok" is no sign of relevance, so the bar applies to every chunk.
 const RecallDistance = 0.6
 
-// Recall finds up to limit past exchanges between DJ and Kaya that match question, leaving out
-// the latest recent ones (which the conversation memory already carries), oldest first.
-func (s *Searcher) Recall(ctx context.Context, question string, recent, limit int) ([]memory.Exchange, error) {
+// Recall finds up to limit past exchanges between DJ and Kaya that bear on question, best first.
+// It leaves out exclude (the questions' message ids, as the recent conversation already carries
+// them) and looks only at chunks that start before before, when it is set, so a recent conversation
+// on the same topic does not crowd out the older one. Within a chunk, exchanges whose own words
+// match the question come first.
+func (s *Searcher) Recall(ctx context.Context, question string, exclude []int64, before time.Time, limit int) ([]memory.Exchange, error) {
+	if limit <= 0 {
+		return nil, nil
+	}
 	var self int64
 	err := s.DB.QueryRow(ctx, `
 		SELECT q.chat_id FROM exchanges e JOIN messages q ON q.id = e.question_message_id
@@ -266,21 +275,19 @@ func (s *Searcher) Recall(ctx context.Context, question string, recent, limit in
 	if err != nil {
 		return nil, err
 	}
-	hits, err := s.Search(ctx, question, Filter{ChatIDs: []int64{self}}, 10)
+	hits, err := s.Search(ctx, question, Filter{ChatIDs: []int64{self}, To: before}, 10)
 	if err != nil {
 		return nil, err
 	}
-	rank := map[int64]int{}
+	chunkRank := map[int64]int{}
 	var ids []int64
 	for i, h := range hits {
-		// The nearest chunks always come back, related or not; an old exchange must share words
-		// with the question or be close in meaning to be worth the model's room.
-		if !h.Words && h.Distance > RecallDistance {
+		if h.Distance > s.RecallDistance {
 			continue
 		}
 		for _, l := range h.Lines {
-			if _, seen := rank[l.MessageID]; !seen {
-				rank[l.MessageID] = i
+			if _, seen := chunkRank[l.MessageID]; !seen {
+				chunkRank[l.MessageID] = i
 				ids = append(ids, l.MessageID)
 			}
 		}
@@ -290,31 +297,36 @@ func (s *Searcher) Recall(ctx context.Context, question string, recent, limit in
 	}
 	type found struct {
 		memory.Exchange
-		best int
+		chunk, exchange int
+		words           bool
+		rank            float64
 	}
 	var all []found
 	err = s.DB.InTx(ctx, func(tx pgx.Tx) error {
 		rows, err := tx.Query(ctx, `
-			SELECT q.id, a.id, q.body, a.body, q.sent_at
+			SELECT e.id, q.id, a.id, q.body, a.body, q.sent_at,
+			       to_tsvector('simple', q.body || ' ' || a.body) @@ websearch_to_tsquery('simple', $3),
+			       ts_rank(to_tsvector('simple', q.body || ' ' || a.body), websearch_to_tsquery('simple', $3))
 			FROM exchanges e
 			JOIN messages q ON q.id = e.question_message_id
 			JOIN messages a ON a.chat_id = q.chat_id AND a.wa_id = e.answer_wa_id AND a.from_me
-			WHERE (q.id = ANY($1) OR a.id = ANY($1))
+			WHERE (q.id = ANY($1) OR a.id = ANY($1)) AND NOT q.id = ANY($2)
 			  AND q.deleted_at IS NULL AND a.deleted_at IS NULL AND q.body IS NOT NULL AND a.body IS NOT NULL
-			  AND (q.edited_at IS NULL OR q.edited_at <= e.created_at)
-			  AND e.id < (SELECT coalesce(min(id), 0) FROM (SELECT id FROM exchanges ORDER BY id DESC LIMIT $2) latest)`,
-			ids, recent)
+			  AND (q.edited_at IS NULL OR q.edited_at <= e.created_at)`,
+			ids, append([]int64{}, exclude...), question)
 		if err != nil {
 			return err
 		}
 		all, err = pgx.CollectRows(rows, func(row pgx.CollectableRow) (found, error) {
 			var f found
-			var q, a int64
-			if err := row.Scan(&q, &a, &f.Question, &f.Answer, &f.At); err != nil {
+			var exchangeID, a int64
+			var rank float32
+			if err := row.Scan(&exchangeID, &f.ID, &a, &f.Question, &f.Answer, &f.At, &f.words, &rank); err != nil {
 				return f, err
 			}
 			f.Question = text.Trim(f.Question)
-			f.best = min(rankOr(rank, q), rankOr(rank, a))
+			f.chunk = min(rankOr(chunkRank, f.ID), rankOr(chunkRank, a))
+			f.exchange, f.rank = int(exchangeID), float64(rank)
 			return f, nil
 		})
 		return err
@@ -322,11 +334,26 @@ func (s *Searcher) Recall(ctx context.Context, question string, recent, limit in
 	if err != nil {
 		return nil, err
 	}
-	slices.SortStableFunc(all, func(a, b found) int { return a.best - b.best })
+	slices.SortFunc(all, func(a, b found) int {
+		switch {
+		case a.chunk != b.chunk:
+			return a.chunk - b.chunk
+		case a.words != b.words:
+			if a.words {
+				return -1
+			}
+			return 1
+		case a.rank != b.rank:
+			if a.rank > b.rank {
+				return -1
+			}
+			return 1
+		}
+		return b.exchange - a.exchange
+	})
 	if len(all) > limit {
 		all = all[:limit]
 	}
-	slices.SortFunc(all, func(a, b found) int { return a.At.Compare(b.At) })
 	out := make([]memory.Exchange, len(all))
 	for i, f := range all {
 		out[i] = f.Exchange
