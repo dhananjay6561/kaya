@@ -17,6 +17,7 @@ import (
 
 	"github.com/dhananjay6561/kaya/core/internal/config"
 	"github.com/dhananjay6561/kaya/core/internal/llm"
+	"github.com/dhananjay6561/kaya/core/internal/masking"
 	"github.com/dhananjay6561/kaya/core/internal/memory"
 )
 
@@ -74,7 +75,7 @@ func (f *fakeMask) Restore(text string) string {
 
 func (f *fakeMask) Counts() map[string]int { return f.seen }
 
-func masking(values map[string]string, calls *[]string) func() MaskSession {
+func fakeMasking(values map[string]string, calls *[]string) func() MaskSession {
 	return func() MaskSession {
 		*calls = append(*calls, "session")
 		return &fakeMask{values: values, calls: calls, seen: map[string]int{}}
@@ -272,14 +273,11 @@ func TestReplyFitsTheConversationToTheModelsBudget(t *testing.T) {
 	}
 }
 
-// The next three use a stand-in for the masking engine; G.6 runs them again with the real one.
-
 func TestReplyMasksWhatTheOwnerDidNotTypeForACloudModelAndRestoresTheAnswer(t *testing.T) {
-	var calls []string
 	cloud := cloudStub{llm.NewStub(llm.StubOptions{Reply: func(llm.Request) string { return "Call [PHONE_1] or mail [EMAIL_1]." }})}
 	c := newChat(t, Options{
 		LLM:            cloud,
-		NewMaskSession: masking(map[string]string{"9876543210": "[PHONE_1]", "rahul@x.com": "[EMAIL_1]"}, &calls),
+		NewMaskSession: realMasking,
 		History:        history(memory.Exchange{Question: "what's Rahul's number?", Answer: "Rahul is on 9876543210, mail rahul@x.com", At: now}),
 	})
 	got := reply(t, c, "my own number is 9123456780, and Rahul's again?")
@@ -298,10 +296,9 @@ func TestReplyMasksWhatTheOwnerDidNotTypeForACloudModelAndRestoresTheAnswer(t *t
 }
 
 func TestReplyHidesAnOTPInAPastAnswerWhenTheQuestionAskedForOne(t *testing.T) {
-	var calls []string
 	cloud := cloudStub{llm.NewStub(llm.StubOptions{Reply: func(llm.Request) string { return "ok" }})}
 	c := newChat(t, Options{
-		LLM: cloud, NewMaskSession: masking(map[string]string{"482913": "[OTP_1]"}, &calls),
+		LLM: cloud, NewMaskSession: realMasking,
 		History: history(memory.Exchange{Question: "what was that OTP?", Answer: "Here it is: 482913", At: now}),
 	})
 	reply(t, c, "thanks")
@@ -311,10 +308,9 @@ func TestReplyHidesAnOTPInAPastAnswerWhenTheQuestionAskedForOne(t *testing.T) {
 }
 
 func TestReplyPutsDetailsBackBeforeTheAnswerIsFormatted(t *testing.T) {
-	var calls []string
 	cloud := cloudStub{llm.NewStub(llm.StubOptions{Reply: func(llm.Request) string { return "[PHONE_1](https://wa.me/[PHONE_1])" }})}
 	c := newChat(t, Options{
-		LLM: cloud, NewMaskSession: masking(map[string]string{"9876543210": "[PHONE_1]"}, &calls),
+		LLM: cloud, NewMaskSession: realMasking,
 		History: history(memory.Exchange{Question: "number?", Answer: "9876543210", At: now}),
 	})
 	if got := reply(t, c, "link?"); strings.Contains(got.Text, "PHONE_1") {
@@ -346,7 +342,7 @@ func TestReplyMasksBeforeCountingRestoresBeforeFormattingAndKeepsOneSessionAcros
 		}
 	}}
 	c := newChat(t, Options{
-		LLM: model, NewMaskSession: masking(map[string]string{"9876543210": "[PHONE_1]"}, &calls),
+		LLM: model, NewMaskSession: fakeMasking(map[string]string{"9876543210": "[PHONE_1]"}, &calls),
 		History: history(memory.Exchange{Question: "number?", Answer: "9876543210", At: now}),
 	})
 	got := reply(t, c, "again?")
@@ -488,13 +484,7 @@ func TestReplyReturnsTheCallersReasonWhenItStops(t *testing.T) {
 	}
 }
 
-// identity is a mask session with nothing to hide, for the golden requests, whose history holds
-// no private details.
-type identity struct{}
-
-func (identity) Mask(text, _ string) string { return text }
-func (identity) Restore(text string) string { return text }
-func (identity) Counts() map[string]int     { return nil }
+func realMasking() MaskSession { return masking.NewSession() }
 
 func TestReplySendsGroqTheSameRequestAsTheTypeScriptCore(t *testing.T) {
 	raw, err := os.ReadFile("../llm/testdata/request.json")
@@ -538,7 +528,7 @@ func TestReplySendsGroqTheSameRequestAsTheTypeScriptCore(t *testing.T) {
 		}
 		chat := newChat(t, Options{
 			LLM: groq, Zone: zone(t, g.Zone), Now: func() time.Time { return g.Now },
-			NewMaskSession: func() MaskSession { return identity{} }, History: history(c.History...),
+			NewMaskSession: realMasking, History: history(c.History...),
 		})
 		got, err := chat.Reply(bg, Question{ID: "3EB0GOLDEN", Text: c.Question, SentAt: g.Now})
 		server.Close()

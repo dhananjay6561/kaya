@@ -55,7 +55,7 @@ func TestLiveGroq(t *testing.T) {
 		Now:            func() time.Time { return live.Now },
 		History:        history(c.History...),
 		DatabaseAway:   func(error) bool { return false },
-		NewMaskSession: func() MaskSession { return identity{} },
+		NewMaskSession: realMasking,
 	})
 	if err != nil {
 		t.Fatal(err)
