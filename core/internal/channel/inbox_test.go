@@ -471,7 +471,7 @@ func TestTakesTheLockSoonAfterAnotherWorkerLetsItGo(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	defer other.Close(bg)
+	defer func() { _ = other.Close(bg) }()
 	if _, err := other.Exec(bg, "SELECT pg_advisory_lock($1)", inboxLock); err != nil {
 		t.Fatal(err)
 	}
