@@ -87,6 +87,7 @@ func newRig(t *testing.T, tune ...func(*IndexerOptions)) *rig {
 	r := &rig{t: t, core: core, admin: admin, switches: &pause.Memory{}}
 	r.fake = &fakeEmbeddings{locality: llm.Local, model: "stub-words", max: 128}
 	r.me = r.one("SELECT contact_id_for('100000000000001@lid', '919000000000@s.whatsapp.net')")
+	r.exec("INSERT INTO connection_state (state, own_jid, occurred_at) VALUES ('connected', '919000000000@s.whatsapp.net', now())")
 	r.rahul = r.one("SELECT contact_id_for(NULL, '919876543210@s.whatsapp.net')")
 	r.exec("UPDATE contacts SET saved_name = 'Rahul' WHERE id = $1", r.rahul)
 	r.direct = r.one("INSERT INTO chats (kind, contact_id) VALUES ('direct', $1) RETURNING id", r.rahul)

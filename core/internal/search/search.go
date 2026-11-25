@@ -5,6 +5,7 @@ import (
 	"errors"
 	"slices"
 	"strconv"
+	"sync"
 	"time"
 
 	"github.com/jackc/pgx/v5"
@@ -23,6 +24,8 @@ type Filter struct {
 	ContactIDs []int64
 	// From and To keep chunks with a message sent between them.
 	From, To time.Time
+	// ExcludeChatIDs leaves out chunks of these chats.
+	ExcludeChatIDs []int64
 }
 
 // Scored is a chunk and how close it is to what was searched for; lower is closer.
@@ -59,7 +62,7 @@ func (p *PgVectors) Nearest(ctx context.Context, vector []float32, f Filter, lim
 			FROM chunks k
 			WHERE k.embedding IS NOT NULL AND k.model = $2 AND `+chunkFilter("k", 3)+`
 			ORDER BY k.embedding <=> $1::halfvec
-			LIMIT $7`, append([]any{vectorText(vector), p.Model}, append(filterArgs(f), limit)...)...)
+			LIMIT $8`, append([]any{vectorText(vector), p.Model}, append(filterArgs(f), limit)...)...)
 		if err != nil {
 			return err
 		}
@@ -82,11 +85,12 @@ func (p *PgVectors) Nearest(ctx context.Context, vector []float32, f Filter, lim
 	return out, err
 }
 
-// chunkFilter is the WHERE clause for a Filter on chunk alias k, with its four arguments starting
-// at $n: chat ids, contact ids, from and to.
+// chunkFilter is the WHERE clause for a Filter on chunk alias k, with its five arguments starting
+// at $n: chat ids, contact ids, from, to and chat ids to leave out.
 func chunkFilter(k string, n int) string {
 	arg := func(i int) string { return "$" + strconv.Itoa(n+i) }
 	return `(` + arg(0) + `::bigint[] IS NULL OR ` + k + `.chat_id = ANY(` + arg(0) + `))
+		AND (` + arg(4) + `::bigint[] IS NULL OR NOT ` + k + `.chat_id = ANY(` + arg(4) + `))
 		AND (` + arg(2) + `::timestamptz IS NULL OR ` + k + `.last_sent_at >= ` + arg(2) + `)
 		AND (` + arg(3) + `::timestamptz IS NULL OR ` + k + `.first_sent_at <= ` + arg(3) + `)
 		AND (` + arg(1) + `::bigint[] IS NULL
@@ -103,14 +107,17 @@ func filterArgs(f Filter) []any {
 	if len(f.ContactIDs) > 0 {
 		contacts = f.ContactIDs
 	}
-	var from, to any
+	var from, to, exclude any
 	if !f.From.IsZero() {
 		from = f.From
 	}
 	if !f.To.IsZero() {
 		to = f.To
 	}
-	return []any{chats, contacts, from, to}
+	if len(f.ExcludeChatIDs) > 0 {
+		exclude = f.ExcludeChatIDs
+	}
+	return []any{chats, contacts, from, to, exclude}
 }
 
 // Hit is one chunk a search found, with its messages, best first.
@@ -136,6 +143,9 @@ type Searcher struct {
 	// RecallDistance, ExcerptDistance and NamedDistance are the bars Recall and Excerpts hold
 	// chunks to; NewSearcher sets the constants of the same names.
 	RecallDistance, ExcerptDistance, NamedDistance float64
+
+	mu      sync.Mutex
+	queries map[string]embedded
 }
 
 // NewSearcher searches the chunks in db, comparing vectors made by embedder's model.
@@ -144,6 +154,41 @@ func NewSearcher(db *store.DB, embedder embeddings.Provider) *Searcher {
 		DB: db, Embeddings: embedder, Vectors: &PgVectors{DB: db, Model: embedder.Model()},
 		RecallDistance: RecallDistance, ExcerptDistance: ExcerptDistance, NamedDistance: NamedDistance,
 	}
+}
+
+// queryTTL is how long a query's vector, or its failure, is kept: a question's recall and excerpts
+// search with the same words, so it is embedded once, and a service that just failed is not asked
+// again within the same reply.
+const queryTTL = time.Minute
+
+type embedded struct {
+	vector []float32
+	err    error
+	at     time.Time
+}
+
+func (s *Searcher) embed(ctx context.Context, query string) ([]float32, error) {
+	s.mu.Lock()
+	if e, ok := s.queries[query]; ok && time.Since(e.at) < queryTTL {
+		s.mu.Unlock()
+		return e.vector, e.err
+	}
+	s.mu.Unlock()
+	result, err := s.Embeddings.Embed(ctx, []string{query}, embeddings.Query)
+	var vector []float32
+	if err == nil {
+		vector = result.Vectors[0]
+	}
+	if ctx.Err() != nil {
+		return nil, err
+	}
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if s.queries == nil || len(s.queries) > 64 {
+		s.queries = map[string]embedded{}
+	}
+	s.queries[query] = embedded{vector: vector, err: err, at: time.Now()}
+	return vector, err
 }
 
 // ErrEmptyQuery refuses a search for nothing.
@@ -163,11 +208,11 @@ func (s *Searcher) Search(ctx context.Context, query string, f Filter, limit int
 	if oneLine(query) == "" {
 		return nil, ErrEmptyQuery
 	}
-	embedded, err := s.Embeddings.Embed(ctx, []string{query}, embeddings.Query)
+	vector, err := s.embed(ctx, query)
 	if err != nil {
 		return nil, err
 	}
-	near, err := s.Vectors.Nearest(ctx, embedded.Vectors[0], f, candidates)
+	near, err := s.Vectors.Nearest(ctx, vector, f, candidates)
 	if err != nil {
 		return nil, err
 	}
@@ -245,7 +290,7 @@ func (s *Searcher) words(ctx context.Context, query string, f Filter) ([]int64, 
 			WHERE to_tsvector('simple', coalesce(m.body, '')) @@ q AND m.deleted_at IS NULL AND `+chunkFilter("k", 2)+`
 			GROUP BY k.id
 			ORDER BY max(ts_rank(to_tsvector('simple', coalesce(m.body, '')), q)) DESC, k.id
-			LIMIT $6`, append([]any{query}, append(filterArgs(f), candidates)...)...)
+			LIMIT $7`, append([]any{query}, append(filterArgs(f), candidates)...)...)
 		if err != nil {
 			return err
 		}
@@ -269,14 +314,8 @@ func (s *Searcher) Recall(ctx context.Context, question string, exclude []int64,
 	if limit <= 0 {
 		return nil, nil
 	}
-	var self int64
-	err := s.DB.QueryRow(ctx, `
-		SELECT q.chat_id FROM exchanges e JOIN messages q ON q.id = e.question_message_id
-		ORDER BY e.id DESC LIMIT 1`).Scan(&self)
-	if errors.Is(err, pgx.ErrNoRows) {
-		return nil, nil
-	}
-	if err != nil {
+	self, err := s.selfChat(ctx)
+	if err != nil || self == 0 {
 		return nil, err
 	}
 	hits, err := s.Search(ctx, question, Filter{ChatIDs: []int64{self}, To: before}, 10)
