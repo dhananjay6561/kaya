@@ -1,8 +1,0 @@
-*
-!core-go
-!contracts
-!kit
-core-go/bin
-**/*.env
-**/.env
-core-go/**/testdata

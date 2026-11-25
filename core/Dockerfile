@@ -1,32 +1,16 @@
-FROM node:24.22.3-trixie-slim@sha256:af02d57b57719b9657a45199a79264a9437940cd55b3c7b3fc99615654f124a0 AS build
-WORKDIR /app
-COPY package.json package-lock.json ./
-COPY core/package.json core/
-COPY contracts/package.json contracts/
-RUN npm ci --ignore-scripts
-COPY tsconfig.base.json ./
-COPY core/tsconfig.json core/
-COPY core/src core/src
-RUN npm run build -w @kaya/core
-
-FROM node:24.22.3-trixie-slim@sha256:af02d57b57719b9657a45199a79264a9437940cd55b3c7b3fc99615654f124a0 AS deps
-WORKDIR /app
-COPY package.json package-lock.json ./
-COPY core/package.json core/
-COPY contracts/package.json contracts/
-RUN npm ci --omit=dev --ignore-scripts
-
-FROM gcr.io/distroless/nodejs24-debian13:nonroot@sha256:6abfcb367ebc291572c774c1592a986be2ab26a2486f73093401327495a5962a
-RUN ["/nodejs/bin/node", "-e", "if (process.version !== 'v24.22.3') { console.error('runtime node ' + process.version + ' does not match the build stage v24.22.3'); process.exit(1) }"]
-WORKDIR /app
+FROM golang:1.26.11-alpine3.24@sha256:ecb67f987aa1a57794c91d19ade7ae0209f2f0f5496aaef9e6ae85ddf92d02ab AS build
+WORKDIR /src
+COPY contracts/ contracts/
+COPY kit/ kit/
+COPY core/go.mod core/go.sum core/
+WORKDIR /src/core
+RUN go mod download
+COPY core/ .
 ARG VERSION=dev
-ENV NODE_ENV=production KAYA_VERSION=${VERSION}
-COPY --from=deps /app/node_modules node_modules
-COPY contracts/package.json contracts/
-COPY contracts/schemas contracts/schemas
-COPY --from=build /app/core/package.json core/
-COPY --from=build /app/core/dist core/dist
-WORKDIR /app/core
+RUN CGO_ENABLED=0 go build -trimpath -ldflags "-s -w -X main.version=${VERSION}" -o /out/core ./cmd/core
+
+FROM gcr.io/distroless/static-debian13:nonroot@sha256:aafe993665bf6200db38a02c11a9351e782a84b6a45e7f33b6695638c88e3931
+COPY --from=build /out/core /core
 USER nonroot:nonroot
 EXPOSE 3000
-CMD ["dist/index.js"]
+ENTRYPOINT ["/core"]
