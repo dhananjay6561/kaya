@@ -203,7 +203,8 @@ Folders appear when a phase needs them; empty placeholders are not committed.
 - **Search index.** One worker in core, under its own advisory lock, groups text messages (and
   captions and poll questions) of one chat sent within 10 minutes into chunks of up to 30 messages
   or 1,500 characters, once they are 10 minutes old by when they were sent and when they were
-  stored, and once the chat's conversation has paused. Each chunk is written as the chat's name,
+  stored, and once the chat's conversation has paused. It reads chat by chat, oldest waiting
+  messages first, so a chat that is still talking never holds up the history behind it. Each chunk is written as the chat's name,
   the day and `time sender: text` lines, masked for a cloud provider (with the messages before it
   as context, and code-shaped numbers masked whenever an OTP, code or PIN is mentioned), embedded, and stored with a hash of its unmasked text and the model's name;
   the text itself is never stored again. `message_chunks` keeps the `updated_at` each message was
