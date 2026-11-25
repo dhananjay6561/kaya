@@ -227,8 +227,9 @@ SELECT m.id, m.chat_id, m.sent_at, m.updated_at,
                    WHEN 'document' THEN '(document) ' WHEN 'poll' THEN '(poll) ' ELSE '' END || m.body,
        CASE WHEN m.from_me AND EXISTS (SELECT 1 FROM exchanges e WHERE e.answer_wa_id = m.wa_id) THEN 'Kaya'
             WHEN m.from_me THEN 'Me'
-            ELSE coalesce(nullif(c.saved_name, ''), nullif(c.first_name, ''), nullif(c.push_name, ''),
-                          nullif(c.business_name, ''), '+' || nullif(split_part(c.pn, '@', 1), ''), 'Someone') END,
+            ELSE (SELECT CASE WHEN lower(n) IN ('me', 'kaya') THEN '~' || n ELSE n END FROM (
+                    SELECT coalesce(nullif(c.saved_name, ''), nullif(c.first_name, ''), '~' || nullif(c.push_name, ''),
+                                    '~' || nullif(c.business_name, ''), '+' || nullif(split_part(c.pn, '@', 1), ''), 'Someone') AS n) named) END,
        coalesce(nullif(ch.name, ''), nullif(cc.saved_name, ''), nullif(cc.first_name, ''), nullif(cc.push_name, ''),
                 nullif(cc.business_name, ''), '+' || nullif(split_part(cc.pn, '@', 1), ''), 'a chat')
 FROM messages m
