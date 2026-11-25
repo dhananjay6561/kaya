@@ -534,8 +534,9 @@ If the gateway keeps reconnecting (`Keepalive timed out` in `make logs`) or Kaya
 machine sends bigger ones, which stalls large WhatsApp replies (common on PPPoE broadband, which
 carries 1492 bytes while Wi-Fi and Ethernet default to 1500). It prints the fix for your system.
 TCP MSS clamping on the router fixes every device at once. On macOS, Docker Desktop opens container
-connections from the host, so the host's MTU is enough. On Linux, containers sit on Docker's own
-bridge networks, so also set Docker's MTU in `/etc/docker/daemon.json` (Docker 24 or newer):
+connections from the host, so the host's MTU is enough (a VM-based setup such as Colima may need its
+VM's MTU set too). On Linux, containers sit on Docker's own bridge networks, which the check also
+reads, so also set Docker's MTU in `/etc/docker/daemon.json` (Docker 24 or newer):
 
 ```json
 {"mtu": 1492, "default-network-opts": {"bridge": {"com.docker.network.driver.mtu": "1492"}}}
