@@ -7,14 +7,16 @@ Kaya is a self-hosted, privacy-first personal AI agent that lives in WhatsApp. I
 WhatsApp account as a linked device, keeps your chats in a Postgres database with pgvector on a
 machine you own, and is being built to answer questions about your chats, search the web, make
 documents, run scheduled jobs and act for you, always after you confirm. The WhatsApp gateway is
-written in Go, the agent in TypeScript, and the whole stack runs with Docker Compose. Your chats and
+written in Go, the agent in TypeScript (being rewritten in Go), and the whole stack runs with Docker
+Compose. Your chats and
 your WhatsApp session stay in your own database; only masked, relevant slices go to a cloud model
 when a task needs one.
 
-> **Status: early development.** The foundation, the service contracts, WhatsApp pairing, message
-> and history storage and media download are built; the WhatsApp parts await a check on a real
-> phone. The assistant features are on the roadmap and do not work yet. See
-> [Project status and roadmap](#project-status-and-roadmap).
+> **Status: early development.** The WhatsApp side (pairing, message and history storage, media,
+> sending) and the command channel are built and checked on a real phone. In your own chat Kaya
+> already answers through Groq, remembers your conversation with it, and masks private details
+> before anything reaches the cloud. Answers from your other chats, tools and acting for you are on
+> the roadmap. See [Project status and roadmap](#project-status-and-roadmap).
 
 ## Contents
 
@@ -139,6 +141,8 @@ Most of the enforcement arrives with the agent stages. Some of it is already in 
   and expires within 24 hours. The gateway is the last gate before the WhatsApp socket.
 - Events between services carry row ids, never message text, so queues and logs never hold chat
   content.
+- Masking runs on everything sent to Groq that you did not type yourself, today Kaya's own past
+  answers, and only placeholders and per-kind counts ever appear in logs.
 - The gateway container gets only the settings it needs and never sees API keys. WhatsApp addresses
   and raw protocol messages are masked in its logs.
 
@@ -154,7 +158,7 @@ language with the best libraries for it, and they talk only through versioned co
 | Service | Language | Owns |
 |---|---|---|
 | `gateway` | Go (whatsmeow) | The WhatsApp connection: pairing, session, receiving and sending. Knows nothing about the agent. |
-| `core` | TypeScript (Node 24) | The agent: commands, LLM calls, tools, safety rules, confirmations, scheduler |
+| `core` | TypeScript (Node 24), moving to Go (`core-go/`) | The agent: commands, LLM calls, tools, safety rules, confirmations, scheduler |
 | `db` | Postgres 18 + pgvector | All shared data, including the WhatsApp session |
 | `migrate` | dbmate | Applies `db/migrations/` once before the services start |
 
@@ -167,7 +171,7 @@ flowchart LR
 
     subgraph host["Your machine, Docker Compose"]
         gateway["gateway<br/>Go, whatsmeow"]
-        core["core<br/>TypeScript agent"]
+        core["core<br/>agent, TypeScript, moving to Go"]
         db[("db<br/>Postgres 18, pgvector")]
         migrate["migrate<br/>dbmate, one-shot"]
         whisper["whisper<br/>voice notes"]
@@ -182,9 +186,9 @@ flowchart LR
     gateway -->|"WhatsApp session"| db
     core -->|"SQL"| db
     gateway -->|"chats, events outbox"| db
-    db -.->|"events, read by core from 1.6"| core
-    core -.->|"send requests via Postgres outbox"| gateway
-    core -.-> llm
+    db -->|"events, in order"| core
+    core -->|"send requests via Postgres outbox"| gateway
+    core -->|"masked context"| llm
     core -.-> whisper
     core -.-> searxng
     core -.-> docs
@@ -192,12 +196,12 @@ flowchart LR
     core -.-> voice
 
     classDef planned stroke-dasharray: 5 5
-    class llm,whisper,searxng,docs,browser,voice planned
+    class whisper,searxng,docs,browser,voice planned
 ```
 
 *Figure 1. System architecture. Solid boxes and lines are built today: the gateway, core, Postgres,
-the migration step, and the gateway writing chats and events. Dashed boxes and lines are planned:
-core consuming events, the send-request queue, the LLM provider, and the whisper, search, docs,
+the migration step, events from the gateway to core, send requests from core to the gateway, and
+core asking Groq with masked context. Dashed boxes and lines are planned: the whisper, search, docs,
 browser and voice services.*
 
 ### How the gateway and core talk
@@ -208,9 +212,8 @@ transaction as the data it describes and sends `NOTIFY` as a wake-up, and exactl
 the rows in order. Delivery is at least once, so every handler is idempotent, and a message is never
 sent twice.
 
-The contracts, both validators and the events table exist today, and the gateway writes events as
-it stores messages. Core starts reading them, and the send-requests table arrives, with the send
-API (phase 1.6).
+Both directions are built: the gateway writes an event as it stores each message, core drains them
+in order, and everything Kaya says goes out as a send request the gateway checks and sends.
 
 ```mermaid
 sequenceDiagram
@@ -323,6 +326,69 @@ arrive before the message it targets.*
 
 A media message also has a `media` row (type, size, duration and whether the file is downloaded).
 
+Core keeps its own tables next to the chat tables. They point at messages by id but have no foreign
+keys to them, because the chat tables belong to the gateway.
+
+```mermaid
+erDiagram
+    messages ||..o| commands : "is the command, no FK"
+    messages ||..o| exchanges : "is the question, no FK"
+    messages ||..o| exchanges : "is the answer, by wa_id"
+    send_requests ||..o| messages : "becomes, by wa_id"
+
+    commands {
+        bigint id PK
+        bigint message_id UK "the message DJ typed"
+        text wa_id
+        timestamptz sent_at
+        text state "pending, done or failed"
+        boolean urgent "slash commands run first"
+        int attempts
+        text error "a short code"
+        timestamptz created_at
+        timestamptz finished_at
+    }
+    exchanges {
+        bigint id PK
+        bigint question_message_id UK
+        text answer_wa_id "Kaya's answer"
+        timestamptz created_at
+    }
+    pause_state {
+        boolean only_row PK "always one row"
+        timestamptz paused_at "null while running"
+        text changed_by
+        timestamptz changed_at
+    }
+    gateway_events {
+        bigint seq PK
+        uuid id UK
+        text type "connection.state, message.stored, history.synced, send.result"
+        jsonb payload
+        text state "pending, handled or dead"
+        text error
+        timestamptz created_at
+        timestamptz finished_at
+    }
+    send_requests {
+        bigint seq PK
+        uuid id UK
+        jsonb payload
+        timestamptz expires_at
+        text state "pending, sending, sent or failed"
+        text wa_id UK "chosen before sending"
+        text error
+        timestamptz created_at
+        timestamptz finished_at
+    }
+```
+
+*Figure 4. Core's tables and the two outboxes. `commands` is the inbox of what DJ typed in his own
+chat; finished rows are deleted after 30 days. `exchanges` is the conversation memory, one row per
+question and answer, kept for good. `pause_state` holds `/pause`. `gateway_events` and
+`send_requests` are the queues between the services; handled and finished rows are deleted after 7
+days.*
+
 A person is one `contacts` row however WhatsApp addresses them. The gateway resolves every address
 through `contact_id_for()`, which merges two rows (with their chats, messages and reactions) once a
 LID and a phone number turn out to be the same person. Edits and revokes update the message they
@@ -348,7 +414,8 @@ kaya/
 │   └── src/            config, contracts, modules, providers (llm, channel, telephony), lib
 ├── core-go/            the Go agent that replaces core/ (its own Go module)
 │   ├── cmd/core/       main package: serve, healthcheck
-│   └── internal/       config, and one package per feature as it is ported
+│   └── internal/       config, gateway (events), channel (inbox, sends), commands, pause, status,
+│                       llm (Groq, stub, o200k token counter), memory, chat, masking, text
 ├── gateway/            Go WhatsApp gateway (its own Go module)
 │   ├── cmd/gateway/    main package: serve, pair, media, healthcheck
 │   └── internal/       config, whatsapp, ingest, events, send, media, testdb
@@ -457,7 +524,7 @@ sequenceDiagram
     end
 ```
 
-*Figure 4. WhatsApp pairing with `make pair`. Pairing is a one-off command, not part of the running
+*Figure 5. WhatsApp pairing with `make pair`. Pairing is a one-off command, not part of the running
 service, so two clients never share one session.*
 
 The session is stored in Postgres and survives restarts. The gateway's `/health` shows the
