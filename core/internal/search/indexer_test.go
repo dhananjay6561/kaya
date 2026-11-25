@@ -208,7 +208,7 @@ func TestLeavesOutWhatIsNotTextOrNotSettledAndLabelsCaptions(t *testing.T) {
 	sticker := r.add(msg{chat: r.direct, ago: 89 * time.Minute, kind: "sticker"})
 	blank := r.add(msg{chat: r.direct, ago: 88 * time.Minute, body: str("   ")})
 	recent := r.add(msg{chat: r.direct, ago: 0, body: str("just now")})
-	fresh := r.add(msg{chat: r.direct, ago: 80 * time.Minute, body: str("history that just landed"), fresh: true})
+	fresh := r.add(msg{chat: r.direct, ago: 40 * time.Minute, body: str("history that just landed"), fresh: true})
 	photo := r.add(msg{chat: r.direct, ago: 87 * time.Minute, kind: "image", body: str("beach pic")})
 	r.pass()
 	for name, id := range map[string]int64{"deleted": deleted, "sticker": sticker, "blank": blank, "recent": recent, "fresh": fresh} {
@@ -503,5 +503,91 @@ func TestTellsAWriteTheDatabaseWillNeverTakeFromAPassingFailure(t *testing.T) {
 	}
 	if writeRefused(errors.New("plain")) {
 		t.Error("a plain error counted as refused")
+	}
+}
+
+func TestWaitsForABusyConversationToPauseBeforeChunkingIt(t *testing.T) {
+	r := newRig(t)
+	a := r.say(r.direct, 25, "are you up")
+	b := r.say(r.direct, 18, "yes")
+	still := r.add(msg{chat: r.direct, ago: 12 * time.Minute, body: str("coming?"), fresh: true})
+	if n := r.pass(); n != 0 || r.indexed(a) {
+		t.Fatalf("a conversation still going on was chunked (%d)", n)
+	}
+	r.exec("UPDATE messages SET created_at = now() - interval '1 hour' WHERE id = $1", still)
+	if n := r.pass(); n != 3 || !r.indexed(b) || r.count("SELECT 1 FROM chunks") != 1 {
+		t.Fatalf("indexed %d into %d chunks", n, r.count("SELECT 1 FROM chunks"))
+	}
+}
+
+func TestMasksACodeWhoseRequestWasInAnEarlierChunk(t *testing.T) {
+	r := newRig(t)
+	r.fake.locality = llm.Cloud
+	r.say(r.direct, 120, "OTP bhej jaldi")
+	r.pass()
+	r.say(r.direct, 90, "ye lo 482913")
+	r.pass()
+	if got := strings.Join(r.fake.texts(), "|"); strings.Contains(got, "482913") || !strings.Contains(got, "ye lo [OTP_1]") {
+		t.Fatalf("sent %q", got)
+	}
+}
+
+func TestDoesNotSkipEverythingWhenTheServiceRefusesEveryRequest(t *testing.T) {
+	r := newRig(t)
+	for i := range 4 {
+		chat := r.one("INSERT INTO chats (kind, jid, name) VALUES ('group', $1, 'g') RETURNING id", fmt.Sprintf("12036300000000030%d@g.us", i))
+		r.say(chat, 90, "hi")
+	}
+	r.fake.fail = func([]string) error {
+		return &embeddings.Error{Provider: "fake", Code: embeddings.Rejected, Status: 400}
+	}
+	if err := r.ix.lock.Hold(bg); err != nil {
+		t.Fatal(err)
+	}
+	_, err := r.ix.pass(bg)
+	var e *embeddings.Error
+	if !errors.As(err, &e) || e.Code != embeddings.Misconfigured || r.count("SELECT 1 FROM chunks") != 0 {
+		t.Fatalf("err %v, %d chunks", err, r.count("SELECT 1 FROM chunks"))
+	}
+}
+
+func TestCountsSkippedMessagesInTheProgress(t *testing.T) {
+	r := newRig(t)
+	r.say(r.direct, 90, "poison")
+	r.say(r.group, 90, "fine")
+	r.fake.fail = func(texts []string) error {
+		if slices.ContainsFunc(texts, func(s string) bool { return strings.Contains(s, "poison") }) {
+			return &embeddings.Error{Provider: "fake", Code: embeddings.Rejected, Status: 400}
+		}
+		return nil
+	}
+	r.pass()
+	if p, err := r.ix.Progress(bg); err != nil || p != (Progress{Indexed: 2, Skipped: 1, Total: 2}) {
+		t.Fatalf("progress %+v, %v", p, err)
+	}
+}
+
+func TestFollowsARealContactMerge(t *testing.T) {
+	r := newRig(t)
+	byLID := r.one("SELECT contact_id_for('100000000000099@lid', NULL)")
+	lidChat := r.one("INSERT INTO chats (kind, contact_id) VALUES ('direct', $1) RETURNING id", byLID)
+	a := r.add(msg{chat: lidChat, sender: byLID, ago: 90 * time.Minute, body: str("hello from the lid")})
+	r.pass()
+	if !r.indexed(a) {
+		t.Fatal("not indexed before the merge")
+	}
+	r.one("SELECT contact_id_for('100000000000099@lid', '919876543210@s.whatsapp.net')")
+	r.pass()
+	var chat, chunkChat int64
+	if err := r.admin.QueryRow(bg, `SELECT m.chat_id, k.chat_id FROM messages m
+		JOIN message_chunks mc ON mc.message_id = m.id JOIN chunks k ON k.id = mc.chunk_id
+		WHERE m.body = 'hello from the lid'`).Scan(&chat, &chunkChat); err != nil {
+		t.Fatalf("the merged message is not indexed: %v", err)
+	}
+	if chat != r.direct || chunkChat != chat {
+		t.Fatalf("message in chat %d, its chunk in %d, want %d", chat, chunkChat, r.direct)
+	}
+	if r.count("SELECT 1 FROM message_chunks mc LEFT JOIN messages m ON m.id = mc.message_id WHERE m.id IS NULL") != 0 {
+		t.Fatal("a merged-away message is still in the index")
 	}
 }

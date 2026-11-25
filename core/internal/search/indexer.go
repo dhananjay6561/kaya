@@ -48,9 +48,11 @@ type IndexerOptions struct {
 	MaxTokens int
 }
 
-// Progress is how much of the chat history is searchable.
+// Progress is how much of the chat history is searchable. Skipped counts messages in chunks the
+// embedding service would not take; they are in Indexed too.
 type Progress struct {
 	Indexed int
+	Skipped int
 	Total   int
 }
 
@@ -64,6 +66,8 @@ type Indexer struct {
 	// batch is how many chunks one embedding call carries; it halves after a rate limit and grows
 	// back after each call that goes through.
 	batch int
+	// probed is set once a pass has checked that the service takes requests at all.
+	probed bool
 
 	mu      sync.Mutex
 	cancel  context.CancelFunc
@@ -180,8 +184,8 @@ func (ix *Indexer) run(ctx context.Context) {
 		case errors.Is(err, store.ErrLockBusy):
 			ix.sleep(ctx, delay)
 			delay = min(delay*2, ix.o.RetryMax)
-		case errors.As(err, &refused) && refused.Code == embeddings.Auth:
-			ix.o.Logger.Error("the embedding service refused the key; indexing waits", "error_code", refused.Code, "status", refused.Status)
+		case errors.As(err, &refused) && (refused.Code == embeddings.Auth || refused.Code == embeddings.Misconfigured):
+			ix.o.Logger.Error("the embedding service refused the key or the request; indexing waits", "error_code", refused.Code, "status", refused.Status)
 			ix.sleep(ctx, ix.o.Refused)
 		case writeRefused(err):
 			ix.o.Logger.Error("the database refused the index; indexing waits", logging.Err(err))
@@ -193,7 +197,7 @@ func (ix *Indexer) run(ctx context.Context) {
 			failing = true
 			wait := delay
 			if errors.As(err, &refused) && refused.RetryAfter != nil {
-				wait = max(wait, *refused.RetryAfter)
+				wait = min(max(wait, *refused.RetryAfter), ix.o.Refused)
 			}
 			ix.sleep(ctx, wait)
 			delay = min(delay*2, ix.o.RetryMax)
@@ -289,8 +293,12 @@ func (ix *Indexer) pass(ctx context.Context) (int, error) {
 	// the chunk is made again with it.
 	if _, err := ix.o.DB.Exec(ctx, `
 		DELETE FROM chunks WHERE id IN (
-			SELECT DISTINCT k.id FROM chunks k JOIN messages m ON m.chat_id = k.chat_id
-			WHERE m.sent_at > k.first_sent_at AND m.sent_at < k.last_sent_at AND `+eligible+settled+`
+			SELECT k.id FROM messages m
+			CROSS JOIN LATERAL (
+				SELECT id, last_sent_at FROM chunks k
+				WHERE k.chat_id = m.chat_id AND k.first_sent_at < m.sent_at
+				ORDER BY k.first_sent_at DESC LIMIT 1) k
+			WHERE k.last_sent_at > m.sent_at AND `+eligible+settled+`
 			LIMIT 200)`, settle); err != nil {
 		return 0, err
 	}
@@ -310,10 +318,17 @@ func (ix *Indexer) pass(ctx context.Context) (int, error) {
 			rows = rows[:ix.o.BatchMessages]
 		}
 	}
-	items := ix.chunk(rows)
+	items, err := ix.chunk(ctx, rows)
+	if err != nil {
+		return 0, err
+	}
+	ix.probed = false
 	indexed := 0
 	for len(items) > 0 {
 		if err := ix.paused(ctx); err != nil {
+			return indexed, err
+		}
+		if err := ix.lock.Hold(ctx); err != nil {
 			return indexed, err
 		}
 		n := ix.batchSize(items)
@@ -328,8 +343,9 @@ func (ix *Indexer) pass(ctx context.Context) (int, error) {
 }
 
 // chunk groups rows (ordered by chat, then time) into chunks, masked when the embeddings leave
-// the machine.
-func (ix *Indexer) chunk(rows []titledLine) []pending {
+// the machine. A chat's last group waits while its conversation may still go on, so a chat that is
+// busy is not cut into one chunk per pass.
+func (ix *Indexer) chunk(ctx context.Context, rows []titledLine) ([]pending, error) {
 	var out []pending
 	for start := 0; start < len(rows); {
 		end := start
@@ -340,19 +356,76 @@ func (ix *Indexer) chunk(rows []titledLine) []pending {
 		for _, r := range rows[start:end] {
 			lines = append(lines, r.Line)
 		}
-		title := rows[start].title
-		for _, group := range Group(lines, ix.o.Shape) {
-			p := pending{chatID: rows[start].ChatID, lines: group}
-			plain := Render(title, group, ix.o.Zone, ix.o.Shape, nil)
+		title, chatID := rows[start].title, rows[start].ChatID
+		groups := Group(lines, ix.o.Shape)
+		closed, err := ix.closed(ctx, groups[len(groups)-1])
+		if err != nil {
+			return nil, err
+		}
+		if !closed {
+			groups = groups[:len(groups)-1]
+		}
+		before, err := ix.before(ctx, chatID, lines[0].SentAt)
+		if err != nil {
+			return nil, err
+		}
+		for _, group := range groups {
+			p := pending{chatID: chatID, lines: group}
+			plain := Render(title, group, ix.o.Zone, ix.o.Shape, nil, "")
 			p.hash, p.text = Hash(plain), plain
 			if ix.o.Embeddings.Locality() == llm.Cloud {
-				p.text = Render(title, group, ix.o.Zone, ix.o.Shape, masking.NewSession())
+				p.text = Render(title, group, ix.o.Zone, ix.o.Shape, masking.NewSession(), before)
 			}
 			out = append(out, p)
+			before = ""
+			for _, l := range group[max(0, len(group)-3):] {
+				before += l.Text + "\n"
+			}
 		}
 		start = end
 	}
-	return out
+	return out, nil
+}
+
+// closed reports whether nothing more can join a chat's last group: it is full, or the chat's next
+// message is more than the gap later, already indexed, or does not exist.
+func (ix *Indexer) closed(ctx context.Context, group []Line) (bool, error) {
+	last := group[len(group)-1]
+	size := 0
+	for _, l := range group {
+		size += min(utf8.RuneCountInString(l.Text), ix.o.Shape.MaxChars) + utf8.RuneCountInString(l.Sender) + 8
+	}
+	if len(group) >= ix.o.Shape.MaxLines {
+		return true, nil
+	}
+	var sentAt time.Time
+	var length int
+	var indexed bool
+	err := ix.o.DB.QueryRow(ctx, `
+		SELECT m.sent_at, length(m.body), EXISTS (SELECT 1 FROM message_chunks mc WHERE mc.message_id = m.id)
+		FROM messages m WHERE m.chat_id = $1 AND m.sent_at > $2 AND `+eligible+`
+		ORDER BY m.sent_at, m.id LIMIT 1`, last.ChatID, last.SentAt).Scan(&sentAt, &length, &indexed)
+	if errors.Is(err, pgx.ErrNoRows) {
+		return true, nil
+	}
+	if err != nil {
+		return false, err
+	}
+	return indexed || sentAt.Sub(last.SentAt) > ix.o.Shape.Gap || size+min(length, ix.o.Shape.MaxChars)+8 > ix.o.Shape.MaxChars, nil
+}
+
+// before is the text of the few messages just before at in a chat, so a code asked for there masks
+// the number that answers it here.
+func (ix *Indexer) before(ctx context.Context, chatID int64, at time.Time) (string, error) {
+	var text *string
+	err := ix.o.DB.QueryRow(ctx, `
+		SELECT string_agg(body, E'\n') FROM (
+			SELECT m.body FROM messages m WHERE m.chat_id = $1 AND m.sent_at < $2 AND `+eligible+`
+			ORDER BY m.sent_at DESC LIMIT 3) recent`, chatID, at).Scan(&text)
+	if err != nil || text == nil {
+		return "", err
+	}
+	return *text, nil
 }
 
 // batchSize is how many of items fit one embedding call: at most the current batch size and the
@@ -388,6 +461,18 @@ func (ix *Indexer) embed(ctx context.Context, items []pending) (int, error) {
 		ix.batch = max(1, ix.batch/2)
 		return 0, err
 	case errors.As(err, &failed) && failed.Code == embeddings.Rejected:
+		if !ix.probed {
+			// Find out once per pass whether the service refuses this chunk or every request:
+			// a wrong model or setting must not mark the whole history as skipped.
+			ix.probed = true
+			if _, probe := ix.o.Embeddings.Embed(ctx, []string{"ok"}, embeddings.Document); probe != nil {
+				var refused *embeddings.Error
+				if errors.As(probe, &refused) && refused.Code == embeddings.Rejected {
+					return 0, &embeddings.Error{Provider: refused.Provider, Code: embeddings.Misconfigured, Status: refused.Status}
+				}
+				return 0, probe
+			}
+		}
 		if len(items) == 1 {
 			ix.o.Logger.Warn("the embedding service would not take a chunk; it is skipped", "chat_id", items[0].chatID, "status", failed.Status)
 			return ix.store(ctx, items, nil, failed.Code)
@@ -522,7 +607,7 @@ func (ix *Indexer) recheckOne(ctx context.Context, id int64) error {
 			same = same && r.ChatID == rows[0].ChatID
 		}
 		same = same && len(Group(lines, ix.o.Shape)) == 1 &&
-			Hash(Render(rows[0].title, lines, ix.o.Zone, ix.o.Shape, nil)) == hash
+			Hash(Render(rows[0].title, lines, ix.o.Zone, ix.o.Shape, nil, "")) == hash
 	}
 	if !same {
 		_, err := ix.o.DB.Exec(ctx, "DELETE FROM chunks WHERE id = $1", id)
@@ -530,10 +615,18 @@ func (ix *Indexer) recheckOne(ctx context.Context, id int64) error {
 	}
 	// The text is the same (a reaction or a status change touched the message, or a contact merge
 	// moved the chat): keep the vector and remember what was checked.
+	read := make([]int64, len(rows))
+	updated := make([]time.Time, len(rows))
+	for i, r := range rows {
+		read[i], updated[i] = r.MessageID, r.UpdatedAt
+	}
 	return ix.o.DB.InTx(ctx, func(tx pgx.Tx) error {
+		// The times as read, not as they are now: an edit that lands after the read is still
+		// noticed on the next check.
 		if _, err := tx.Exec(ctx, `
-			UPDATE message_chunks mc SET message_updated_at = m.updated_at
-			FROM messages m WHERE m.id = mc.message_id AND mc.chunk_id = $1`, id); err != nil {
+			UPDATE message_chunks mc SET message_updated_at = x.updated_at
+			FROM unnest($2::bigint[], $3::timestamptz[]) AS x(message_id, updated_at)
+			WHERE mc.message_id = x.message_id AND mc.chunk_id = $1`, id, read, updated); err != nil {
 			return err
 		}
 		_, err := tx.Exec(ctx, "UPDATE chunks SET chat_id = $2 WHERE id = $1", id, rows[0].ChatID)
@@ -546,7 +639,8 @@ func (ix *Indexer) Progress(ctx context.Context) (Progress, error) {
 	var p Progress
 	err := ix.o.DB.QueryRow(ctx, `
 		SELECT (SELECT count(*) FROM message_chunks),
-		       (SELECT count(*) FROM messages m WHERE `+eligible+`)`).Scan(&p.Indexed, &p.Total)
+		       (SELECT count(*) FROM message_chunks mc JOIN chunks k ON k.id = mc.chunk_id WHERE k.skipped IS NOT NULL),
+		       (SELECT count(*) FROM messages m WHERE `+eligible+`)`).Scan(&p.Indexed, &p.Skipped, &p.Total)
 	p.Indexed = min(p.Indexed, p.Total)
 	return p, err
 }
