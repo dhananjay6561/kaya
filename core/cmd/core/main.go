@@ -50,8 +50,11 @@ func main() {
 		case "send":
 			exitOnError(send(os.Args[2:]))
 			return
+		case "search":
+			exitOnError(searchChats(os.Args[2:]))
+			return
 		default:
-			exitOnError(fmt.Errorf("unknown command %q; the commands are healthcheck and send", os.Args[1]))
+			exitOnError(fmt.Errorf("unknown command %q; the commands are healthcheck, send and search", os.Args[1]))
 		}
 	}
 
@@ -136,12 +139,16 @@ func run(cfg config.Config, logger *slog.Logger) error {
 	}
 	switches := pause.NewStored(db)
 	indexer := search.NewIndexer(search.IndexerOptions{DB: db, Embeddings: embedder, Pause: switches, Logger: logger, Zone: zone})
+	searcher := search.NewSearcher(db, embedder)
 	replies, err := chat.New(chat.Options{
 		LLM:    model,
 		Logger: logger,
 		Zone:   zone,
 		History: func(ctx context.Context, _ chat.Question) ([]memory.Exchange, error) {
 			return memory.ReadConversation(ctx, db, 0)
+		},
+		Recall: func(ctx context.Context, q chat.Question) ([]memory.Exchange, error) {
+			return searcher.Recall(ctx, q.Text, memory.DefaultExchanges, 3)
 		},
 		DatabaseAway:   databaseAway,
 		NewMaskSession: func() chat.MaskSession { return masking.NewSession() },
@@ -254,6 +261,55 @@ func send(args []string) error {
 		return err
 	}
 	fmt.Printf("sent to your own chat at %s (message %s)\n", sent.SentAt.UTC().Format(time.RFC3339Nano), sent.ID)
+	return nil
+}
+
+// searchChats prints what a search of the chats finds, for checking the index from a terminal.
+func searchChats(args []string) error {
+	query := strings.TrimSpace(strings.Join(args, " "))
+	if query == "" {
+		return errors.New(`usage: core search "what to look for"`)
+	}
+	cfg, err := loadConfig()
+	if err != nil {
+		return err
+	}
+	zone, err := time.LoadLocation(cfg.TimeZone)
+	if err != nil {
+		return err
+	}
+	embedder, err := embeddings.New(cfg.Embeddings)
+	if err != nil {
+		return err
+	}
+	db, err := store.Open(cfg.DatabaseURL, store.WithAppName("kaya-core-search"))
+	if err != nil {
+		return err
+	}
+	defer db.Close()
+	ctx, cancel := context.WithTimeout(context.Background(), time.Minute)
+	defer cancel()
+	hits, err := search.NewSearcher(db, embedder).Search(ctx, query, search.Filter{}, 8)
+	if err != nil {
+		return err
+	}
+	if len(hits) == 0 {
+		fmt.Println("Nothing found.")
+	}
+	for i, h := range hits {
+		var how []string
+		if h.Meaning {
+			how = append(how, fmt.Sprintf("meaning %.2f", 1-h.Distance))
+		}
+		if h.Words {
+			how = append(how, "words")
+		}
+		first := h.Lines[0].SentAt.In(zone)
+		fmt.Printf("\n%d. %s, %s (%s)\n", i+1, h.Title, first.Format("2 Jan 2006 15:04"), strings.Join(how, ", "))
+		for _, l := range h.Lines {
+			fmt.Printf("   %s %s: %s\n", l.SentAt.In(zone).Format("15:04"), l.Sender, l.Text)
+		}
+	}
 	return nil
 }
 
