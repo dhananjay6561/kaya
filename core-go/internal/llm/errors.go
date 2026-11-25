@@ -21,11 +21,12 @@ const (
 // Error says why a model could not answer. It never carries the prompt, the answer or the
 // provider's own message, only a code and safe details.
 type Error struct {
-	Provider   string
-	Code       string
-	Status     int
-	Detail     string
-	RetryAfter time.Duration
+	Provider string
+	Code     string
+	Status   int
+	Detail   string
+	// RetryAfter is how long the provider asked to wait, or nil when it did not say.
+	RetryAfter *time.Duration
 }
 
 func (e *Error) Error() string {
