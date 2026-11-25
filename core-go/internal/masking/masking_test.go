@@ -205,6 +205,26 @@ func TestReadsCaseOnlyAsJavaScriptsIFlagDid(t *testing.T) {
 	same(t, s.Restore("[ADDREſS_1] [address_1]"), "[ADDREſS_1] 12 MG Road, Gurugram 122001", "restore")
 }
 
+func TestNeverSplitsAnEmojiAtTheEdgeOfASpan(t *testing.T) {
+	for _, text := range []string{"😀" + strings.Repeat("a", 53) + " road 110001", "12 road " + strings.Repeat("a", 114) + "😀tail"} {
+		s := NewSession()
+		out := s.Mask(text, "")
+		if strings.ContainsRune(out, '\ufffd') || !strings.Contains(out, "[ADDRESS_1]") {
+			t.Errorf("Mask(%q) = %q", text, out)
+		}
+		same(t, s.Restore(out), text, "round trip")
+	}
+}
+
+func TestLowersAddressesAsJavaScriptDoes(t *testing.T) {
+	s := NewSession()
+	same(t, s.Mask("send to:\n12 İstanbul Road", ""), "send to:\n[ADDRESS_1]", "dotted capital I")
+	same(t, s.Mask("send to:\n12 istanbul road", ""), "send to:\n[ADDRESS_2]", "i̇ is not i")
+	s = NewSession()
+	s.Mask("send to:\n12 ΟΔΟΣ Road", "")
+	same(t, s.Mask("send to:\n12 οδος road", ""), "send to:\n[ADDRESS_1]", "final sigma")
+}
+
 func TestStaysFastOnLongText(t *testing.T) {
 	if raceDetector {
 		t.Skip("timing means nothing under the race detector")
@@ -220,22 +240,28 @@ func TestStaysFastOnHostileInput(t *testing.T) {
 	if raceDetector {
 		t.Skip("timing means nothing under the race detector")
 	}
-	started := time.Now()
-	for _, text := range []string{
-		"flat" + strings.Repeat(" ", 5000) + "x",
-		"Flat" + strings.Repeat("\n", 5000),
-		"house no" + strings.Repeat("\t", 5000) + "#",
-		strings.Repeat("1", 20000),
-		strings.Repeat("1 ", 10000),
-		strings.Repeat("12 road ", 5000),
-		strings.Repeat("a", 30000) + "@" + strings.Repeat("b", 30000),
-		strings.Repeat(", 122001", 3000),
-		strings.Repeat("😀", 20000) + " 122001 road",
+	for _, c := range [][2]string{
+		{"flat" + strings.Repeat(" ", 5000) + "x"},
+		{"Flat" + strings.Repeat("\n", 5000)},
+		{"house no" + strings.Repeat("\t", 5000) + "#"},
+		{strings.Repeat("1", 20000)},
+		{strings.Repeat("1 ", 10000)},
+		{strings.Repeat("12 road ", 5000)},
+		{strings.Repeat("a", 30000) + "@" + strings.Repeat("b", 30000)},
+		{strings.Repeat(", 122001", 3000)},
+		{strings.Repeat("😀", 20000) + " 122001 road"},
+		{strings.Repeat("a", 60000) + "@bb.cc"},
+		{strings.Repeat("a.", 30000) + "@bb.cc"},
+		{strings.Repeat("9876543210x", 5000) + "@ybl"},
+		{"ab@" + strings.Repeat("c", 60000) + "1"},
+		{strings.Repeat("1234 ", 1600), strings.Repeat("x", 30000)},
+		{strings.Repeat("1234 ", 12000), strings.Repeat("y", 60000)},
 	} {
-		masked(text)
-	}
-	if took := time.Since(started); took > 2*time.Second {
-		t.Fatalf("took %v", took)
+		started := time.Now()
+		NewSession().Mask(c[0], c[1])
+		if took := time.Since(started); took > time.Second {
+			t.Errorf("%.20q (%d units, %d of context): %v", c[0], len(c[0]), len(c[1]), took)
+		}
 	}
 }
 
@@ -265,6 +291,7 @@ func TestMasksLikeTheTypeScriptCore(t *testing.T) {
 		Counts   map[string]int `json:"counts"`
 		Sessions []struct {
 			Texts    []string       `json:"texts"`
+			Context  string         `json:"context"`
 			Wants    []string       `json:"wants"`
 			Probe    string         `json:"probe"`
 			Restored string         `json:"restored"`
@@ -311,7 +338,7 @@ func TestMasksLikeTheTypeScriptCore(t *testing.T) {
 	for _, c := range g.Sessions {
 		s := NewSession()
 		for i, text := range c.Texts {
-			same(t, s.Mask(text, ""), c.Wants[i], text)
+			same(t, s.Mask(text, c.Context), c.Wants[i], text)
 		}
 		same(t, s.Restore(c.Probe), c.Restored, c.Probe)
 		if !maps.Equal(s.Counts(), c.Counts) {

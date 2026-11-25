@@ -33,10 +33,13 @@ type scan struct {
 	unit  []int    // unit at each byte offset that starts a rune
 	// context is the text around this one, digits read as ASCII and ASCII letters lowered.
 	context string
-	taken   []bool
-	spans   []span
+	// contextSays caches whether the context names an OTP or an account, which every candidate asks.
+	contextSays map[*regexp.Regexp]bool
+	taken       []bool
+	spans       []span
 	// places holds, for each unit, the lengths of the address words that start there.
 	places [][]int
+	upi    *upiRuns
 }
 
 func newScan(escaped, context string) *scan {
@@ -65,6 +68,7 @@ func newScan(escaped, context string) *scan {
 		sc.unit[off] = i
 	}
 	sc.context = lowered(digitsToASCII(context))
+	sc.contextSays = map[*regexp.Regexp]bool{}
 	return sc
 }
 
@@ -100,6 +104,16 @@ func (sc *scan) slice(i, j int) string {
 // around is the text before and after a match, joined by a space, lowered for the word lists.
 func (sc *scan) around(start, end, before, after int) string {
 	return lowered(sc.slice(start-before, start) + " " + sc.slice(end, end+after))
+}
+
+// contextHas reports whether the context matches words, checking it once per mask call.
+func (sc *scan) contextHas(words *regexp.Regexp) bool {
+	has, ok := sc.contextSays[words]
+	if !ok {
+		has = words.MatchString(sc.context)
+		sc.contextSays[words] = has
+	}
+	return has
 }
 
 func (sc *scan) runeAt(i int) rune {
@@ -242,6 +256,15 @@ func (r *rule) run(sc *scan) {
 				for end > start && trailing(sc.runes[end-1]) {
 					end--
 				}
+			}
+		}
+		if end > start {
+			// A span never splits a character made of two UTF-16 units, such as an emoji.
+			if start > 0 && utf16.IsSurrogate(rune(sc.units[start])) && sc.units[start] >= 0xdc00 && sc.units[start-1] < 0xdc00 && utf16.IsSurrogate(rune(sc.units[start-1])) {
+				start--
+			}
+			if end < len(sc.units) && sc.units[end-1] >= 0xd800 && sc.units[end-1] < 0xdc00 && sc.units[end] >= 0xdc00 && sc.units[end] <= 0xdfff {
+				end++
 			}
 		}
 		if end <= start || sc.firstTaken(start, end) >= 0 ||

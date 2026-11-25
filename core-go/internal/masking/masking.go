@@ -14,6 +14,9 @@ import (
 	"strings"
 	"unicode/utf16"
 
+	"golang.org/x/text/cases"
+	"golang.org/x/text/language"
+
 	"github.com/dhananjay6561/kaya/core/internal/text"
 )
 
@@ -121,7 +124,7 @@ func normalized(kind, value string) string {
 	case Email, UPI:
 		return strings.ToLower(value)
 	case Address:
-		return collapseSpace(strings.ToLower(value))
+		return collapseSpace(cases.Lower(language.Und).String(value))
 	case PAN, IFSC, Vehicle, Passport:
 		return strings.Map(func(r rune) rune {
 			if r == '-' || text.IsSpace(r) {

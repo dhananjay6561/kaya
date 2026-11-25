@@ -61,19 +61,8 @@ const notFollowedByNumber = `(?:$|[^\d -]|[ -](?:$|\D))`
 var rules = []rule{
 	newRule(Email, `[A-Za-z0-9._%+-]+@[A-Za-z0-9-]+(?:\.[A-Za-z0-9-]+)*\.[A-Za-z]{2,}`, ""),
 	with(newRule(UPI, `[A-Za-z0-9._-]{2,}@[A-Za-z]{2,}`, ""), func(r *rule) {
-		// (?![\w-]*\.[A-Za-z]{2,})(?![A-Za-z0-9]): the domain is a whole run of letters, so only
-		// its full length can pass, and it must not go on into a dotted domain.
-		r.after = func(sc *scan, end int) bool {
-			next := sc.runeAt(end)
-			if isWord(next) && next != '_' {
-				return false
-			}
-			k := end
-			for isWord(sc.runeAt(k)) || sc.runeAt(k) == '-' {
-				k++
-			}
-			return sc.runeAt(k) != '.' || !isLetter(sc.runeAt(k+1)) || !isLetter(sc.runeAt(k+2))
-		}
+		r.candidate = upiCandidate
+		r.exactAt = upiAt
 	}),
 	with(newRule(Card, `\d(?:[ .-]?\d){12,18}`, `(?:$|\D)`), func(r *rule) {
 		r.longest = 37
@@ -123,7 +112,7 @@ var rules = []rule{
 		r.longest = 35
 		r.before = notAfterNumber(false)
 		r.accept = func(sc *scan, _ string, start, end int) bool {
-			return accountWords.MatchString(sc.around(start, end, 40, 25)) || accountWords.MatchString(sc.context)
+			return accountWords.MatchString(sc.around(start, end, 40, 25)) || sc.contextHas(accountWords)
 		}
 	}),
 	with(newRule(Address, `(?:flat|plot|house|h\.?[ \t]?no|door|shop)\.?[ \t]{0,3}(?:no\.?|number|#)?[ \t]{0,3}[:-]?[ \t]{0,3}[a-z]?-?\d+[a-z]?(?:[/-]\d+[a-z]?)?`, ""), func(r *rule) {
@@ -167,13 +156,79 @@ var rules = []rule{
 			if moneyBefore.MatchString(lowered(sc.slice(start-6, start))) {
 				return false
 			}
-			if strongOTPWords.MatchString(sc.around(start, end, 40, 40)) || strongOTPWords.MatchString(sc.context) {
+			if strongOTPWords.MatchString(sc.around(start, end, 40, 40)) || sc.contextHas(strongOTPWords) {
 				return true
 			}
 			return weakOTPBefore.MatchString(lowered(sc.slice(start-16, start))) ||
 				weakOTPAfter.MatchString(lowered(sc.slice(end, end+40)))
 		}
 	}),
+}
+
+func upiLocal(r rune) bool { return isWord(r) && r != '_' || strings.ContainsRune("._-", r) }
+
+// runEnds holds, for each unit, where the run of characters a test accepts that starts there ends.
+// It is worked out once per text, backwards, so a rule can ask it from every start in O(1).
+func runEnds(sc *scan, in func(rune) bool) []int {
+	ends := make([]int, len(sc.runes)+1)
+	ends[len(sc.runes)] = len(sc.runes)
+	for i := len(sc.runes) - 1; i >= 0; i-- {
+		ends[i] = i
+		if in(sc.runes[i]) {
+			ends[i] = ends[i+1]
+		}
+	}
+	return ends
+}
+
+type upiRuns struct{ local, letters, words []int }
+
+func (sc *scan) upiRuns() *upiRuns {
+	if sc.upi == nil {
+		sc.upi = &upiRuns{
+			local:   runEnds(sc, upiLocal),
+			letters: runEnds(sc, isLetter),
+			words:   runEnds(sc, func(r rune) bool { return isWord(r) || r == '-' }),
+		}
+	}
+	return sc.upi
+}
+
+// upiCandidate skips whole runs of id characters that are not followed by an @.
+func upiCandidate(sc *scan, _ string, p int) (int, bool) {
+	runs := sc.upiRuns()
+	for p < len(sc.runes) {
+		if !upiLocal(sc.runes[p]) {
+			p++
+			continue
+		}
+		end := runs.local[p]
+		if end-p >= 2 && sc.runeAt(end) == '@' {
+			return p, true
+		}
+		p = end
+	}
+	return 0, false
+}
+
+// upiAt is [A-Za-z0-9._-]{2,}@[A-Za-z]{2,}(?![\w-]*\.[A-Za-z]{2,})(?![A-Za-z0-9]) at start. Both
+// runs are greedy and stop only at a character they cannot take, so there is one way to match: the
+// domain is the whole run of letters after the @, and it must not go on into a dotted domain.
+func upiAt(sc *scan, start int) (int, bool) {
+	runs := sc.upiRuns()
+	at := runs.local[start]
+	if at-start < 2 || sc.runeAt(at) != '@' {
+		return 0, false
+	}
+	end := runs.letters[at+1]
+	if end-at-1 < 2 || isDigit(sc.runeAt(end)) {
+		return 0, false
+	}
+	k := runs.words[end]
+	if sc.runeAt(k) == '.' && isLetter(sc.runeAt(k+1)) && isLetter(sc.runeAt(k+2)) {
+		return 0, false
+	}
+	return end, true
 }
 
 func with(r rule, set func(r *rule)) rule {
