@@ -1,0 +1,43 @@
+{
+ "now": "2026-11-25T09:00:00Z",
+ "zone": "Asia/Kolkata",
+ "cases": [
+  {
+   "name": "english",
+   "question": "who are you and what can you do for me?",
+   "history": []
+  },
+  {
+   "name": "hinglish follow-up",
+   "question": "aur good night ko?",
+   "history": [
+    {
+     "question": "good morning ko Hindi mein kya bolte hain?",
+     "answer": "Suprabhat, ya simple bolo Shubh prabhat.",
+     "at": "2026-11-25T08:58:00Z"
+    }
+   ]
+  },
+  {
+   "name": "typo brand",
+   "question": "whats the diffrence between iphnoe 15 and samsong s24 camera",
+   "history": []
+  },
+  {
+   "name": "reminder",
+   "question": "kal subah 7 baje yaad dila dena gym jaana hai",
+   "history": []
+  },
+  {
+   "name": "long paste",
+   "question": "summarise that in one line",
+   "history": [
+    {
+     "question": "Meeting notes. We discussed the launch plan, the budget for ads, the hiring of two engineers, and who owns the onboarding emails. We discussed the launch plan, the budget for ads, the hiring of two engineers, and who owns the onboarding emails. We discussed the launch plan, the budget for ads, the hiring of two engineers, and who owns the onboarding emails. We discussed the launch plan, the budget for ads, the hiring of two engineers, and who owns the onboarding emails. We discussed the launch plan, the budget for ads, the hiring of two engineers, and who owns the onboarding emails. We discussed the launch plan, the budget for ads, the hiring of two engineers, and who owns the onboarding emails. We discussed the launch plan, the budget for ads, the hiring of two engineers, and who owns the onboarding emails. We discussed the launch plan, the budget for ads, the hiring of two engineers, and who owns the onboarding emails. We discussed the launch plan, the budget for ads, the hiring of two engineers, and who owns the onboarding emails. We discussed the launch plan, the budget for ads, the hiring of two engineers, and who owns the onboarding emails. We discussed the launch plan, the budget for ads, the hiring of two engineers, and who owns the onboarding emails. We discussed the launch plan, the budget for ads, the hiring of two engineers, and who owns the onboarding emails. We discussed the launch plan, the budget for ads, the hiring of two engineers, and who owns the onboarding emails. We discussed the launch plan, the budget for ads, the hiring of two engineers, and who owns the onboarding emails. We discussed the launch plan, the budget for ads, the hiring of two engineers, and who owns the onboarding emails. We discussed the launch plan, the budget for ads, the hiring of two engineers, and who owns the onboarding emails. We discussed the launch plan, the budget for ads, the hiring of two engineers, and who owns the onboarding emails. We discussed the launch plan, the budget for ads, the hiring of two engineers, and who owns the onboarding emails. We discussed the launch plan, the budget for ads, the hiring of two engineers, and who owns the onboarding emails. We discussed the launch plan, the budget for ads, the hiring of two engineers, and who owns the onboarding emails. We discussed the launch plan, the budget for ads, the hiring of two engineers, and who owns the onboarding emails. We discussed the launch plan, the budget for ads, the hiring of two engineers, and who owns the onboarding emails. We discussed the launch plan, the budget for ads, the hiring of two engineers, and who owns the onboarding emails. We discussed the launch plan, the budget for ads, the hiring of two engineers, and who owns the onboarding emails. We discussed the launch plan, the budget for ads, the hiring of two engineers, and who owns the onboarding emails. We discussed the launch plan, the budget for ads, the hiring of two engineers, and who owns the onboarding emails. We discussed the launch plan, the budget for ads, the hiring of two engineers, and who owns the onboarding emails. We discussed the launch plan, the budget for ads, the hiring of two engineers, and who owns the onboarding emails. We discussed the launch plan, the budget for ads, the hiring of two engineers, and who owns the onboarding emails. We discussed the launch plan, the budget for ads, the hiring of two engineers, and who owns the onboarding emails. We discussed the launch plan, the budget for ads, the hiring of two engineers, and who owns the onboarding emails. We discussed the launch plan, the budget for ads, the hiring of two engineers, and who owns the onboarding emails. We discussed the launch plan, the budget for ads, the hiring of two engineers, and who owns the onboarding emails. We discussed the launch plan, the budget for ads, the hiring of two engineers, and who owns the onboarding emails. We discussed the launch plan, the budget for ads, the hiring of two engineers, and who owns the onboarding emails. We discussed the launch plan, the budget for ads, the hiring of two engineers, and who owns the onboarding emails. We discussed the launch plan, the budget for ads, the hiring of two engineers, and who owns the onboarding emails. We discussed the launch plan, the budget for ads, the hiring of two engineers, and who owns the onboarding emails. We discussed the launch plan, the budget for ads, the hiring of two engineers, and who owns the onboarding emails. We discussed the launch plan, the budget for ads, the hiring of two engineers, and who owns the onboarding emails. We discussed the launch plan, the budget for ads, the hiring of two engineers, and who owns the onboarding emails. We discussed the launch plan, the budget for ads, the hiring of two engineers, and who owns the onboarding emails. We discussed the launch plan, the budget for ads, the hiring of two engineers, and who owns the onboarding emails. We discussed the launch plan, the budget for ads, the hiring of two engineers, and who owns the onboarding emails. We discussed the launch plan, the budget for ads, the hiring of two engineers, and who owns the onboarding emails. We discussed the launch plan, the budget for ads, the hiring of two engineers, and who owns the onboarding emails. We discussed the launch plan, the budget for ads, the hiring of two engineers, and who owns the onboarding emails. We discussed the launch plan, the budget for ads, the hiring of two engineers, and who owns the onboarding emails. We discussed the launch plan, the budget for ads, the hiring of two engineers, and who owns the onboarding emails. We discussed the launch plan, the budget for ads, the hiring of two engineers, and who owns the onboarding emails. We discussed the launch plan, the budget for ads, the hiring of two engineers, and who owns the onboarding emails. We discussed the launch plan, the budget for ads, the hiring of two engineers, and who owns the onboarding emails. We discussed the launch plan, the budget for ads, the hiring of two engineers, and who owns the onboarding emails. We discussed the launch plan, the budget for ads, the hiring of two engineers, and who owns the onboarding emails. We discussed the launch plan, the budget for ads, the hiring of two engineers, and who owns the onboarding emails. We discussed the launch plan, the budget for ads, the hiring of two engineers, and who owns the onboarding emails. We discussed the launch plan, the budget for ads, the hiring of two engineers, and who owns the onboarding emails. We discussed the launch plan, the budget for ads, the hiring of two engineers, and who owns the onboarding emails. We discussed the launch plan, the budget for ads, the hiring of two engineers, and who owns the onboarding emails. We discussed the launch plan, the budget for ads, the hiring of two engineers, and who owns the onboarding emails. ",
+     "answer": "Got it, these are your meeting notes.",
+     "at": "2026-11-25T08:50:00Z"
+    }
+   ]
+  }
+ ]
+}
