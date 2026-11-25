@@ -98,10 +98,13 @@ contact, and it works with everything your WhatsApp account can see.
   ask Kaya also brings back up to three older exchanges with it that bear on the question, beyond
   the recent conversation. Try it from a terminal: `docker compose exec core /core search "money"`.
 - **Answers from your chats.** Ask "what did Rahul say about Saturday?" and Kaya searches your other
-  chats, narrowing to the people or groups your question names, and gives the model up to three
-  excerpts with who said what, in which chat and when, so the answer can say where it came from.
-  The excerpts are masked, marked as data the model must never obey, and escaped so no message can
-  break out of them. Kaya never sees a whole chat, only the excerpts it found.
+  chats, giving a head start to the people or groups your question names (in English or Hindi
+  script), and gives the model up to three excerpts with who said what, in which chat and when, so
+  the answer can say where it came from. The excerpts are masked, kept out of the instructions in a
+  message of their own, marked as data the model must never obey, and escaped so no message can
+  break out of them; a name someone chose for themselves shows as `~Name`, so nobody can pass for
+  you or Kaya. If the search finds nothing, or could not run, the model is told which. Kaya never
+  sees a whole chat, only the excerpts it found.
 - **Least-privilege database logins.** The gateway and core each have their own Postgres role.
   Core, the part that will talk to an LLM, can read chats but cannot see the WhatsApp session, its
   encryption keys, or the keys needed to fetch media.
@@ -157,8 +160,9 @@ Most of the enforcement arrives with the agent stages. Some of it is already in 
   content.
 - Masking runs on everything sent to Groq that you did not type yourself (Kaya's own past answers
   and the chat excerpts it finds for a question) and on every chunk of chat text sent to Voyage to
-  be embedded. Excerpts reach the model marked as data, never instructions, and escaped so a planted
-  message cannot close its block. Contact and group names
+  be embedded. Excerpts reach the model outside its instructions, marked as data, inside tags named
+  afresh for every request and escaped, so a planted message cannot close its block or pass for
+  you or Kaya. Contact and group names
   go as they are. Only placeholders and per-kind counts ever appear in logs.
 - The gateway container gets only the settings it needs and never sees API keys. WhatsApp addresses
   and raw protocol messages are masked in its logs.
@@ -341,7 +345,8 @@ erDiagram
 
 *Figure 3. Entity relationship diagram of contacts, chats, messages and reactions. A message is
 unique by chat, WhatsApp id and sender. A reaction has no foreign key to its message, because it can
-arrive before the message it targets.*
+arrive before the message it targets. Core's migrations add full text indexes on message text and on
+contact and group names, for search, although the gateway owns these tables.*
 
 A media message also has a `media` row (type, size, duration and whether the file is downloaded).
 

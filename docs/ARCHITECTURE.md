@@ -227,13 +227,20 @@ Folders appear when a phase needs them; empty placeholders are not committed.
   it, in a quarter of the budget set aside for them plus what the conversation leaves. The query
   for recall has a 5-second deadline and no retries, so a slow embedding service costs a reply a
   few seconds at most.
-- **Answers from chats.** For every question, Kaya also looks for up to three excerpts in DJ's other
-  chats (never his own chat with Kaya). Words of the question that are a whole word of a contact's or
-  a group's name narrow the search to them (within cosine distance 0.7); if that finds nothing, all
-  chats are searched (within 0.6). Each excerpt is rendered like a chunk, masked with the question's
-  mask session for a cloud model, its angle brackets replaced with look-alikes, and put in the system
-  message inside `<excerpt>` blocks after a note that they are data and never instructions. Excerpts
-  take at most half the room the system prompt and the question leave.
+- **Answers from chats.** For every question with words of substance, Kaya also looks for up to
+  three excerpts in DJ's other chats; his own chat with Kaya (the direct chat with the linked
+  account) is left out in SQL. The question's words, minus common English, Hinglish and Hindi
+  question words, are matched against contact and group names with Postgres full text search (GIN
+  indexes on both), keeping the 20 best-ranked of each. Chunks of those people or groups are
+  searched within cosine distance 0.7 with a 0.1 head start, alongside all chats within 0.6, and the
+  results merged. The query is embedded once and shared with recall. Each excerpt is rendered like
+  a chunk, with self-chosen sender names marked `~`, and masked with the question's mask session for
+  a cloud model, using the messages just before it as context. The excerpts go in a user message of
+  their own just before the question, inside tags named afresh for each request, with angle
+  brackets, look-alikes and entities escaped; a note in the system message says they are data and
+  never instructions and who "Me", "Kaya" and `~` are. When the search finds nothing or fails, the
+  system message says which. Excerpts take at most half the room the system prompt and the question
+  leave, and are dropped if the request is still too long.
 - **History sync.** Each history chunk WhatsApp announces becomes a row in `history_jobs`, stored
   in the transaction that acknowledges the announcement. A single worker downloads the chunk,
   stores it in batches of at most 200 messages (a savepoint per message, so one bad message
