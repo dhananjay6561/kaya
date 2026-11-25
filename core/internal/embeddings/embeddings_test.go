@@ -151,7 +151,7 @@ func TestVoyageDoesNotCallOutForNothingOrTooMuch(t *testing.T) {
 }
 
 func TestVoyageRetriesWhenDownOrSlowButHandsARateLimitBack(t *testing.T) {
-	f := newFake(t, status(503), status(502), answer)
+	f := newFake(t, status(503), status(408), answer)
 	if _, err := f.voyage(VoyageOptions{}).Embed(bg, []string{"x"}, Document); err != nil || f.calls() != 3 {
 		t.Fatalf("err %v after %d calls", err, f.calls())
 	}
@@ -174,7 +174,7 @@ func TestVoyageGivesUpAfterItsRetriesAndNamesTheProblemWithoutTheText(t *testing
 	if e.Code != Unavailable || f.calls() != 3 || strings.Contains(e.Error(), "secret") {
 		t.Fatalf("err %v after %d calls", e, f.calls())
 	}
-	for code, want := range map[int]string{401: Auth, 403: Auth, 400: Rejected, 413: Rejected, 422: Rejected} {
+	for code, want := range map[int]string{401: Auth, 403: Auth, 404: Misconfigured, 400: Rejected, 413: Rejected, 422: Rejected} {
 		f := newFake(t, status(code))
 		_, err := f.voyage(VoyageOptions{}).Embed(bg, []string{"x"}, Document)
 		if e := embedError(t, err); e.Code != want || e.Status != code || f.calls() != 1 {

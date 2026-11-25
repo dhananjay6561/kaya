@@ -168,8 +168,10 @@ func (v *Voyage) once(ctx context.Context, body []byte, n int) (Result, error) {
 			e.RetryAfter = v.retryAfter(resp.Header.Get("Retry-After"))
 		case status == http.StatusUnauthorized || status == http.StatusForbidden:
 			e.Code = Auth
-		case status >= 500:
+		case status >= 500 || status == http.StatusRequestTimeout || status == http.StatusConflict || status == http.StatusTooEarly:
 			e.Code = Unavailable
+		case status == http.StatusNotFound:
+			e.Code = Misconfigured
 		default:
 			e.Code = Rejected
 		}

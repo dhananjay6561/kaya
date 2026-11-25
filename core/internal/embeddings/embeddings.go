@@ -46,8 +46,11 @@ const (
 	Timeout     = "timeout"
 	Unavailable = "unavailable"
 	Auth        = "auth"
-	Rejected    = "rejected"
-	BadResponse = "bad_response"
+	// Misconfigured means the request itself is wrong (an unknown model, a wrong address), so
+	// every text would fail the same way.
+	Misconfigured = "misconfigured"
+	Rejected      = "rejected"
+	BadResponse   = "bad_response"
 )
 
 // Error says why texts could not be embedded. It never carries the texts or the provider's message.
