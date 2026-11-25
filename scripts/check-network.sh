@@ -73,26 +73,29 @@ fi
 
 if [ "$mtu" -gt "$path" ]; then
 	echo "problem: $iface sends packets of up to $mtu bytes, but the link to $host carries only $path."
-else
-	echo "problem: containers on Docker network $network send packets of up to $docker_mtu bytes, but the link carries only $path."
 fi
-echo "Large WhatsApp replies stall and the gateway keeps reconnecting. Fix it in one of two ways:"
+if [ -n "$docker_mtu" ] && [ "$docker_mtu" -gt "$path" ]; then
+	echo "problem: containers on Docker network $network send packets of up to $docker_mtu bytes, but $iface carries only $path."
+fi
+echo "Large WhatsApp replies stall and the gateway keeps reconnecting. To fix it:"
 echo "  - on the router, turn on TCP MSS clamping (fixes every device and container), or"
-case "$iface" in
-utun* | tun* | wg* | ipsec*)
-	echo "  - $iface is a VPN tunnel: lower the MTU in the VPN client, or on the network interface under it."
-	;;
-*)
-	if [ "$(uname -s)" = Darwin ]; then
-		echo "  - on this Mac: sudo networksetup -setMTU $iface $path"
-	else
-		if [ "$mtu" -gt "$path" ]; then
+if [ "$mtu" -gt "$path" ]; then
+	case "$iface" in
+	utun* | tun* | wg* | ipsec*)
+		echo "  - $iface is a VPN tunnel: lower the MTU in the VPN client, or on the network interface under it."
+		;;
+	*)
+		if [ "$(uname -s)" = Darwin ]; then
+			echo "  - on this Mac: sudo networksetup -setMTU $iface $path"
+		else
 			echo "  - on this machine: nmcli connection modify <connection> <ethernet or wifi>.mtu $path,"
-			echo "    then nmcli connection up <connection>, and"
+			echo "    then nmcli connection up <connection>"
 		fi
-		echo "  - for the containers: set Docker's MTU to $path in /etc/docker/daemon.json, restart Docker,"
-		echo "    then make down && make up (see the README)."
-	fi
-	;;
-esac
+		;;
+	esac
+fi
+if [ -n "$docker_mtu" ] && [ "$docker_mtu" -gt "$path" ]; then
+	echo "  - for the containers: set Docker's MTU to $path in /etc/docker/daemon.json, restart Docker,"
+	echo "    then make down && make up (see the README)."
+fi
 exit 1
