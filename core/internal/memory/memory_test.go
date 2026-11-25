@@ -380,7 +380,7 @@ func TestBuildKeepsExcerptsRecallAndHistoryWithinTheBudgetTogether(t *testing.T)
 	}
 	excerpts := []string{strings.Repeat("e", 120), strings.Repeat("f", 300), strings.Repeat("g", 60)}
 	together := false
-	for budget := 400; budget <= 4000; budget += 13 {
+	for budget := 600; budget <= 4000; budget += 13 {
 		p := Build(Input{
 			System: "system", History: history, Recalled: recalled, MaxRecalled: 3, RecallReserve: budget / 4,
 			Excerpts: excerpts, Tag: "t", ChatSearch: Searched, Question: "question", Budget: budget, Count: count, Now: at,

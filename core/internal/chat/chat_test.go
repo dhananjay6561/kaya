@@ -634,8 +634,8 @@ func TestReplyDropsRecalledExchangesWhenTooLongAndKeepsThemForTheLowEffortRetry(
 	}
 }
 
-func found(excerpts ...search.Excerpt) func(context.Context, Question) ([]search.Excerpt, bool, error) {
-	return func(context.Context, Question) ([]search.Excerpt, bool, error) { return excerpts, true, nil }
+func found(excerpts ...search.Excerpt) func(context.Context, Question, string) ([]search.Excerpt, bool, error) {
+	return func(context.Context, Question, string) ([]search.Excerpt, bool, error) { return excerpts, true, nil }
 }
 
 func excerptsOf(r llm.Request) string {
@@ -656,7 +656,7 @@ func TestReplyShowsExcerptsAsMaskedDataAndRestoresTheAnswer(t *testing.T) {
 	var asked []string
 	c := newChat(t, Options{
 		LLM: cloud, NewMaskSession: realMasking, Zone: zone(t, "Asia/Kolkata"),
-		Excerpts: func(_ context.Context, q Question) ([]search.Excerpt, bool, error) {
+		Excerpts: func(_ context.Context, q Question, _ string) ([]search.Excerpt, bool, error) {
 			asked = append(asked, q.Text)
 			return []search.Excerpt{e}, true, nil
 		},
@@ -709,14 +709,14 @@ func TestReplyMasksACodeRepeatedInAnEarlierAnswer(t *testing.T) {
 func TestReplyTellsTheModelWhatTheChatSearchDid(t *testing.T) {
 	for _, c := range []struct {
 		name   string
-		search func(context.Context, Question) ([]search.Excerpt, bool, error)
+		search func(context.Context, Question, string) ([]search.Excerpt, bool, error)
 		want   string
 	}{
 		{"found nothing", found(), "found nothing to show you"},
-		{"failed", func(context.Context, Question) ([]search.Excerpt, bool, error) {
+		{"failed", func(context.Context, Question, string) ([]search.Excerpt, bool, error) {
 			return nil, true, errors.New("voyage away")
 		}, "failed this time"},
-		{"not searched", func(context.Context, Question) ([]search.Excerpt, bool, error) { return nil, false, nil }, ""},
+		{"not searched", func(context.Context, Question, string) ([]search.Excerpt, bool, error) { return nil, false, nil }, ""},
 	} {
 		stub := llm.NewStub(llm.StubOptions{Reply: func(llm.Request) string { return "fine" }})
 		got := reply(t, newChat(t, Options{LLM: stub, Excerpts: c.search}), "hi")
@@ -733,7 +733,7 @@ func TestReplyTellsTheModelWhatTheChatSearchDid(t *testing.T) {
 	stub := llm.NewStub(llm.StubOptions{Reply: func(llm.Request) string { return "fine" }})
 	c := newChat(t, Options{
 		LLM: stub, DatabaseAway: func(err error) bool { return errors.Is(err, away) },
-		Excerpts: func(context.Context, Question) ([]search.Excerpt, bool, error) { return nil, true, away },
+		Excerpts: func(context.Context, Question, string) ([]search.Excerpt, bool, error) { return nil, true, away },
 	})
 	if _, err := c.Reply(bg, q("hi")); !errors.Is(err, away) {
 		t.Fatalf("a chat search that found the database away did not fail the question: %v", err)
@@ -797,5 +797,31 @@ func TestReplySendsExcerptsAsTheyAreToALocalModel(t *testing.T) {
 	reply(t, c, "rahul's number?")
 	if data := excerptsOf(local.Requests()[0]); !strings.Contains(data, "Rahul: call 9876543210") {
 		t.Fatalf("excerpts:\n%s", data)
+	}
+}
+
+func TestReplySearchesAFollowUpWithTheQuestionJustBefore(t *testing.T) {
+	stub := llm.NewStub(llm.StubOptions{Reply: func(llm.Request) string { return "ok" }})
+	var got []string
+	history := []memory.Exchange{
+		{ID: 1, Question: "old question", Answer: "a", At: now.Add(-2 * time.Hour)},
+		{ID: 2, Question: "tejashree ne kya pucha", Answer: "b", At: now.Add(-5 * time.Minute)},
+	}
+	c := newChat(t, Options{
+		LLM:     stub,
+		History: func(context.Context, Question) ([]memory.Exchange, error) { return history, nil },
+		Excerpts: func(_ context.Context, _ Question, earlier string) ([]search.Excerpt, bool, error) {
+			got = append(got, earlier)
+			return nil, true, nil
+		},
+	})
+	reply(t, c, "recently kya pucha")
+	history = history[:1]
+	reply(t, c, "recently kya pucha")
+	if !slices.Equal(got, []string{"tejashree ne kya pucha", ""}) {
+		t.Fatalf("earlier %q", got)
+	}
+	if sys := stub.Requests()[0].Messages[0].Content; !strings.Contains(sys, "never say you cannot see or read them") {
+		t.Fatalf("system:\n%s", sys)
 	}
 }

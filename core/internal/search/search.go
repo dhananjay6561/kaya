@@ -262,20 +262,56 @@ func (s *Searcher) Search(ctx context.Context, query string, f Filter, limit int
 		if len(out) >= limit {
 			break
 		}
-		lines, err := readLines(ctx, s.DB, linesSQL+`
-			AND m.id IN (SELECT message_id FROM message_chunks WHERE chunk_id = $1)
-			ORDER BY m.sent_at, m.id`, h.ChunkID)
-		if err != nil {
+		if ok, err := s.fill(ctx, h); err != nil {
 			return nil, err
+		} else if ok {
+			out = append(out, *h)
 		}
-		if len(lines) == 0 {
-			continue
+	}
+	return out, nil
+}
+
+// fill reads a hit's messages, its chat and title; false when none of them is left.
+func (s *Searcher) fill(ctx context.Context, h *Hit) (bool, error) {
+	lines, err := readLines(ctx, s.DB, linesSQL+`
+		AND m.id IN (SELECT message_id FROM message_chunks WHERE chunk_id = $1)
+		ORDER BY m.sent_at, m.id`, h.ChunkID)
+	if err != nil || len(lines) == 0 {
+		return false, err
+	}
+	h.ChatID, h.Title = lines[0].ChatID, lines[0].title
+	for _, l := range lines {
+		h.Lines = append(h.Lines, l.Line)
+	}
+	return true, nil
+}
+
+// Latest finds the newest limit chunks that pass f, newest first, whatever they are about.
+func (s *Searcher) Latest(ctx context.Context, f Filter, limit int) ([]Hit, error) {
+	var ids []int64
+	err := s.DB.InTx(ctx, func(tx pgx.Tx) error {
+		rows, err := tx.Query(ctx, `
+			SELECT k.id FROM chunks k
+			WHERE `+chunkFilter("k", 1)+`
+			ORDER BY k.last_sent_at DESC, k.id DESC
+			LIMIT $6`, append(filterArgs(f), limit)...)
+		if err != nil {
+			return err
 		}
-		h.ChatID, h.Title = lines[0].ChatID, lines[0].title
-		for _, l := range lines {
-			h.Lines = append(h.Lines, l.Line)
+		ids, err = pgx.CollectRows(rows, pgx.RowTo[int64])
+		return err
+	})
+	if err != nil {
+		return nil, err
+	}
+	out := make([]Hit, 0, len(ids))
+	for _, id := range ids {
+		h := Hit{ChunkID: id, Distance: 2}
+		if ok, err := s.fill(ctx, &h); err != nil {
+			return nil, err
+		} else if ok {
+			out = append(out, h)
 		}
-		out = append(out, *h)
 	}
 	return out, nil
 }

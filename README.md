@@ -103,7 +103,9 @@ contact, and it works with everything your WhatsApp account can see.
   the answer can say where it came from. The excerpts are masked, kept out of the instructions in a
   message of their own, marked as data the model must never obey, and escaped so no message can
   break out of them; a name someone chose for themselves shows as `~Name`, so nobody can pass for
-  you or Kaya. If the search finds nothing, or could not run, the model is told which. Kaya never
+  you or Kaya. A follow-up like "and recently?" keeps the person from your last question, and
+  asking about recent messages brings their newest ones. If the search finds nothing, or could not
+  run, the model is told which. Kaya never
   sees a whole chat, only the excerpts it found.
 - **Least-privilege database logins.** The gateway and core each have their own Postgres role.
   Core, the part that will talk to an LLM, can read chats but cannot see the WhatsApp session, its
