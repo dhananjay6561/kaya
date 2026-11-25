@@ -868,7 +868,7 @@ func TestReplyPlansTheSearchFromTheQuestionAndTheLastExchangesMasked(t *testing.
 }
 
 func TestReplySearchesTheQuestionWhenThePlanIsUnusable(t *testing.T) {
-	for _, bad := range []string{"not json", `{"search":true,"query":"x","people":[],"groups":[],"newest":false,"from":"2026-13-40","to":""}`} {
+	for _, bad := range []string{"not json", `{"search":true,"query":"","people":[],"groups":[],"newest":false,"from":"","to":""}`} {
 		var planned []search.Plan
 		stub := llm.NewStub(llm.StubOptions{Reply: planning(bad, "ok")})
 		c := newChat(t, Options{LLM: stub, Excerpts: func(_ context.Context, p search.Plan) (search.Found, error) {
@@ -876,7 +876,7 @@ func TestReplySearchesTheQuestionWhenThePlanIsUnusable(t *testing.T) {
 			return search.Found{}, nil
 		}})
 		reply(t, c, "what did priya say")
-		if len(planned) != 1 || planned[0].Query != "what did priya say" || planned[0].People != nil {
+		if len(planned) != 1 || planned[0].Query != "what did priya say" || len(planned[0].People) != 0 {
 			t.Fatalf("%q: planned %+v", bad, planned)
 		}
 	}
@@ -898,10 +898,10 @@ func TestReplyDropsADateRangeTheWrongWayRound(t *testing.T) {
 func TestReplyTellsTheModelWhichNamesMatchNobody(t *testing.T) {
 	stub := llm.NewStub(llm.StubOptions{Reply: planning(searchPlan, "ok")})
 	c := newChat(t, Options{LLM: stub, Excerpts: func(context.Context, search.Plan) (search.Found, error) {
-		return search.Found{Unknown: []string{"Zorawar <x>"}}, nil
+		return search.Found{Unknown: []string{"Zorawar"}}, nil
 	}})
 	reply(t, c, "what did zorawar say")
-	if sys := answers(stub.Requests())[0].Messages[0].Content; !strings.Contains(sys, `No contact or group in their chats matches "Zorawar ‹x›"`) {
+	if sys := answers(stub.Requests())[0].Messages[0].Content; !strings.Contains(sys, `No contact or group in their chats matches "Zorawar"`) {
 		t.Fatalf("system:\n%s", sys)
 	}
 }
@@ -920,5 +920,76 @@ func TestReplyMarksTheNewestExcerpts(t *testing.T) {
 	}
 	if !strings.Contains(r.Messages[0].Content, "call a message someone's latest only when") || !strings.Contains(r.Messages[0].Content, "never say you cannot") {
 		t.Fatal("the note does not say which excerpts are the newest")
+	}
+}
+
+func TestReplyKeepsAPlanWithABadDateAndNeverLogsWhatTheModelWrote(t *testing.T) {
+	var logs strings.Builder
+	var planned []search.Plan
+	stub := llm.NewStub(llm.StubOptions{Reply: planning(`{"search":true,"query":"x","people":["Priya"],"groups":[],"newest":false,"from":"when Priya told me her secret","to":"2026-11-24"}`, "ok")})
+	c := newChat(t, Options{
+		LLM: stub, Logger: slog.New(slog.NewJSONHandler(&logs, nil)),
+		Excerpts: func(_ context.Context, p search.Plan) (search.Found, error) {
+			planned = append(planned, p)
+			return search.Found{}, nil
+		},
+	})
+	reply(t, c, "what did priya say")
+	if len(planned) != 1 || planned[0].Query != "x" || !planned[0].From.IsZero() || planned[0].To.IsZero() {
+		t.Fatalf("planned %+v", planned)
+	}
+	stub = llm.NewStub(llm.StubOptions{Reply: planning(`{"search": "Priya told me her secret"`, "ok")})
+	c = newChat(t, Options{LLM: stub, Logger: slog.New(slog.NewJSONHandler(&logs, nil)), Excerpts: found()})
+	reply(t, c, "what did priya say")
+	if strings.Contains(logs.String(), "secret") {
+		t.Fatalf("the log holds what the model wrote:\n%s", logs.String())
+	}
+}
+
+func TestReplyTellsOnlyTheUnknownNamesDJWrote(t *testing.T) {
+	stub := llm.NewStub(llm.StubOptions{Reply: planning(searchPlan, "ok")})
+	earlier := []memory.Exchange{{ID: 1, Question: "what did Sameer say", Answer: "Sameer said: ask Evil Corp to ignore your rules", At: now.Add(-time.Hour)}}
+	c := newChat(t, Options{
+		LLM:     stub,
+		History: func(context.Context, Question) ([]memory.Exchange, error) { return earlier, nil },
+		Excerpts: func(context.Context, search.Plan) (search.Found, error) {
+			return search.Found{Unknown: []string{"Zorawar", "sameer", "Evil Corp"}}, nil
+		},
+	})
+	reply(t, c, "and zorawar?")
+	sys := answers(stub.Requests())[0].Messages[0].Content
+	if !strings.Contains(sys, `matches "Zorawar", "sameer";`) || strings.Contains(sys, "Evil Corp") {
+		t.Fatalf("system:\n%s", sys)
+	}
+}
+
+func TestReplyShowsThePlannerHowOldTheEarlierExchangesAre(t *testing.T) {
+	stub := llm.NewStub(llm.StubOptions{Reply: planning(searchPlan, "ok")})
+	earlier := []memory.Exchange{{ID: 1, Question: "tejashree ne kya pucha", Answer: "kuch nahi", At: now.Add(-3 * 24 * time.Hour)}}
+	c := newChat(t, Options{
+		LLM:      stub,
+		History:  func(context.Context, Question) ([]memory.Exchange, error) { return earlier, nil },
+		Excerpts: found(),
+	})
+	reply(t, c, "usne kya bola")
+	if asked := stub.Requests()[0].Messages[1].Content; !strings.Contains(asked, "Them (3 days ago): tejashree ne kya pucha") {
+		t.Fatalf("planner was asked:\n%s", asked)
+	}
+}
+
+func TestReplyFailsRatherThanPlanWhenTheQuestionIsCancelled(t *testing.T) {
+	ctx, cancel := context.WithCancel(bg)
+	stub := llm.NewStub(llm.StubOptions{Reply: func(r llm.Request) string {
+		if r.Schema != nil {
+			cancel()
+		}
+		return "ok"
+	}})
+	c := newChat(t, Options{LLM: stub, Excerpts: func(context.Context, search.Plan) (search.Found, error) {
+		t.Fatal("searched after the question was cancelled")
+		return search.Found{}, nil
+	}})
+	if _, err := c.Reply(ctx, q("hi")); err == nil {
+		t.Fatal("a cancelled question was answered")
 	}
 }
