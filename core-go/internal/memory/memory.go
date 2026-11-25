@@ -120,4 +120,3 @@ func Build(in Input) Package {
 	messages = append(messages, llm.Message{Role: llm.User, Content: in.Question})
 	return Package{Messages: messages, Tokens: tokens, Exchanges: len(kept), LeftOut: leftOut}
 }
-

@@ -277,9 +277,10 @@ func TestReplyFitsTheConversationToTheModelsBudget(t *testing.T) {
 func TestReplyMasksWhatTheOwnerDidNotTypeForACloudModelAndRestoresTheAnswer(t *testing.T) {
 	var calls []string
 	cloud := cloudStub{llm.NewStub(llm.StubOptions{Reply: func(llm.Request) string { return "Call [PHONE_1] or mail [EMAIL_1]." }})}
-	c := newChat(t, Options{LLM: cloud,
+	c := newChat(t, Options{
+		LLM:            cloud,
 		NewMaskSession: masking(map[string]string{"9876543210": "[PHONE_1]", "rahul@x.com": "[EMAIL_1]"}, &calls),
-		History: history(memory.Exchange{Question: "what's Rahul's number?", Answer: "Rahul is on 9876543210, mail rahul@x.com", At: now}),
+		History:        history(memory.Exchange{Question: "what's Rahul's number?", Answer: "Rahul is on 9876543210, mail rahul@x.com", At: now}),
 	})
 	got := reply(t, c, "my own number is 9123456780, and Rahul's again?")
 	sent := cloud.Requests()[0].Messages
@@ -299,8 +300,10 @@ func TestReplyMasksWhatTheOwnerDidNotTypeForACloudModelAndRestoresTheAnswer(t *t
 func TestReplyHidesAnOTPInAPastAnswerWhenTheQuestionAskedForOne(t *testing.T) {
 	var calls []string
 	cloud := cloudStub{llm.NewStub(llm.StubOptions{Reply: func(llm.Request) string { return "ok" }})}
-	c := newChat(t, Options{LLM: cloud, NewMaskSession: masking(map[string]string{"482913": "[OTP_1]"}, &calls),
-		History: history(memory.Exchange{Question: "what was that OTP?", Answer: "Here it is: 482913", At: now})})
+	c := newChat(t, Options{
+		LLM: cloud, NewMaskSession: masking(map[string]string{"482913": "[OTP_1]"}, &calls),
+		History: history(memory.Exchange{Question: "what was that OTP?", Answer: "Here it is: 482913", At: now}),
+	})
 	reply(t, c, "thanks")
 	if got := cloud.Requests()[0].Messages[2].Content; got != "Here it is: [OTP_1]" {
 		t.Fatalf("got %q", got)
@@ -310,8 +313,10 @@ func TestReplyHidesAnOTPInAPastAnswerWhenTheQuestionAskedForOne(t *testing.T) {
 func TestReplyPutsDetailsBackBeforeTheAnswerIsFormatted(t *testing.T) {
 	var calls []string
 	cloud := cloudStub{llm.NewStub(llm.StubOptions{Reply: func(llm.Request) string { return "[PHONE_1](https://wa.me/[PHONE_1])" }})}
-	c := newChat(t, Options{LLM: cloud, NewMaskSession: masking(map[string]string{"9876543210": "[PHONE_1]"}, &calls),
-		History: history(memory.Exchange{Question: "number?", Answer: "9876543210", At: now})})
+	c := newChat(t, Options{
+		LLM: cloud, NewMaskSession: masking(map[string]string{"9876543210": "[PHONE_1]"}, &calls),
+		History: history(memory.Exchange{Question: "number?", Answer: "9876543210", At: now}),
+	})
 	if got := reply(t, c, "link?"); strings.Contains(got.Text, "PHONE_1") {
 		t.Fatalf("got %q", got.Text)
 	}
@@ -340,8 +345,10 @@ func TestReplyMasksBeforeCountingRestoresBeforeFormattingAndKeepsOneSessionAcros
 			return llm.Completion{Text: "**[PHONE_1]**", FinishReason: llm.FinishStop}, nil
 		}
 	}}
-	c := newChat(t, Options{LLM: model, NewMaskSession: masking(map[string]string{"9876543210": "[PHONE_1]"}, &calls),
-		History: history(memory.Exchange{Question: "number?", Answer: "9876543210", At: now})})
+	c := newChat(t, Options{
+		LLM: model, NewMaskSession: masking(map[string]string{"9876543210": "[PHONE_1]"}, &calls),
+		History: history(memory.Exchange{Question: "number?", Answer: "9876543210", At: now}),
+	})
 	got := reply(t, c, "again?")
 	if want := []string{"session", "mask", "complete", "complete", "complete", "restore"}; !reflect.DeepEqual(calls, want) {
 		t.Fatalf("calls %v, want %v", calls, want)
@@ -381,14 +388,16 @@ func TestReplyAnswersWithoutTheConversationWhenItCannotBeReadButNotWhenTheDataba
 	stub := llm.NewStub(llm.StubOptions{Reply: func(llm.Request) string { return "fine" }})
 	denied := errors.New("permission denied for table commands")
 	away := errors.New("connect ECONNREFUSED")
-	c := newChat(t, Options{LLM: stub,
+	c := newChat(t, Options{
+		LLM:          stub,
 		History:      func(context.Context, Question) ([]memory.Exchange, error) { return nil, denied },
 		DatabaseAway: func(err error) bool { return errors.Is(err, away) },
 	})
 	if got := reply(t, c, "hi"); got.Text != "fine" || len(stub.Requests()[0].Messages) != 2 {
 		t.Fatalf("got %+v", got)
 	}
-	c = newChat(t, Options{LLM: stub,
+	c = newChat(t, Options{
+		LLM:          stub,
 		History:      func(context.Context, Question) ([]memory.Exchange, error) { return nil, away },
 		DatabaseAway: func(err error) bool { return errors.Is(err, away) },
 	})
@@ -470,8 +479,10 @@ func TestReplyReturnsTheCallersReasonWhenItStops(t *testing.T) {
 	stopping := errors.New("core is stopping")
 	ctx, cancel := context.WithCancelCause(bg)
 	cancel(stopping)
-	c := newChat(t, Options{LLM: llm.NewStub(llm.StubOptions{}),
-		History: func(ctx context.Context, _ Question) ([]memory.Exchange, error) { return nil, ctx.Err() }})
+	c := newChat(t, Options{
+		LLM:     llm.NewStub(llm.StubOptions{}),
+		History: func(ctx context.Context, _ Question) ([]memory.Exchange, error) { return nil, ctx.Err() },
+	})
 	if _, err := c.Reply(ctx, q("hi")); !errors.Is(err, stopping) {
 		t.Fatalf("err = %v", err)
 	}
@@ -518,13 +529,17 @@ func TestReplySendsGroqTheSameRequestAsTheTypeScriptCore(t *testing.T) {
 			_, _ = io.WriteString(w, `{"model":"openai/gpt-oss-120b","choices":[{"message":{"role":"assistant","content":`+
 				string(answer)+`},"finish_reason":"stop"}],"usage":{"prompt_tokens":100,"completion_tokens":10}}`)
 		}))
-		groq, err := llm.NewGroq(config.Groq{APIKey: "not-a-real-key", HeavyModel: "openai/gpt-oss-120b",
-			RoutineModel: "openai/gpt-oss-20b", ContextTokens: 2000}, llm.GroqOptions{BaseURL: server.URL})
+		groq, err := llm.NewGroq(config.Groq{
+			APIKey: "not-a-real-key", HeavyModel: "openai/gpt-oss-120b",
+			RoutineModel: "openai/gpt-oss-20b", ContextTokens: 2000,
+		}, llm.GroqOptions{BaseURL: server.URL})
 		if err != nil {
 			t.Fatal(err)
 		}
-		chat := newChat(t, Options{LLM: groq, Zone: zone(t, g.Zone), Now: func() time.Time { return g.Now },
-			NewMaskSession: func() MaskSession { return identity{} }, History: history(c.History...)})
+		chat := newChat(t, Options{
+			LLM: groq, Zone: zone(t, g.Zone), Now: func() time.Time { return g.Now },
+			NewMaskSession: func() MaskSession { return identity{} }, History: history(c.History...),
+		})
 		got, err := chat.Reply(bg, Question{ID: "3EB0GOLDEN", Text: c.Question, SentAt: g.Now})
 		server.Close()
 		if err != nil {
@@ -541,4 +556,3 @@ func TestReplySendsGroqTheSameRequestAsTheTypeScriptCore(t *testing.T) {
 		}
 	}
 }
-

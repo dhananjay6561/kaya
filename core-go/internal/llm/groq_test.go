@@ -188,8 +188,12 @@ func TestGroqUsesTheHeavyModelWithMoreRoomAndEffortAndTheCallersLimits(t *testin
 func TestGroqReportsACutOffAnswerAndAnEmptyOneAsTheyAre(t *testing.T) {
 	f := newFake(t, ok("partial", `"length"`), ok(nil), ok("x", `"weird"`), ok("x", "null"))
 	g := f.llm(GroqOptions{})
-	for _, want := range []Completion{{Text: "partial", FinishReason: FinishLength}, {Text: "", FinishReason: FinishStop},
-		{Text: "x", FinishReason: FinishStop}, {Text: "x", FinishReason: FinishStop}} {
+	for _, want := range []Completion{
+		{Text: "partial", FinishReason: FinishLength},
+		{Text: "", FinishReason: FinishStop},
+		{Text: "x", FinishReason: FinishStop},
+		{Text: "x", FinishReason: FinishStop},
+	} {
 		got, err := g.Complete(bg, ask)
 		if err != nil {
 			t.Fatal(err)

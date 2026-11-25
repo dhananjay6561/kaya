@@ -59,10 +59,14 @@ func roles(p Package) []string {
 }
 
 func TestBuildPutsTheSystemPromptFirstPastExchangesInOrderThenTheQuestion(t *testing.T) {
-	p := Build(Input{System: "be brief", History: []Exchange{exchange("1", 10), exchange("2", 10)},
-		Question: "and in Hindi?", Budget: 10_000, Count: count, Now: at})
-	want := []string{"system: be brief", "user: question 1", "assistant: answer 1", "user: question 2",
-		"assistant: answer 2", "user: and in"}
+	p := Build(Input{
+		System: "be brief", History: []Exchange{exchange("1", 10), exchange("2", 10)},
+		Question: "and in Hindi?", Budget: 10_000, Count: count, Now: at,
+	})
+	want := []string{
+		"system: be brief", "user: question 1", "assistant: answer 1", "user: question 2",
+		"assistant: answer 2", "user: and in",
+	}
 	if got := roles(p); !reflect.DeepEqual(got, want) {
 		t.Fatalf("got %q", got)
 	}
@@ -117,8 +121,10 @@ func TestBuildDoesNotSkipPastAnExchangeThatDoesNotFit(t *testing.T) {
 
 func TestBuildCountsWithTheCounterItIsGiven(t *testing.T) {
 	var calls []string
-	Build(Input{System: "s", History: []Exchange{exchange("1", 10)}, Question: "q", Budget: 10_000, Now: at,
-		Count: func(text string) int { calls = append(calls, text); return 1 }})
+	Build(Input{
+		System: "s", History: []Exchange{exchange("1", 10)}, Question: "q", Budget: 10_000, Now: at,
+		Count: func(text string) int { calls = append(calls, text); return 1 },
+	})
 	if !strings.Contains(strings.Join(calls, "|"), "question 1") || calls[1] != "q" {
 		t.Fatalf("calls %q", calls)
 	}
@@ -126,8 +132,10 @@ func TestBuildCountsWithTheCounterItIsGiven(t *testing.T) {
 
 func TestHowLongAgoReadsLikeAPersonWouldSayIt(t *testing.T) {
 	const minute = 60_000
-	for ms, want := range map[int64]string{-5: "just now", 30_000: "just now", 5 * minute: "5 min ago",
-		3 * 60 * minute: "3 h ago", 26 * 60 * minute: "1 day ago", 9 * 24 * 60 * minute: "9 days ago"} {
+	for ms, want := range map[int64]string{
+		-5: "just now", 30_000: "just now", 5 * minute: "5 min ago",
+		3 * 60 * minute: "3 h ago", 26 * 60 * minute: "1 day ago", 9 * 24 * 60 * minute: "9 days ago",
+	} {
 		if got := HowLongAgo(ms); got != want {
 			t.Errorf("HowLongAgo(%d) = %q, want %q", ms, got, want)
 		}
@@ -135,8 +143,10 @@ func TestHowLongAgoReadsLikeAPersonWouldSayIt(t *testing.T) {
 }
 
 func TestBuildMarksEachEarlierQuestionWithItsAgeButNotTheAnswersOrTheNewQuestion(t *testing.T) {
-	p := Build(Input{System: "s", History: []Exchange{exchange("1", 10)}, Question: "and today?", Budget: 10_000,
-		Count: count, Now: at.Add(3 * 24 * time.Hour)})
+	p := Build(Input{
+		System: "s", History: []Exchange{exchange("1", 10)}, Question: "and today?", Budget: 10_000,
+		Count: count, Now: at.Add(3 * 24 * time.Hour),
+	})
 	if !strings.HasPrefix(p.Messages[1].Content, "(sent 3 days ago) question 1") ||
 		!strings.HasPrefix(p.Messages[2].Content, "answer 1") || p.Messages[3].Content != "and today?" {
 		t.Fatalf("messages %+v", p.Messages)
@@ -146,8 +156,10 @@ func TestBuildMarksEachEarlierQuestionWithItsAgeButNotTheAnswersOrTheNewQuestion
 func TestBuildMeasuresAgesInWholeMilliseconds(t *testing.T) {
 	now := time.Date(2026, 11, 25, 9, 1, 0, 999_000, time.UTC)
 	sent := time.Date(2026, 11, 25, 9, 0, 0, 999_999, time.UTC)
-	p := Build(Input{System: "s", History: []Exchange{{Question: "q", Answer: "a", At: sent}}, Question: "x",
-		Budget: 10_000, Count: count, Now: now})
+	p := Build(Input{
+		System: "s", History: []Exchange{{Question: "q", Answer: "a", At: sent}}, Question: "x",
+		Budget: 10_000, Count: count, Now: now,
+	})
 	if p.Messages[1].Content != "(sent 1 min ago) q" {
 		t.Fatalf("got %q: 59.999 ms of microseconds must not count", p.Messages[1].Content)
 	}
