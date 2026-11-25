@@ -411,7 +411,7 @@ func TestBuildKeepsExcerptsRecallAndHistoryWithinTheBudgetTogether(t *testing.T)
 func TestBuildSaysWhichNamesMatchNobodyWithinTheBudget(t *testing.T) {
 	p := Build(Input{System: "s", Question: "q", ChatSearch: Searched, Unknown: []string{"Zorawar", "a\"<b>"}, Budget: 3000, Count: count, Now: at})
 	sys := p.Messages[0].Content
-	if !strings.Contains(sys, nothingFound) || !strings.Contains(sys, `matches "Zorawar", "a"‹b›"`) || p.Tokens != counted(p) {
+	if !strings.Contains(sys, nothingFound) || !strings.Contains(sys, `matches "Zorawar", "ab"`) || p.Tokens != counted(p) {
 		t.Fatalf("system %q", sys)
 	}
 	if p := Build(Input{System: "s", Question: "q", ChatSearch: Searched, Unknown: []string{"Zorawar"}, Budget: requestOverhead + 3, Count: count, Now: at}); p.Messages[0].Content != "s" {

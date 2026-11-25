@@ -182,6 +182,7 @@ func (c *Chat) Reply(ctx context.Context, q Question) (Answer, error) {
 			if excerpts, unknown, chatSearch, err = c.excerpts(ctx, p, privacy); err != nil {
 				return Answer{}, err
 			}
+			unknown = written(unknown, q, history)
 		}
 	}
 	var recalled []memory.Exchange
@@ -271,6 +272,23 @@ func (c *Chat) excerpts(ctx context.Context, p search.Plan, privacy MaskSession)
 		}
 	}
 	return out, found.Unknown, memory.Searched, nil
+}
+
+// written keeps the names DJ wrote himself, in this question or an earlier one: a name the model
+// took from elsewhere, such as an answer quoting someone's message, is never repeated to it.
+func written(names []string, q Question, history []memory.Exchange) []string {
+	var his strings.Builder
+	his.WriteString(strings.ToLower(q.Text))
+	for _, e := range history {
+		his.WriteString("\n" + strings.ToLower(e.Question))
+	}
+	var out []string
+	for _, n := range names {
+		if strings.Contains(his.String(), strings.ToLower(n)) {
+			out = append(out, n)
+		}
+	}
+	return out
 }
 
 // read gets exchanges from source. When the database is away the question fails and runs again

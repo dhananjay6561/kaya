@@ -8,6 +8,7 @@ import (
 	"strconv"
 	"strings"
 	"time"
+	"unicode"
 
 	"github.com/dhananjay6561/kaya/core/internal/llm"
 )
@@ -115,6 +116,18 @@ func escaped(excerpt string) string {
 	return angles.Replace(excerpt)
 }
 
+// nameOnly keeps the letters, marks, digits, spaces and the . ' - of a name, so it cannot carry
+// quotes, brackets or anything else that might pass for an instruction.
+func nameOnly(name string) string {
+	return strings.Map(func(r rune) rune {
+		switch {
+		case unicode.IsLetter(r), unicode.IsMark(r), unicode.IsDigit(r), r == ' ', r == '.', r == '\'', r == '-':
+			return r
+		}
+		return -1
+	}, name)
+}
+
 // excerptMessage is the excerpts that fit within limit tokens, best first, as a message of their
 // own, with the note that goes in the system message, what both cost and how many it holds.
 func excerptMessage(system string, excerpts []string, tag string, limit int, count func(string) int) (note, message string, tokens, kept int) {
@@ -206,7 +219,7 @@ func Build(in Input) Package {
 	if len(in.Unknown) > 0 && in.ChatSearch == Searched {
 		names := make([]string, len(in.Unknown))
 		for i, n := range in.Unknown {
-			names[i] = "\"" + escaped(n) + "\""
+			names[i] = "\"" + nameOnly(n) + "\""
 		}
 		unknown := "\n\nNo contact or group in their chats matches " + strings.Join(names, ", ") + "; say so if the question is about them."
 		if cost := count(system+section+unknown) - count(system+section); tokens+cost <= in.Budget {

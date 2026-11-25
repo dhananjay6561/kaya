@@ -3,7 +3,6 @@ package chat
 import (
 	"context"
 	"encoding/json"
-	"errors"
 	"strings"
 	"time"
 
@@ -56,8 +55,6 @@ type plan struct {
 	To     string   `json:"to"`
 }
 
-var errBadPlan = errors.New("the model's search plan was not valid")
-
 // plan asks the routine model what to search DJ's other chats for, from his question and the last
 // exchanges before it, already masked for a cloud model. It says whether to search at all. When the
 // model fails or answers nonsense, the question itself is searched for.
@@ -67,7 +64,7 @@ func (c *Chat) plan(ctx context.Context, q Question, history []memory.Exchange, 
 	b.WriteString("\n\nToday is " + now.In(c.o.Zone).Format("Monday 2 January 2006") + " (" + c.o.Zone.String() + ").")
 	var earlier strings.Builder
 	for _, e := range history[max(0, len(history)-planExchanges):] {
-		earlier.WriteString("Them: " + quote(e.Question) + "\nYou: " + quote(e.Answer) + "\n")
+		earlier.WriteString("Them (" + memory.HowLongAgo(now.Sub(e.At).Milliseconds()) + "): " + quote(e.Question) + "\nYou: " + quote(e.Answer) + "\n")
 	}
 	content := "Their latest message: " + quote(q.Text)
 	if earlier.Len() > 0 {
@@ -81,51 +78,52 @@ func (c *Chat) plan(ctx context.Context, q Question, history []memory.Exchange, 
 		Messages: []llm.Message{{Role: llm.System, Content: b.String()}, {Role: llm.User, Content: content}},
 		Schema:   &llm.Schema{Name: "search_plan", Schema: json.RawMessage(planSchema)},
 	})
-	if err == nil {
-		var p search.Plan
-		var searchIt bool
-		if p, searchIt, err = c.parse(completion.Text); err == nil {
-			c.o.Logger.Info("the search was planned",
-				"search", searchIt, "people", len(p.People), "groups", len(p.Groups), "newest", p.Newest,
-				"dated", !p.From.IsZero() || !p.To.IsZero(), "ms", time.Since(started).Milliseconds())
-			return p, searchIt, nil
-		}
-	}
 	if ctx.Err() != nil {
 		return search.Plan{}, false, context.Cause(ctx)
 	}
-	c.o.Logger.Warn("could not plan the search; searching for the question as asked", logging.Err(err))
-	return search.Plan{Query: q.Text}, true, nil
+	if err != nil {
+		c.o.Logger.Warn("could not plan the search; searching for the question as asked", logging.Err(err))
+		return search.Plan{Query: q.Text}, true, nil
+	}
+	p, searchIt, ok := c.parse(completion.Text)
+	if !ok {
+		// The model's answer may hold anything from the conversation, so it never goes in the log.
+		c.o.Logger.Warn("the search plan was not valid JSON; searching for the question as asked")
+		return search.Plan{Query: q.Text}, true, nil
+	}
+	if strings.TrimSpace(p.Query) == "" {
+		p.Query = q.Text
+	}
+	c.o.Logger.Info("the search was planned",
+		"search", searchIt, "people", len(p.People), "groups", len(p.Groups), "newest", p.Newest,
+		"dated", !p.From.IsZero() || !p.To.IsZero(), "ms", time.Since(started).Milliseconds())
+	return p, searchIt, nil
 }
 
-// parse checks a plan the model wrote: dates are days in DJ's time zone, to covers its whole day,
-// and a range the wrong way round is dropped.
-func (c *Chat) parse(answer string) (search.Plan, bool, error) {
+// parse checks a plan the model wrote, false when it is not the JSON asked for. Dates are days in
+// DJ's time zone and to covers its whole day; a date that is not one, or a range the wrong way
+// round, is dropped and the rest of the plan kept.
+func (c *Chat) parse(answer string) (search.Plan, bool, bool) {
 	var raw plan
 	if err := json.Unmarshal([]byte(strings.TrimSpace(answer)), &raw); err != nil {
-		return search.Plan{}, false, errors.Join(errBadPlan, err)
+		return search.Plan{}, false, false
 	}
 	p := search.Plan{Query: raw.Query, People: raw.People, Groups: raw.Groups, Newest: raw.Newest}
-	day := func(s string) (time.Time, error) {
-		if s = strings.TrimSpace(s); s == "" {
-			return time.Time{}, nil
+	day := func(s string) time.Time {
+		t, err := time.ParseInLocation("2006-01-02", strings.TrimSpace(s), c.o.Zone)
+		if err != nil {
+			return time.Time{}
 		}
-		return time.ParseInLocation("2006-01-02", s, c.o.Zone)
+		return t
 	}
-	var err error
-	if p.From, err = day(raw.From); err != nil {
-		return search.Plan{}, false, errors.Join(errBadPlan, err)
-	}
-	if p.To, err = day(raw.To); err != nil {
-		return search.Plan{}, false, errors.Join(errBadPlan, err)
-	}
+	p.From, p.To = day(raw.From), day(raw.To)
 	if !p.To.IsZero() {
 		p.To = p.To.AddDate(0, 0, 1).Add(-time.Nanosecond)
 	}
 	if !p.From.IsZero() && !p.To.IsZero() && p.From.After(p.To) {
 		p.From, p.To = time.Time{}, time.Time{}
 	}
-	return p, raw.Search, nil
+	return p, raw.Search, true
 }
 
 // quote is text on one line, cut to planQuoteLength characters.
