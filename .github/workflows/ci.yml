@@ -13,7 +13,7 @@ concurrency:
   cancel-in-progress: true
 
 jobs:
-  core:
+  gateway:
     runs-on: ubuntu-latest
     timeout-minutes: 10
     services:
@@ -31,29 +31,6 @@ jobs:
           --health-timeout 5s
           --health-retries 10
     env:
-      TEST_DATABASE_URL: postgres://kaya:kaya@localhost:5432/kaya
-    steps:
-      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
-        with:
-          persist-credentials: false
-      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
-        with:
-          node-version-file: .nvmrc
-          cache: npm
-      - run: npm ci
-      - run: make lint-core typecheck test-core build-core
-      - name: the go core's golden files match the typescript core
-        run: |
-          make golden
-          git status --porcelain -- core-go
-          test -z "$(git status --porcelain -- core-go)"
-
-  gateway:
-    runs-on: ubuntu-latest
-    timeout-minutes: 10
-    services:
-      postgres: *test-postgres
-    env:
       TEST_DATABASE_URL: postgres://kaya:kaya@localhost:5432/kaya?sslmode=disable
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
@@ -69,7 +46,7 @@ jobs:
           working-directory: gateway
       - run: make test-gateway build-gateway
 
-  core-go:
+  core:
     runs-on: ubuntu-latest
     timeout-minutes: 10
     services:
@@ -82,16 +59,16 @@ jobs:
           persist-credentials: false
       - uses: actions/setup-go@d8cbb8045d7f43706b9177cceb36c1f91a6644d5 # v7.1.0
         with:
-          go-version-file: core-go/go.mod
+          go-version-file: core/go.mod
           cache-dependency-path: |
-            core-go/go.sum
+            core/go.sum
             kit/go.sum
             contracts/go.sum
             gateway/go.sum
       - uses: golangci/golangci-lint-action@ba0d7d2ec06a0ea1cb5fa41b2e4a3ab91d21278a # v9.3.0
         with:
           version: v2.15.0
-          working-directory: core-go
+          working-directory: core
       - uses: golangci/golangci-lint-action@ba0d7d2ec06a0ea1cb5fa41b2e4a3ab91d21278a # v9.3.0
         with:
           version: v2.15.0
@@ -100,14 +77,14 @@ jobs:
         with:
           version: v2.15.0
           working-directory: contracts
-      - run: make test-core-go test-kit build-core-go
+      - run: make test-core test-kit build-core
       - name: every go module builds and is tidy on its own go.mod
         run: |
-          for module in contracts kit gateway core-go; do
+          for module in contracts kit gateway core; do
             (cd "$module" && go build ./... && go mod tidy -diff)
           done
-      - name: the go core image builds
-        run: docker build -f core-go/Dockerfile .
+      - name: the core image builds
+        run: docker build -f core/Dockerfile .
 
   compose:
     runs-on: ubuntu-latest
