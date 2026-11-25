@@ -21,6 +21,7 @@ type golden struct {
 		Text  string `json:"text"`
 		Count int    `json:"count"`
 	} `json:"fuzz"`
+	Sweep []*int `json:"sweep"`
 }
 
 func readGolden(t *testing.T) golden {
@@ -92,6 +93,30 @@ func TestCountsMatchTheTypeScriptCore(t *testing.T) {
 	}
 }
 
+func TestCountsEveryCharacterLikeTheTypeScriptCore(t *testing.T) {
+	g := readGolden(t)
+	if len(g.Sweep) != 0x110000/64 {
+		t.Fatalf("sweep has %d entries", len(g.Sweep))
+	}
+	checked := 0
+	for i, want := range g.Sweep {
+		if want == nil {
+			continue
+		}
+		runes := make([]rune, 64)
+		for k := range runes {
+			runes[k] = rune(i*64 + k)
+		}
+		if got := Count(string(runes)); got != *want {
+			t.Errorf("code points U+%04X to U+%04X: count %d, want %d", i*64, i*64+63, got, *want)
+		}
+		checked++
+	}
+	if checked != 0x110000/64-32 {
+		t.Fatalf("checked %d chunks", checked)
+	}
+}
+
 func TestCountsWhiteSpaceAndContractionsLikeTiktoken(t *testing.T) {
 	for text, want := range map[string]int{
 		"":                  0,
@@ -113,17 +138,31 @@ func TestCountsWhiteSpaceAndContractionsLikeTiktoken(t *testing.T) {
 	}
 }
 
-func TestSplitsIntoPiecesThatCoverTheText(t *testing.T) {
-	for _, text := range []string{"a  b", "\n \n", "x\u3000\u3000y", "  leading", "trailing  ", "é\u0301", "a\xffb"} {
-		e := load()
-		var pieces []string
+func TestSplitsLikeTiktoken(t *testing.T) {
+	e := load()
+	for text, want := range map[string][]string{
+		"a  b":           {"a", " ", " b"},
+		"\n \n":          {"\n \n"},
+		"x\u3000\u3000y": {"x", "\u3000", "\u3000y"},
+		"  leading":      {" ", " leading"},
+		"trailing  ":     {"trailing", "  "},
+		"I'M here":       {"I'M", " here"},
+		"itſ":            {"itſ"},
+		"it'ſ fine":      {"it'ſ", " fine"},
+		"12345":          {"123", "45"},
+		"a\r\n\r\nb":     {"a", "\r\n\r\n", "b"},
+		"x \u0085y":      {"x", " ", "\u0085y"},
+		"path/to\n":      {"path", "/to", "\n"},
+		"wow!!\n\n":      {"wow", "!!\n\n"},
+	} {
+		var got []string
 		for start := 0; start < len(text); {
 			end := e.next(text, start)
-			pieces = append(pieces, text[start:end])
+			got = append(got, text[start:end])
 			start = end
 		}
-		if strings.Join(pieces, "") != text {
-			t.Errorf("pieces of %q = %q", text, pieces)
+		if strings.Join(got, "|") != strings.Join(want, "|") {
+			t.Errorf("pieces of %q = %q, want %q", text, got, want)
 		}
 	}
 }

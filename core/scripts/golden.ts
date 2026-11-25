@@ -301,6 +301,14 @@ function tokens() {
       return text.length > 200 ? { text, count: ids.length } : { text, ids };
     }),
     fuzz: fuzzed.map((text) => ({ text, count: encode(text, plain).length })),
+    // Entry i counts the 64 code points from i * 64 written one after another, so every character
+    // is checked against the Unicode tables; surrogates cannot stand alone in Go, so they are null.
+    sweep: Array.from({ length: 0x110000 / 64 }, (_, i) => {
+      const start = i * 64;
+      return start >= 0xd800 && start < 0xe000
+        ? null
+        : encode(run(start, start + 63), plain).length;
+    }),
   });
 }
 
@@ -550,7 +558,28 @@ function whatsapp() {
     "**a** ".repeat(50),
   ];
   const pools = ["**", "__", "*", "_", "`", "```", "#", "## ", "[", "]", "(", ")", "https://a.b/c"];
-  const chars = ["a", "b", " ", "\n", "\t", "\r", "\r\n", " ", " ", "-", "+", "~", "😀", "क"];
+  const chars = [
+    "a",
+    "b",
+    " ",
+    "\n",
+    "\t",
+    "\r",
+    "\r\n",
+    " ",
+    " ",
+    "-",
+    "+",
+    "~",
+    "😀",
+    "क",
+    "\u0085",
+    "\v",
+    "\f",
+    "\u2029",
+    "\ufeff",
+    "\u3000",
+  ];
   const next = random(73);
   const fuzzed: string[] = [];
   for (let i = 0; i < 1_000; i++) {
