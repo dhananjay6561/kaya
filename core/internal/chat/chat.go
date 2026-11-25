@@ -2,8 +2,10 @@ package chat
 
 import (
 	"context"
+	"crypto/rand"
 	"errors"
 	"log/slog"
+	"strings"
 	"time"
 	"unicode/utf8"
 
@@ -49,9 +51,10 @@ type Options struct {
 	// (the recent exchanges the context carries, by question id) and anything from before on;
 	// nil means none. A failure is handled like History's.
 	Recall func(ctx context.Context, q Question, exclude []int64, before time.Time) ([]memory.Exchange, error)
-	// Excerpts finds passages of DJ's other chats that may answer a question, best first; nil
-	// means none. A failure is handled like History's.
-	Excerpts func(ctx context.Context, q Question) ([]search.Hit, error)
+	// Excerpts finds passages of DJ's other chats that may answer a question, best first, and says
+	// whether it searched; nil means none. A failure is handled like History's, and the model is
+	// told the search failed.
+	Excerpts func(ctx context.Context, q Question) ([]search.Excerpt, bool, error)
 	// DatabaseAway says whether a History error means the database is down, in which case the
 	// question fails and runs again later; any other error is logged and the question is answered
 	// without the conversation.
@@ -99,9 +102,13 @@ func (c *Chat) Reply(ctx context.Context, q Question) (Answer, error) {
 		privacy = o.NewMaskSession()
 	}
 	var excerpts []string
+	var chatSearch memory.ChatSearch
+	tag := strings.ToLower(rand.Text()[:10])
 	input := func(history, recalled []memory.Exchange) memory.Input {
 		in := memory.Input{
 			Excerpts:    excerpts,
+			Tag:         tag,
+			ChatSearch:  chatSearch,
 			System:      SystemPrompt(now, o.Zone, o.LLM.Locality()),
 			History:     history,
 			Recalled:    recalled,
@@ -146,7 +153,13 @@ func (c *Chat) Reply(ctx context.Context, q Question) (Answer, error) {
 		}
 		masked := make([]memory.Exchange, len(exchanges))
 		for i, e := range exchanges {
-			e.Answer = privacy.Mask(e.Answer, e.Question)
+			// An answer may repeat a code from an excerpt, which was masked there because of the
+			// messages around it; the question and answer alone often do not say it is one.
+			context := e.Question
+			if search.MentionsACode(e.Question + "\n" + e.Answer) {
+				context += "\notp"
+			}
+			e.Answer = privacy.Mask(e.Answer, context)
 			masked[i] = e
 		}
 		return masked
@@ -156,7 +169,7 @@ func (c *Chat) Reply(ctx context.Context, q Question) (Answer, error) {
 		return Answer{}, err
 	}
 	history = mask(history)
-	if excerpts, err = c.excerpts(ctx, q, privacy); err != nil {
+	if excerpts, chatSearch, err = c.excerpts(ctx, q, privacy); err != nil {
 		return Answer{}, err
 	}
 	var recalled []memory.Exchange
@@ -175,9 +188,12 @@ func (c *Chat) Reply(ctx context.Context, q Question) (Answer, error) {
 	sent, sentRecalled := history, recalled
 	completion, err := ask(sent, sentRecalled, llm.Medium)
 	var failed *llm.Error
-	if err != nil && errors.As(err, &failed) && failed.Code == llm.TooLong && len(history)+len(recalled) > 0 {
+	if err != nil && errors.As(err, &failed) && failed.Code == llm.TooLong && len(history)+len(recalled)+len(excerpts) > 0 {
 		o.Logger.Warn("the request was too long with the conversation; asking without it")
 		sent, sentRecalled = nil, nil
+		if len(excerpts) > 0 {
+			excerpts, chatSearch = nil, memory.SearchFailed
+		}
 		completion, err = ask(sent, sentRecalled, llm.Medium)
 	}
 	if err != nil {
@@ -214,31 +230,35 @@ func (c *Chat) Reply(ctx context.Context, q Question) (Answer, error) {
 }
 
 // excerpts renders the passages Excerpts finds, masked for a cloud model with the question's mask
-// session, so placeholders match the rest of the request and are put back in the answer.
-func (c *Chat) excerpts(ctx context.Context, q Question, privacy MaskSession) ([]string, error) {
+// session, so placeholders match the rest of the request and are put back in the answer, and says
+// what the search did.
+func (c *Chat) excerpts(ctx context.Context, q Question, privacy MaskSession) ([]string, memory.ChatSearch, error) {
 	if c.o.Excerpts == nil {
-		return nil, nil
+		return nil, memory.NotSearched, nil
 	}
-	hits, err := c.o.Excerpts(ctx, q)
+	found, searched, err := c.o.Excerpts(ctx, q)
 	switch {
 	case err == nil:
 	case ctx.Err() != nil:
-		return nil, context.Cause(ctx)
+		return nil, memory.NotSearched, context.Cause(ctx)
 	case c.o.DatabaseAway(err):
-		return nil, err
+		return nil, memory.NotSearched, err
 	default:
 		c.o.Logger.Warn("could not search the chats; answering without them", logging.Err(err))
-		return nil, nil
+		return nil, memory.SearchFailed, nil
+	}
+	if !searched {
+		return nil, memory.NotSearched, nil
 	}
 	var masker search.Masker
 	if privacy != nil {
 		masker = privacy
 	}
-	out := make([]string, len(hits))
-	for i, h := range hits {
-		out[i] = search.Render(h.Title, h.Lines, c.o.Zone, search.DefaultShape, masker, "")
+	out := make([]string, len(found))
+	for i, e := range found {
+		out[i] = search.Render(e.Title, e.Lines, c.o.Zone, search.DefaultShape, masker, e.Before)
 	}
-	return out, nil
+	return out, memory.Searched, nil
 }
 
 // read gets exchanges from source. When the database is away the question fails and runs again

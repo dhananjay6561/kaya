@@ -158,7 +158,7 @@ func run(cfg config.Config, logger *slog.Logger) error {
 			defer cancel()
 			return searcher.Recall(ctx, q.Text, exclude, before, 10)
 		},
-		Excerpts: func(ctx context.Context, q chat.Question) ([]search.Hit, error) {
+		Excerpts: func(ctx context.Context, q chat.Question) ([]search.Excerpt, bool, error) {
 			ctx, cancel := context.WithTimeout(ctx, 5*time.Second)
 			defer cancel()
 			return searcher.Excerpts(ctx, q.Text, 3)
