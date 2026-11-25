@@ -333,7 +333,7 @@ target instead of adding rows.
 | Layer | Choice |
 |---|---|
 | WhatsApp gateway | Go 1.26, [whatsmeow](https://github.com/tulir/whatsmeow), `log/slog` |
-| Agent | TypeScript on Node 24, zod for config, pino for logs, `pg`; moving to Go (`core-go/`) |
+| Agent | TypeScript on Node 24, zod for config, pino for logs, `pg`; moving to Go (`core-go/`: commands, chat, memory, Groq and masking ported, not live yet) |
 | Database | Postgres 18 with pgvector, migrations with dbmate |
 | Contracts | JSON Schema 2020-12, validated with ajv in TypeScript and santhosh-tekuri/jsonschema in Go |
 | LLM | Groq behind a provider interface (`openai/gpt-oss-120b` and `openai/gpt-oss-20b`) |
@@ -484,6 +484,7 @@ make migration name=add_tasks   # new empty migration in db/migrations
 make migrate       # apply pending migrations
 make rollback      # roll back the latest migration on the live db (asks first)
 make contracts     # regenerate core's TypeScript types after changing contracts/schemas
+make golden        # rewrite the Go core's golden test files from the TypeScript core
 make format        # fix lint and formatting where possible
 make test-db       # migrations and schema tests on a throwaway database
 make check         # lint, typecheck, test and build everything (what CI runs)
@@ -513,6 +514,11 @@ TEST_DATABASE_URL=postgres://kaya:kaya@localhost:5432/kaya make test
   reapplies and runs the SQL tests in `db/tests/`. It never touches your live database.
 - **Contract tests.** Every sample in `contracts/samples/v1/` must pass or fail the same way in Go
   and TypeScript, and every valid sample must round-trip through the Go types unchanged.
+- **Golden tests.** While the agent moves from TypeScript to Go, `make golden` runs the TypeScript
+  functions on made-up inputs and writes what they return into `core-go` testdata: token counts for
+  every Unicode character, context packages, system prompts, WhatsApp formatting, masking of a few
+  thousand messages and exact Groq requests. The Go tests must match them exactly, and CI fails if
+  the files drift from the TypeScript code.
 - **CI.** [GitHub Actions](.github/workflows/ci.yml) runs core and gateway jobs against a real
   Postgres with pgvector, brings up the full Compose stack and runs the schema tests, and reviews
   dependency changes on pull requests.
