@@ -133,13 +133,17 @@ type Searcher struct {
 	DB         *store.DB
 	Embeddings embeddings.Provider
 	Vectors    VectorStore
-	// RecallDistance is the bar Recall holds chunks to; NewSearcher sets RecallDistance.
-	RecallDistance float64
+	// RecallDistance, ExcerptDistance and NamedDistance are the bars Recall and Excerpts hold
+	// chunks to; NewSearcher sets the constants of the same names.
+	RecallDistance, ExcerptDistance, NamedDistance float64
 }
 
 // NewSearcher searches the chunks in db, comparing vectors made by embedder's model.
 func NewSearcher(db *store.DB, embedder embeddings.Provider) *Searcher {
-	return &Searcher{DB: db, Embeddings: embedder, Vectors: &PgVectors{DB: db, Model: embedder.Model()}, RecallDistance: RecallDistance}
+	return &Searcher{
+		DB: db, Embeddings: embedder, Vectors: &PgVectors{DB: db, Model: embedder.Model()},
+		RecallDistance: RecallDistance, ExcerptDistance: ExcerptDistance, NamedDistance: NamedDistance,
+	}
 }
 
 // ErrEmptyQuery refuses a search for nothing.
