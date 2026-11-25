@@ -9,6 +9,7 @@ import (
 
 	"github.com/dhananjay6561/kaya/core/internal/llm"
 	"github.com/dhananjay6561/kaya/core/internal/memory"
+	"github.com/dhananjay6561/kaya/core/internal/search"
 	"github.com/dhananjay6561/kaya/core/internal/text"
 	"github.com/dhananjay6561/kaya/kit/logging"
 )
@@ -48,6 +49,9 @@ type Options struct {
 	// (the recent exchanges the context carries, by question id) and anything from before on;
 	// nil means none. A failure is handled like History's.
 	Recall func(ctx context.Context, q Question, exclude []int64, before time.Time) ([]memory.Exchange, error)
+	// Excerpts finds passages of DJ's other chats that may answer a question, best first; nil
+	// means none. A failure is handled like History's.
+	Excerpts func(ctx context.Context, q Question) ([]search.Hit, error)
 	// DatabaseAway says whether a History error means the database is down, in which case the
 	// question fails and runs again later; any other error is logged and the question is answered
 	// without the conversation.
@@ -72,7 +76,7 @@ func New(o Options) (*Chat, error) {
 	switch {
 	case o.LLM == nil || o.Logger == nil || o.Zone == nil:
 		return nil, errors.New("chat needs a model, a logger and a time zone")
-	case (o.History != nil || o.Recall != nil) && o.DatabaseAway == nil:
+	case (o.History != nil || o.Recall != nil || o.Excerpts != nil) && o.DatabaseAway == nil:
 		return nil, errors.New("chat needs DatabaseAway to read history")
 	case o.LLM.Locality() == llm.Cloud && o.NewMaskSession == nil:
 		return nil, errors.New("chat needs masking to send the conversation to a cloud model")
@@ -94,8 +98,10 @@ func (c *Chat) Reply(ctx context.Context, q Question) (Answer, error) {
 	if o.LLM.Locality() == llm.Cloud {
 		privacy = o.NewMaskSession()
 	}
+	var excerpts []string
 	input := func(history, recalled []memory.Exchange) memory.Input {
 		in := memory.Input{
+			Excerpts:    excerpts,
 			System:      SystemPrompt(now, o.Zone, o.LLM.Locality()),
 			History:     history,
 			Recalled:    recalled,
@@ -128,6 +134,7 @@ func (c *Chat) Reply(ctx context.Context, q Question) (Answer, error) {
 			"exchanges", built.Exchanges,
 			"left_out", built.LeftOut,
 			"recalled", built.Recalled,
+			"excerpts", built.Excerpts,
 			"ms", time.Since(started).Milliseconds(),
 		)
 		return completion, nil
@@ -149,6 +156,9 @@ func (c *Chat) Reply(ctx context.Context, q Question) (Answer, error) {
 		return Answer{}, err
 	}
 	history = mask(history)
+	if excerpts, err = c.excerpts(ctx, q, privacy); err != nil {
+		return Answer{}, err
+	}
 	var recalled []memory.Exchange
 	if o.Recall != nil {
 		// What the recent conversation will carry decides what recall looks beyond, so a recent
@@ -201,6 +211,34 @@ func (c *Chat) Reply(ctx context.Context, q Question) (Answer, error) {
 		answer += cutShort
 	}
 	return Answer{Text: answer, Remember: true}, nil
+}
+
+// excerpts renders the passages Excerpts finds, masked for a cloud model with the question's mask
+// session, so placeholders match the rest of the request and are put back in the answer.
+func (c *Chat) excerpts(ctx context.Context, q Question, privacy MaskSession) ([]string, error) {
+	if c.o.Excerpts == nil {
+		return nil, nil
+	}
+	hits, err := c.o.Excerpts(ctx, q)
+	switch {
+	case err == nil:
+	case ctx.Err() != nil:
+		return nil, context.Cause(ctx)
+	case c.o.DatabaseAway(err):
+		return nil, err
+	default:
+		c.o.Logger.Warn("could not search the chats; answering without them", logging.Err(err))
+		return nil, nil
+	}
+	var masker search.Masker
+	if privacy != nil {
+		masker = privacy
+	}
+	out := make([]string, len(hits))
+	for i, h := range hits {
+		out[i] = search.Render(h.Title, h.Lines, c.o.Zone, search.DefaultShape, masker, "")
+	}
+	return out, nil
 }
 
 // read gets exchanges from source. When the database is away the question fails and runs again
