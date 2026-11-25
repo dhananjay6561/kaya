@@ -239,6 +239,16 @@ describe("masking", () => {
       assert.equal(masked("your PIN is 482913"), "your PIN is [OTP_1]");
     });
 
+    it("never splits an emoji at the edge of an address", () => {
+      for (const text of [`😀${"a".repeat(53)} road 110001`, `12 road ${"a".repeat(114)}😀tail`]) {
+        const session = createMaskSession();
+        const out = session.mask(text);
+        assert.ok(out.isWellFormed(), out);
+        assert.match(out, /\[ADDRESS_1\]/);
+        assert.equal(session.restore(out), text);
+      }
+    });
+
     it("restores placeholders the model reformatted, and only ones it issued", () => {
       const session = createMaskSession();
       session.mask("Rahul 9876543210");

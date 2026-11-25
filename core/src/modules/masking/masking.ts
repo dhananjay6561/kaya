@@ -184,6 +184,15 @@ const rules: readonly Rule[] = [
   },
 ];
 
+const isHighSurrogate = (text: string, i: number) => {
+  const code = text.charCodeAt(i);
+  return code >= 0xd800 && code <= 0xdbff;
+};
+const isLowSurrogate = (text: string, i: number) => {
+  const code = text.charCodeAt(i);
+  return code >= 0xdc00 && code <= 0xdfff;
+};
+
 function find(rule: Rule, scan: Scan): void {
   const pattern = new RegExp(rule.pattern.source, rule.pattern.flags);
   for (let match = pattern.exec(scan.text); match; match = pattern.exec(scan.text)) {
@@ -195,6 +204,11 @@ function find(rule: Rule, scan: Scan): void {
     if (firstTaken > 0 && rule.clip) {
       end = start + firstTaken;
       while (end > start && /[\s,.;:]/.test(scan.text[end - 1] ?? "")) end--;
+    }
+    if (end > start) {
+      // A span never splits a character made of two UTF-16 units, such as an emoji.
+      if (isLowSurrogate(scan.text, start) && isHighSurrogate(scan.text, start - 1)) start--;
+      if (isHighSurrogate(scan.text, end - 1) && isLowSurrogate(scan.text, end)) end++;
     }
     const clash = scan.taken.subarray(start, end).includes(1);
     const value = scan.text.slice(start, end);
