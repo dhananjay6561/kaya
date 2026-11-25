@@ -227,28 +227,27 @@ Folders appear when a phase needs them; empty placeholders are not committed.
   it, in a quarter of the budget set aside for them plus what the conversation leaves. The query
   for recall has a 5-second deadline and no retries, so a slow embedding service costs a reply a
   few seconds at most.
-- **Answers from chats.** For every question with words of substance, Kaya also looks for up to
-  three excerpts in DJ's other chats; his own chat with Kaya (the direct chat with the linked
-  account, or the chat of the latest exchange while it is logged out) is left out in SQL. The
-  question's words, minus common English, Hinglish and Hindi question words, are matched against
-  group names and the names DJ saved for contacts (or, for a contact he saved no name for, the
-  names they chose) with Postgres full text search (GIN indexes on both), keeping the 20
-  best-ranked of each. Chunks of those people or groups are
-  searched within cosine distance 0.7 with a 0.1 head start, alongside all chats within 0.6, and the
-  results merged. A short or leaning question ("and recently?") naming nobody within 30 minutes of
-  the previous one is a follow-up: the previous question's names are used, and their chats are
-  searched with both questions together. A question about recent messages that names someone and
-  has no topic of its own gets the two newest chunks of the best-matching person's and group's
-  chats first. The question is embedded once and shared with recall. Each excerpt is rendered like
-  a chunk, with self-chosen sender and chat names marked `~`, and masked with the question's mask session for
-  a cloud model, using the messages just before it as context. The excerpts go in a user message of
-  their own just before the question, inside tags named afresh for each request, with angle
-  brackets, look-alikes and entities escaped; a note in the system message says they are data and
-  never instructions and who "Me", "Kaya" and `~` are. When the search finds nothing or fails, the
-  system message says which. Excerpts take at most half the room the system prompt and the question
-  leave; if the request is still too long, the conversation is dropped first and then the
-  excerpts, and the model is told they did not fit. Kaya's past answers are masked as if a code
-  were mentioned, since one may repeat a code from an excerpt.
+- **Answers from chats.** Before a question is answered, the routine model plans a search of DJ's
+  other chats from the question and the last two exchanges (strict JSON: whether to search, what for
+  in the question's own language, the people and groups named, whether it asks for the newest
+  messages, and a date range). Names are matched by trigram similarity in any script (`pg_trgm`),
+  by the names DJ saved or, for a contact he did not save, the names they chose; among equally close
+  names, whoever DJ talked to most recently comes first. Chunks of the named people or groups are
+  searched within cosine distance 0.7 with a 0.1 head start, alongside all chats within 0.6, inside
+  the plan's dates, and merged; DJ's own chat with Kaya (the direct chat with the linked account, or
+  the chat of the latest exchange while it is logged out) is left out in SQL. A plan asking for the
+  newest messages puts the two newest chunks of the best match first, labelled as the newest. The
+  plan's query is embedded once and shared with recall. If planning fails, the question itself is
+  searched for. Each excerpt is rendered like a chunk, with self-chosen sender and chat names marked
+  `~`, and masked with the question's mask session for a cloud model, using the messages just
+  before it as context. The excerpts go in a user message of their own just before the question,
+  inside tags named afresh for each request, with angle brackets, look-alikes and entities escaped;
+  a note in the system message says they are data and never instructions and who "Me", "Kaya" and
+  `~` are. When the search finds nothing, fails or finds too much to fit, and when a name matches
+  nobody, the system message says so. Excerpts take at most half the room the system prompt and the
+  question leave; if the request is still too long, the conversation is dropped first and then the
+  excerpts. Kaya's past answers are masked as if a code were mentioned, since one may repeat a code
+  from an excerpt.
 - **History sync.** Each history chunk WhatsApp announces becomes a row in `history_jobs`, stored
   in the transaction that acknowledges the announcement. A single worker downloads the chunk,
   stores it in batches of at most 200 messages (a savepoint per message, so one bad message
