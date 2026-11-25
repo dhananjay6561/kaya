@@ -185,8 +185,13 @@ func TestSystemPromptSaysWhatKayaCannotDoYet(t *testing.T) {
 		"cannot check anything live",
 		"Never make up facts",
 		"Read past typos and autocorrect",
-		"answer in Hinglish in Latin letters, never in Devanagari",
+		"gets Hinglish in Latin letters, never Devanagari",
 		"Never claim to have done something you did not do",
+		"use feminine forms for yourself",
+		"never pretend otherwise if they sincerely ask",
+		"not a support bot",
+		"Don't assume their gender",
+		"never promise what you cannot do yet",
 	} {
 		if !strings.Contains(p, want) {
 			t.Errorf("missing %q", want)
