@@ -39,7 +39,7 @@ func TestKeepsTheWordsAfterRememberAndForgetAsWritten(t *testing.T) {
 }
 
 func TestTreatsAnyOtherSlashAsUnknownAndPlainTextAsNoCommand(t *testing.T) {
-	sameSlash(t, "/tasks", slash(Unknown, "tasks"))
+	sameSlash(t, "/jobs", slash(Unknown, "jobs"))
 	sameSlash(t, "/", slash(Unknown, ""))
 	sameSlash(t, "/ pause", slash(Unknown, ""))
 	sameSlash(t, "/usr/bin is here", slash(Unknown, "usr/bin"))
@@ -68,6 +68,7 @@ func TestLetsOnlyTheFourBuiltinsPastTheCommandCap(t *testing.T) {
 	for text, want := range map[string]bool{
 		"/pause": true, " /Resume.": true, "/pause 2h": false, "/nope": false, "hello": false,
 		"/facts": true, "/remember I like tea": false, "/forget 3": false, "/remember": true,
+		"/tasks": true, "/done 3": false, "/tasks please": false,
 	} {
 		if got := IsBuiltin(text); got != want {
 			t.Errorf("%q: got %v", text, got)
