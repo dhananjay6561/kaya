@@ -97,9 +97,9 @@ func Clean(s string) string {
 	return strings.Join(strings.FieldsFunc(text.Trim(s), text.IsSpace), " ")
 }
 
-// Remember keeps a fact DJ told. When the same fact is kept already it is returned with false,
-// marked as told if it was learned.
-func (s *Store) Remember(ctx context.Context, body string, messageID *int64) (Fact, bool, error) {
+// Remember keeps a fact DJ told with the command whose WhatsApp id is waID. When the same fact is
+// kept already it is returned with false, marked as told if it was learned.
+func (s *Store) Remember(ctx context.Context, body, waID string) (Fact, bool, error) {
 	body = Clean(body)
 	switch {
 	case body == "":
@@ -130,8 +130,9 @@ func (s *Store) Remember(ctx context.Context, body string, messageID *int64) (Fa
 			return ErrFull
 		}
 		created = true
-		return tx.QueryRow(ctx, `INSERT INTO facts (body, source, message_id) VALUES ($1, 'told', $2)
-			RETURNING id, body, source, updated_at`, body, messageID).Scan(&f.ID, &f.Text, &f.Source, &f.UpdatedAt)
+		return tx.QueryRow(ctx, `INSERT INTO facts (body, source, message_id)
+			VALUES ($1, 'told', (SELECT id FROM messages WHERE wa_id = $2 AND from_me ORDER BY id DESC LIMIT 1))
+			RETURNING id, body, source, updated_at`, body, waID).Scan(&f.ID, &f.Text, &f.Source, &f.UpdatedAt)
 	})
 	return f, created, err
 }
