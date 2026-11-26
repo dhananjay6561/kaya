@@ -302,9 +302,10 @@ Folders appear when a phase needs them; empty placeholders are not committed.
   own chat with Kaya and those tagged `ignore`, keeps each chat's newest 60, and puts direct chats
   first, then chats by how many messages were tagged important, then the busiest. `/summary <name>`
   finds the chat by `search.Searcher.FindChat` (the planner's trigram name matching over chat
-  titles) and reads its last day, or its last 20 messages when the day was quiet. Lines are readied
-  by `search.Prepare`, fitted newest first into the model's context budget, and sent to the heavy
-  model with the name DJ goes by, so a request to him reads as his; the answer has placeholders
+  titles, a group or a saved contact before anyone named only by the name they chose) and reads
+  its last day, or its last 20 readable messages when the day was quiet. Lines are readied by
+  `search.Prepare` and fitted into at most 3,000 tokens round by round, each chat's newest line
+  first, so every chat is heard from; they go to the heavy model with the name DJ goes by, so a request to him reads as his; the answer has placeholders
   put back, is formatted for WhatsApp and clipped, and says how many older messages did not fit.
 - **History sync.** Each history chunk WhatsApp announces becomes a row in `history_jobs`, stored
   in the transaction that acknowledges the announcement. A single worker downloads the chunk,
