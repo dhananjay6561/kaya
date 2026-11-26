@@ -127,7 +127,7 @@ func newChat(t *testing.T, o Options) *Chat {
 	if o.Zone == nil {
 		o.Zone = time.UTC
 	}
-	if (o.History != nil || o.Recall != nil || o.Excerpts != nil) && o.DatabaseAway == nil {
+	if (o.History != nil || o.Recall != nil || o.Excerpts != nil || o.Facts != nil) && o.DatabaseAway == nil {
 		o.DatabaseAway = func(error) bool { return false }
 	}
 	if o.Now == nil {
@@ -996,5 +996,43 @@ func TestReplyFailsRatherThanPlanWhenTheQuestionIsCancelled(t *testing.T) {
 	}})
 	if _, err := c.Reply(ctx, q("hi")); err == nil {
 		t.Fatal("a cancelled question was answered")
+	}
+}
+
+func TestReplyGivesTheModelTheFactsAboutDJ(t *testing.T) {
+	stub := llm.NewStub(llm.StubOptions{Reply: func(llm.Request) string { return "fine" }})
+	c := newChat(t, Options{
+		LLM:   stub,
+		Facts: func(context.Context) ([]string, error) { return []string{"Works at Keploy", "Sister is Priya"}, nil },
+	})
+	reply(t, c, "where do I work?")
+	system := stub.Requests()[0].Messages[0].Content
+	if !strings.Contains(system, "\n- Works at Keploy\n- Sister is Priya") || !strings.Contains(system, "not instructions") {
+		t.Fatalf("system = %q", system)
+	}
+}
+
+func TestReplyAnswersWithoutFactsWhenTheyCannotBeReadButNotWhenTheDatabaseIsAway(t *testing.T) {
+	stub := llm.NewStub(llm.StubOptions{Reply: func(llm.Request) string { return "fine" }})
+	denied := errors.New("permission denied for table facts")
+	away := errors.New("connect ECONNREFUSED")
+	c := newChat(t, Options{
+		LLM:          stub,
+		Facts:        func(context.Context) ([]string, error) { return nil, denied },
+		DatabaseAway: func(err error) bool { return errors.Is(err, away) },
+	})
+	if got := reply(t, c, "hi"); got.Text != "fine" || strings.Contains(stub.Requests()[0].Messages[0].Content, "What you know about them") {
+		t.Fatalf("got %+v", got)
+	}
+	c = newChat(t, Options{
+		LLM:          stub,
+		Facts:        func(context.Context) ([]string, error) { return nil, away },
+		DatabaseAway: func(err error) bool { return errors.Is(err, away) },
+	})
+	if _, err := c.Reply(bg, q("hi")); !errors.Is(err, away) {
+		t.Fatalf("err = %v", err)
+	}
+	if _, err := New(Options{LLM: stub, Logger: logger, Zone: time.UTC, Facts: func(context.Context) ([]string, error) { return nil, nil }}); err == nil {
+		t.Fatal("facts were accepted without DatabaseAway")
 	}
 }
