@@ -9,6 +9,8 @@ import (
 	"strings"
 	"unicode"
 
+	"golang.org/x/text/unicode/norm"
+
 	"github.com/dhananjay6561/kaya/core/internal/facts"
 	"github.com/dhananjay6561/kaya/core/internal/text"
 )
@@ -24,6 +26,7 @@ const (
 	noFactBook  = "Facts are not set up here."
 	forgetUsage = "Send /forget with the number of a fact from /facts, like /forget 12."
 	maxListed   = 60_000
+	maxLine     = 300
 )
 
 func listFacts(ctx context.Context, book FactBook) (string, error) {
@@ -37,27 +40,33 @@ func listFacts(ctx context.Context, book FactBook) (string, error) {
 	if len(all) == 0 {
 		return "I don't know any facts about you yet. Tell me one with /remember, or just mention things as we talk and I'll pick them up.", nil
 	}
-	var told, learned []string
-	for _, f := range all {
-		line := fmt.Sprintf("%d. %s", f.ID, f.Text)
-		if f.Source == facts.Told {
-			told = append(told, line)
-		} else {
-			learned = append(learned, line)
-		}
-	}
+	footer := "\n\nRemove one with /forget and its number."
 	var b strings.Builder
-	if len(told) > 0 {
-		b.WriteString("*You told me*\n" + strings.Join(told, "\n"))
-	}
-	if len(learned) > 0 {
-		if b.Len() > 0 {
-			b.WriteString("\n\n")
+	section := ""
+	for i, f := range all {
+		heading := "*I picked up*"
+		if f.Source == facts.Told {
+			heading = "*You told me*"
 		}
-		b.WriteString("*I picked up*\n" + strings.Join(learned, "\n"))
+		if heading != section {
+			if b.Len() > 0 {
+				b.WriteString("\n\n")
+			}
+			b.WriteString(heading)
+			section = heading
+		}
+		line := "\n" + fmt.Sprintf("%d. %s", f.ID, text.Clip(f.Text, maxLine))
+		if b.Len()+len(line)+len(footer)+40 > maxListed {
+			fmt.Fprintf(&b, "\n…and %d more.", len(all)-i)
+			break
+		}
+		b.WriteString(line)
 	}
-	b.WriteString("\n\nRemove one with /forget and its number.")
-	return text.Clip(b.String(), maxListed), nil
+	b.WriteString(footer)
+	if len(all) >= facts.MaxFacts {
+		fmt.Fprintf(&b, " I keep at most %d; a new one replaces the learned fact I have not needed longest.", facts.MaxFacts)
+	}
+	return b.String(), nil
 }
 
 func remember(ctx context.Context, book FactBook, body, waID string) (string, error) {
@@ -73,8 +82,10 @@ func remember(ctx context.Context, book FactBook, body, waID string) (string, er
 		return "Send /remember with the fact after it, like /remember I'm vegetarian.", nil
 	case errors.Is(err, facts.ErrTooLong):
 		return fmt.Sprintf("That is too long for one fact. Keep it under %d characters.", facts.MaxLength), nil
+	case errors.Is(err, facts.ErrSecret):
+		return "I don't keep passwords, PINs, codes, or card, account or ID numbers, even when asked.", nil
 	case errors.Is(err, facts.ErrFull):
-		return fmt.Sprintf("I already keep %d facts, the most I can. Remove some with /forget first.", facts.MaxFacts), nil
+		return fmt.Sprintf("You told me %d facts already, the most I keep. Remove some with /forget first.", facts.MaxFacts), nil
 	case err != nil:
 		return "", err
 	case !created:
@@ -87,13 +98,13 @@ func forget(ctx context.Context, book FactBook, args string) (string, error) {
 	if book == nil {
 		return noFactBook, nil
 	}
-	fields := strings.FieldsFunc(args, func(r rune) bool { return r == ',' || unicode.IsSpace(r) })
+	fields := strings.FieldsFunc(norm.NFKC.String(args), func(r rune) bool { return r == ',' || unicode.IsSpace(r) })
 	if len(fields) == 0 || len(fields) > 20 {
 		return forgetUsage, nil
 	}
 	var ids []int64
 	for _, field := range fields {
-		id, err := strconv.ParseInt(strings.TrimPrefix(field, "#"), 10, 64)
+		id, err := strconv.ParseInt(strings.TrimRight(strings.TrimPrefix(field, "#"), ".!?"), 10, 64)
 		if err != nil || id <= 0 {
 			return forgetUsage, nil
 		}
@@ -106,7 +117,7 @@ func forget(ctx context.Context, book FactBook, args string) (string, error) {
 		return "", err
 	}
 	if len(gone) == 0 {
-		return "No fact has that number. Send /facts to see them.", nil
+		return "No fact has that number now. Send /facts to see them.", nil
 	}
 	lines := make([]string, len(gone))
 	for i, f := range gone {
