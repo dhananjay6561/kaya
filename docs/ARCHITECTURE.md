@@ -252,20 +252,25 @@ Folders appear when a phase needs them; empty placeholders are not committed.
   excerpts. Kaya's past answers are masked as if a code were mentioned, since one may repeat a code
   from an excerpt.
 - **Facts about DJ.** `facts` holds one short line per fact, either told with `/remember` or learned,
-  unique ignoring case, at most 200. One worker in core, under its own advisory lock, reads each
+  unique ignoring case, at most 200 (past that a new fact replaces the learned one changed longest ago). One worker in core, under its own advisory lock, reads each
   exchange once, in order: it gives the routine model (strict JSON, medium effort) the kept facts
-  with their numbers and the exchange (Kaya's answer masked for a cloud model), and gets back facts
-  to add, each new or replacing a kept one by number, and numbers to drop. The prompt allows facts
+  that fit 2,500 tokens, with their numbers, and the exchange with the day it was sent (Kaya's
+  answer masked for a cloud model), and gets back facts to add, each new or replacing a learned one
+  by number, and learned ones to drop; DJ's own facts change only through his commands. The prompt allows facts
   only from DJ's own words; the answer is there to make sense of them, never a source, so another
   person's message quoted in an answer cannot become a lasting fact. Code then refuses any fact
-  holding a placeholder, or a code, card, account or ID number by the masking rules, and caps each
+  holding a placeholder, naming a password or PIN, or holding a code, card, account or ID number by
+  the masking rules (`/remember` refuses the same), and caps each
   exchange at five new facts and three dropped. The facts and the move of the `fact_learning`
-  cursor commit in one transaction, so an exchange is never learned from twice or half; a deleted
+  cursor commit in one transaction that first locks and checks the cursor, so an exchange is never
+  learned from twice or half; a deleted
   or later-edited exchange is passed over without a call, an answer the model refuses or garbles is
-  passed over, and an outage is retried with backoff. Exchanges are at least 20 seconds apart, so a
-  backlog never takes the routine model's allowance from DJ's questions, and learning waits while
-  Kaya is paused. Every question's context carries the facts that fit in half the room the system
-  prompt and the question leave, those DJ told first, then the newest, in the system message,
+  passed over (a third refusal in a row stops learning for 10 minutes instead), a write the database
+  refuses is passed over, and an outage is retried with backoff. Exchanges are at least 20 seconds
+  apart, and more when learning spent over 3,000 tokens a minute, so a backlog never takes the
+  routine model's allowance from DJ's questions, and learning waits while
+  Kaya is paused. Every question's context carries the facts that fit in an eighth of the budget, never more
+  than half the room the system prompt and the question leave, those DJ told first, then the newest, in the system message,
   marked as background and not instructions. They are DJ's own words, so they go unmasked.
 - **History sync.** Each history chunk WhatsApp announces becomes a row in `history_jobs`, stored
   in the transaction that acknowledges the announcement. A single worker downloads the chunk,
