@@ -130,9 +130,9 @@ func answerSlash(ctx context.Context, s *Slash, m channel.IncomingMessage, o Opt
 	case "forget":
 		return forget(ctx, o.Facts, s.Args)
 	case "tasks":
-		return listTasks(ctx, o.Tasks, o.Zone)
+		return listTasks(ctx, o.Tasks, o.Zone, o.Now())
 	case "done":
-		return done(ctx, o.Tasks, s.Args, o.Zone)
+		return done(ctx, o.Tasks, s.Args, o.Zone, o.Now())
 	case "pause":
 		paused, err := sw.Pause(ctx, commandID)
 		if err != nil {

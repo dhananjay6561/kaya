@@ -791,16 +791,16 @@ func (b *taskBook) Done(_ context.Context, ids []int64) ([]tagging.Task, error) 
 func TestListsOpenTasksAndClosesThemByNumber(t *testing.T) {
 	sent := time.Date(2026, 11, 26, 9, 0, 0, 0, time.UTC)
 	due := time.Date(2026, 11, 27, 11, 30, 0, 0, time.UTC)
-	day := time.Date(2026, 12, 3, 0, 0, 0, 0, kolkata)
+	day := time.Date(2027, 1, 3, 0, 0, 0, 0, kolkata)
 	b := &taskBook{tasks: []tagging.Task{
 		{ID: 4, Kind: tagging.KindReminder, Title: "Call with Priya", Due: &due, DueHasTime: true, Chat: "Rahul", SentAt: sent},
 		{ID: 5, Kind: tagging.KindReminder, Title: "Exam", Due: &day, Chat: "Office Team", SentAt: sent},
 		{ID: 7, Kind: tagging.KindTask, Title: "Send Rahul the deck", Chat: "Rahul", SentAt: sent},
 	}}
-	r := newRig(t, rigOptions{tasks: b})
+	r := newRig(t, rigOptions{tasks: b, now: func() time.Time { return sent }})
 	same(t, r.answers("/tasks", now), []string{"*Open tasks*\n" +
 		"4. Call with Priya, due Fri 27 Nov 17:00 (Rahul, 26 Nov)\n" +
-		"5. Exam, due Thu 3 Dec (Office Team, 26 Nov)\n" +
+		"5. Exam, due Sun 3 Jan 2027 (Office Team, 26 Nov)\n" +
 		"7. Send Rahul the deck (Rahul, 26 Nov)\n\nClose one with /done and its number."})
 	same(t, r.answers("/done", now), []string{"Send /done with the number of a task from /tasks, like /done 12."})
 	same(t, r.answers("/done 99", now), []string{"No open task has that number now. Send /tasks to see them."})
