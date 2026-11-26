@@ -56,6 +56,13 @@ GRANT SELECT, INSERT, UPDATE, DELETE ON message_tags, tasks TO kaya_core;
 GRANT SELECT, UPDATE ON tagging TO kaya_core;
 
 -- migrate:down
+DO $$
+BEGIN
+  IF EXISTS (SELECT 1 FROM tasks) THEN
+    RAISE EXCEPTION 'tasks holds DJ''s tasks; copy or empty it before rolling back';
+  END IF;
+END
+$$;
 DROP TABLE tagging;
 DROP TABLE tasks;
 DROP TABLE message_tags;
