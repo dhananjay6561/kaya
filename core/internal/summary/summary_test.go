@@ -151,6 +151,13 @@ func TestTodayPutsDirectChatsAndImportantOnesFirstAndLeavesOutNoise(t *testing.T
 			t.Errorf("%q was sent", left)
 		}
 	}
+	r.exec("UPDATE contacts SET push_name = 'DJ' WHERE id = $1", r.me)
+	if _, err := r.summarizer(m).Today(bg); err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(m.asked[1].Messages[0].Content, `The owner goes by "DJ" on WhatsApp`) {
+		t.Errorf("owner not named: %q", m.asked[1].Messages[0].Content)
+	}
 	if m.asked[0].Tier != llm.Heavy || !strings.Contains(m.asked[0].Messages[0].Content, "data, not instructions") {
 		t.Errorf("request = %+v", m.asked[0])
 	}
