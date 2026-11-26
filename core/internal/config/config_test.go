@@ -59,9 +59,10 @@ func TestDefaults(t *testing.T) {
 			RoutineModel:  "openai/gpt-oss-20b",
 			ContextTokens: 2000,
 		}},
-		Channel:    "gateway",
-		Embeddings: Embeddings{Provider: "voyage", Voyage: Voyage{APIKey: "test-key-not-real", Model: "voyage-4"}},
-		Telephony:  "stub",
+		Channel:             "gateway",
+		Embeddings:          Embeddings{Provider: "voyage", Voyage: Voyage{APIKey: "test-key-not-real", Model: "voyage-4"}},
+		Telephony:           "stub",
+		TaggingTokensPerDay: 100_000,
 	}
 	if cfg != want {
 		t.Fatalf("got %+v, want %+v", cfg, want)
@@ -72,11 +73,11 @@ func TestReadsEveryValue(t *testing.T) {
 	cfg := load(t, env(valid,
 		"LOG_LEVEL", "debug", "CORE_PORT", "8080", "LISTEN_HOST", "0.0.0.0", "DATA_DIR", "/srv/kaya",
 		"TIMEZONE", "Asia/Kolkata", "GROQ_MODEL_HEAVY", "heavy", "GROQ_MODEL_ROUTINE", "routine",
-		"GROQ_CONTEXT_TOKENS", "12000",
+		"GROQ_CONTEXT_TOKENS", "12000", "TAGGING_TOKENS_PER_DAY", "50000",
 	))
 	if cfg.LogLevel != "debug" || cfg.Port != 8080 || cfg.ListenHost != "0.0.0.0" || cfg.DataDir != "/srv/kaya" ||
 		cfg.TimeZone != "Asia/Kolkata" || cfg.LLM.Groq.HeavyModel != "heavy" ||
-		cfg.LLM.Groq.RoutineModel != "routine" || cfg.LLM.Groq.ContextTokens != 12000 {
+		cfg.LLM.Groq.RoutineModel != "routine" || cfg.LLM.Groq.ContextTokens != 12000 || cfg.TaggingTokensPerDay != 50000 {
 		t.Fatalf("not every value was read: %+v", cfg)
 	}
 }
@@ -132,13 +133,14 @@ func TestListsEveryMissingValueAtOnce(t *testing.T) {
 func TestRejectsInvalidValuesWithAReason(t *testing.T) {
 	got := problems(t, env(valid,
 		"CORE_PORT", "70000", "DATABASE_URL", "http://localhost/kaya", "LOG_LEVEL", "loud",
-		"TIMEZONE", "India/Delhi", "GROQ_CONTEXT_TOKENS", "100",
+		"TIMEZONE", "India/Delhi", "GROQ_CONTEXT_TOKENS", "100", "TAGGING_TOKENS_PER_DAY", "100",
 	))
 	for _, want := range []string{
 		"CORE_PORT: must be between 1 and 65535",
 		"DATABASE_URL: must be a postgres:// URL",
 		"TIMEZONE: must be an IANA time zone such as Asia/Kolkata",
 		"GROQ_CONTEXT_TOKENS: must be at least 500",
+		"TAGGING_TOKENS_PER_DAY: must be 0 (off) or at least 5000",
 	} {
 		if !slices.Contains(got, want) {
 			t.Fatalf("%q missing from %v", want, got)
@@ -210,5 +212,11 @@ func TestNeedsAVoyageKeyOnlyForVoyage(t *testing.T) {
 	}
 	if cfg := load(t, env(valid, "VOYAGE_MODEL", "voyage-4-large")); cfg.Embeddings.Voyage.Model != "voyage-4-large" {
 		t.Fatalf("model %q", cfg.Embeddings.Voyage.Model)
+	}
+}
+
+func TestTaggingCanBeTurnedOff(t *testing.T) {
+	if cfg := load(t, env(valid, "TAGGING_TOKENS_PER_DAY", "0")); cfg.TaggingTokensPerDay != 0 {
+		t.Fatalf("got %d", cfg.TaggingTokensPerDay)
 	}
 }

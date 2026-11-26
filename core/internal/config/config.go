@@ -51,6 +51,8 @@ type Config struct {
 	Embeddings  Embeddings
 	Channel     string
 	Telephony   string
+	// TaggingTokensPerDay is the most routine-model tokens tagging spends a day; 0 turns tagging off.
+	TaggingTokensPerDay int
 }
 
 // Error lists every problem found in the config. It never includes the values themselves.
@@ -145,6 +147,18 @@ func Load(getenv func(string) string, baseDir string) (Config, error) {
 			fail("GROQ_CONTEXT_TOKENS", "must be at least 500")
 		default:
 			cfg.LLM.Groq.ContextTokens = n
+		}
+	}
+	cfg.TaggingTokensPerDay = 100_000
+	if raw := strings.TrimSpace(getenv("TAGGING_TOKENS_PER_DAY")); raw != "" {
+		n, err := strconv.Atoi(raw)
+		switch {
+		case err != nil:
+			fail("TAGGING_TOKENS_PER_DAY", "must be a whole number")
+		case n != 0 && n < 5000:
+			fail("TAGGING_TOKENS_PER_DAY", "must be 0 (off) or at least 5000")
+		default:
+			cfg.TaggingTokensPerDay = n
 		}
 	}
 	if cfg.LLM.Provider == "groq" && cfg.LLM.Groq.APIKey == "" {
