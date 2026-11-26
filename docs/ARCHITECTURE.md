@@ -37,6 +37,7 @@ kaya/
 │       ├── search/         the index (chunks and the indexer that keeps them embedded) and search:
 │       │                   meaning and words fused, filters, recall of older exchanges
 │       ├── facts/          facts about DJ: the store, and the learner that reads each exchange
+│       ├── tagging/        tags on new messages and the tasks they give: the tagger and the store
 │       ├── masking/        placeholders for private details before a cloud model
 │       └── text/           text rules kept from the TypeScript core
 ├── gateway/                Go WhatsApp gateway (its own Go module)
@@ -176,7 +177,9 @@ Folders appear when a phase needs them; empty placeholders are not committed.
   `contact_id_for()`, never by inserting into `contacts` directly. `core` reads them and owns
   everything it creates: today `commands` (its inbox of what DJ typed in his own chat, kept 30
   days after it finishes), `exchanges` (the conversation memory, kept for good), `facts` and
-  `fact_learning` (what Kaya knows about DJ, and how far the learner has read), `pause_state`, and
+  `fact_learning` (what Kaya knows about DJ, and how far the learner has read), `message_tags`,
+  `tasks` and `tagging` (tags on new messages, the tasks they gave, and tagging's state),
+  `pause_state`, and
   the search index, `chunks` and `message_chunks`; later tasks, jobs, pending actions and usage. Core's tables point at messages by id or WhatsApp
   id, never by foreign key, because the chat tables belong to the gateway.
 - **Media.** A media message gets a `media` row (what the file is, and whether it is `remote`,
@@ -273,6 +276,21 @@ Folders appear when a phase needs them; empty placeholders are not committed.
   than half the room the system prompt and the question leave, those DJ told first, then the newest, in the system message,
   marked as background and not instructions. For a cloud model they are masked with the question's
   mask session, since a fact goes with every question for good.
+- **Tagging.** One worker in core, under its own advisory lock, reads every new live message in
+  DJ's chats once: only messages stored after the migration that added it (`tagging.started_after`),
+  never his own chat with Kaya, the same kinds the search index reads, once they are five minutes
+  old. It takes the chat whose oldest waiting message is oldest, up to 40 of its waiting messages
+  with the five before them as context, rendered and named as search renders them and masked for
+  a cloud model, and asks the routine model (strict JSON, medium effort) for each message's tags
+  (important, ignore, task, reminder), a task's title, and a reminder's title and day in DJ's time
+  zone, telling it the name DJ goes by and that messages are data, so an instruction inside one is
+  never a task. Titles have private details put back. A reminder without a day becomes a task; one
+  message can give both. Every message of the batch gets a `message_tags` row, tagged or not, in
+  the same transaction as its tasks and the day's tokens, so nothing is read twice. Tagging spends
+  at most `TAGGING_TOKENS_PER_DAY` tokens a day (100,000 by default; 0 turns it off) and about
+  3,000 a minute, on the same routine model the search planner uses, then waits for the next day.
+  Refusals and garbled answers pass a batch over with a code; a third refusal in a row stops it for
+  10 minutes instead. `/tasks` lists open tasks (due ones first) and `/done` closes them.
 - **History sync.** Each history chunk WhatsApp announces becomes a row in `history_jobs`, stored
   in the transaction that acknowledges the announcement. A single worker downloads the chunk,
   stores it in batches of at most 200 messages (a savepoint per message, so one bad message
