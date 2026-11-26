@@ -149,7 +149,7 @@ func run(cfg config.Config, logger *slog.Logger) error {
 	searcher := search.NewSearcher(db, queryEmbedder)
 	factStore := facts.NewStore(db)
 	learner, err := facts.NewLearner(facts.LearnerOptions{
-		DB: db, LLM: model, Pause: switches, Logger: logger,
+		DB: db, LLM: model, Pause: switches, Logger: logger, Zone: zone,
 		NewMasker: func() facts.Masker { return masking.NewSession() },
 	})
 	if err != nil {
