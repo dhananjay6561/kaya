@@ -19,11 +19,13 @@ import (
 	"github.com/dhananjay6561/kaya/core/internal/facts"
 	"github.com/dhananjay6561/kaya/core/internal/llm"
 	"github.com/dhananjay6561/kaya/core/internal/pause"
+	"github.com/dhananjay6561/kaya/core/internal/tagging"
 )
 
 var (
-	quiet = slog.New(slog.DiscardHandler)
-	bg    = context.Background()
+	kolkata, _ = time.LoadLocation("Asia/Kolkata")
+	quiet      = slog.New(slog.DiscardHandler)
+	bg         = context.Background()
 )
 
 func ago(d time.Duration) time.Time { return time.Now().Add(-d) }
@@ -69,6 +71,7 @@ type rigOptions struct {
 	fail   func(channel.OutgoingMessage) error
 	now    func() time.Time
 	facts  FactBook
+	tasks  TaskBook
 }
 
 // errAway is the rig's database outage; every other error is a handler's own.
@@ -87,7 +90,7 @@ func newRig(t *testing.T, o rigOptions) *rig {
 			return ChatAnswer{Text: "You said: " + Clip(m.Text), Remember: true}, nil
 		}
 	}
-	r.stop = Start(Options{Channel: r.ch, Logger: quiet, Pause: r.pause, Status: o.status, Chat: o.chat, Now: o.now, DatabaseAway: isAway, Facts: o.facts})
+	r.stop = Start(Options{Channel: r.ch, Logger: quiet, Pause: r.pause, Status: o.status, Chat: o.chat, Now: o.now, DatabaseAway: isAway, Facts: o.facts, Tasks: o.tasks, Zone: kolkata})
 	if err := r.ch.Start(bg); err != nil {
 		t.Fatal(err)
 	}
@@ -502,7 +505,7 @@ func TestUsesTheKeysTheTypeScriptCoreUsed(t *testing.T) {
 		o             channel.ReceiveOptions
 	}{
 		{"/status", "3EB0A", "command:3EB0A:builtin:status", now},
-		{"/tasks", "3EB0B", "command:3EB0B:unknown:tasks", now},
+		{"/jobs", "3EB0B", "command:3EB0B:unknown:jobs", now},
 		{"/pause now", "3EB0C", "command:3EB0C:extra_text:pause", now},
 		{"canned", "3EB0D", "command:3EB0D:chat:canned", now},
 		{"fails", "3EB0E", "command:3EB0E:failed", now},
@@ -523,7 +526,8 @@ func TestSendsTheTypeScriptCoresTexts(t *testing.T) {
 	r := newRig(t, rigOptions{})
 	help := "Commands:\n/help: this list\n/status: how Kaya is doing\n/pause: stop answering until /resume\n" +
 		"/resume: start answering again\n/facts: what I know about you\n/remember <fact>: keep a fact about you\n" +
-		"/forget <number>: drop a fact, by its number in /facts\nAnything else you send here goes to an AI model, " +
+		"/forget <number>: drop a fact, by its number in /facts\n/tasks: open tasks and reminders found in your chats\n" +
+		"/done <number>: close a task, by its number in /tasks\nAnything else you send here goes to an AI model, " +
 		"which answers with what it knows about you, your conversation and what a search of your other chats finds."
 	same(t, r.answers("/help", now), []string{help})
 	same(t, r.answers("/pause", now), []string{"Paused. Until you send /resume I answer only slash commands, like /status."})
@@ -737,5 +741,89 @@ func TestFactCommandsWithoutAFactBookSaySo(t *testing.T) {
 	r := newRig(t, rigOptions{})
 	for _, c := range []string{"/facts", "/remember x", "/forget 1"} {
 		same(t, r.answers(c, now), []string{"Facts are not set up here."})
+	}
+}
+
+// taskBook is an in-memory TaskBook.
+type taskBook struct {
+	mu    sync.Mutex
+	tasks []tagging.Task
+	err   error
+}
+
+func (b *taskBook) Open(_ context.Context, limit int) ([]tagging.Task, error) {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	var out []tagging.Task
+	for _, t := range b.tasks {
+		if !t.Done && len(out) < limit {
+			out = append(out, t)
+		}
+	}
+	return out, b.err
+}
+
+func (b *taskBook) CountOpen(context.Context) (int, error) {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	n := 0
+	for _, t := range b.tasks {
+		if !t.Done {
+			n++
+		}
+	}
+	return n, b.err
+}
+
+func (b *taskBook) Done(_ context.Context, ids []int64) ([]tagging.Task, error) {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	var closed []tagging.Task
+	for i, t := range b.tasks {
+		if !t.Done && slices.Contains(ids, t.ID) {
+			b.tasks[i].Done = true
+			closed = append(closed, b.tasks[i])
+		}
+	}
+	return closed, b.err
+}
+
+func TestListsOpenTasksAndClosesThemByNumber(t *testing.T) {
+	sent := time.Date(2026, 11, 26, 9, 0, 0, 0, time.UTC)
+	due := time.Date(2026, 11, 27, 11, 30, 0, 0, time.UTC)
+	day := time.Date(2026, 12, 3, 0, 0, 0, 0, kolkata)
+	b := &taskBook{tasks: []tagging.Task{
+		{ID: 4, Kind: tagging.KindReminder, Title: "Call with Priya", Due: &due, DueHasTime: true, Chat: "Rahul", SentAt: sent},
+		{ID: 5, Kind: tagging.KindReminder, Title: "Exam", Due: &day, Chat: "Office Team", SentAt: sent},
+		{ID: 7, Kind: tagging.KindTask, Title: "Send Rahul the deck", Chat: "Rahul", SentAt: sent},
+	}}
+	r := newRig(t, rigOptions{tasks: b})
+	same(t, r.answers("/tasks", now), []string{"*Open tasks*\n" +
+		"4. Call with Priya, due Fri 27 Nov 17:00 (Rahul, 26 Nov)\n" +
+		"5. Exam, due Thu 3 Dec (Office Team, 26 Nov)\n" +
+		"7. Send Rahul the deck (Rahul, 26 Nov)\n\nClose one with /done and its number."})
+	same(t, r.answers("/done", now), []string{"Send /done with the number of a task from /tasks, like /done 12."})
+	same(t, r.answers("/done 99", now), []string{"No open task has that number now. Send /tasks to see them."})
+	same(t, r.answers("/done 7, 4. 99", now), []string{"Done:\n4. Call with Priya, due Fri 27 Nov 17:00 (Rahul, 26 Nov)\n" +
+		"7. Send Rahul the deck (Rahul, 26 Nov)\n(1 of those numbers matched no open task.)"})
+	same(t, r.answers("/done 7", now), []string{"No open task has that number now. Send /tasks to see them."})
+	b.tasks = nil
+	same(t, r.answers("/tasks", now), []string{"No open tasks. I pick them up from your chats as messages come in."})
+	for i := range 60 {
+		b.tasks = append(b.tasks, tagging.Task{ID: int64(i + 1), Title: "t", Chat: "c", SentAt: sent})
+	}
+	if out := r.first("/tasks", now); !strings.Contains(out, "\n…and 10 more.\n\nClose one") {
+		t.Fatalf("got %q", out)
+	}
+	b.err = errAway
+	if out, err := r.say("/tasks", now); !errors.Is(err, errAway) || len(out) != 0 {
+		t.Fatalf("got %q, %v", out, err)
+	}
+}
+
+func TestTaskCommandsWithoutATaskBookSaySo(t *testing.T) {
+	r := newRig(t, rigOptions{})
+	for _, c := range []string{"/tasks", "/done 1"} {
+		same(t, r.answers(c, now), []string{"Tasks are not set up here."})
 	}
 }
