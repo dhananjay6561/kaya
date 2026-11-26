@@ -187,6 +187,8 @@ func TestShowsHowManyFactsKayaKeeps(t *testing.T) {
 	st := healthy()
 	st.Facts, st.FactsTold = 12, 3
 	matches(t, Format(st), `^Facts about you: 12, 3 of them you told me\.$`)
+	st.Facts = 200
+	matches(t, Format(st), `^Facts about you: 200, 3 of them you told me \(the most I keep\)\.$`)
 }
 
 func TestReadsTheFactCountAndLeavesItOutWhenItCannot(t *testing.T) {
