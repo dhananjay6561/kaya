@@ -340,3 +340,28 @@ func TestExcerptsLookForAGroupAmongPeopleAndCleanWhatTheModelWrote(t *testing.T)
 		t.Fatalf("got %q, unknown %q, %v", excerptTitles(found.Excerpts), found.Unknown, err)
 	}
 }
+
+func TestFindChatFindsAPersonOrAGroupByAnyName(t *testing.T) {
+	r := newRig(t)
+	_, teja := r.contact("Tejashree Kulkarni", "")
+	_, quiet := r.contact("Tejas Old", "")
+	r.say(teja, 10, "hi")
+	r.say(quiet, 9000, "long ago")
+	r.say(r.group, 5, "hello gang")
+	s := r.searcher()
+	for name, want := range map[string]int64{"tejashri": teja, "college gang": r.group, "GANG": r.group} {
+		id, _, ok, err := s.FindChat(bg, name)
+		if err != nil || !ok || id != want {
+			t.Fatalf("%q: got %d %v %v, want %d", name, id, ok, err, want)
+		}
+	}
+	if _, title, ok, _ := s.FindChat(bg, "college"); !ok || title != "College Gang" {
+		t.Fatalf("title %q", title)
+	}
+	if _, _, ok, err := s.FindChat(bg, "Zorawar"); ok || err != nil {
+		t.Fatalf("an unknown name was found: %v", err)
+	}
+	if _, _, ok, err := s.FindChat(bg, " \n"); ok || err != nil {
+		t.Fatal("an empty name was found")
+	}
+}
