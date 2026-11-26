@@ -76,12 +76,13 @@ contact, and it works with everything your WhatsApp account can see.
   it never answers itself, and it does not act on a command it only gets to minutes late.
 - **Built-in commands.** `/help` lists them, `/status` says whether Kaya is up and connected,
   `/pause` stops every answer until `/resume`. The pause is kept in the database, so it holds
-  across restarts, and while paused Kaya still answers its slash commands.
+  across restarts, and while paused Kaya still answers its slash commands. `/facts`, `/remember`
+  and `/forget` show and change what Kaya knows about you.
 - **Answers from Groq, with lasting memory.** Anything else you type in your own chat is answered by
   Groq's `openai/gpt-oss-120b`, in your language and style, with today's date in your time zone.
-  Kaya builds the context itself: your conversation with it, kept for good and fitted to a token
-  budget set per model, so follow-ups work and the model can be swapped. Never your other chats.
-  Timeouts, limited retries, and a plain notice in the chat when the model cannot answer; logs keep
+  Kaya builds the context itself: facts about you, your conversation with it (kept for good) and
+  what a search of your chats finds, fitted to a token budget set per model, so follow-ups work and
+  the model can be swapped. Timeouts, limited retries, and a plain notice in the chat when the model cannot answer; logs keep
   token counts, never text.
 - **Masking before the cloud.** Anything in a cloud model's context that you did not type has phone
   numbers, emails, OTPs, card and account numbers, Aadhaar, PAN, UPI ids and addresses replaced by
@@ -110,6 +111,12 @@ contact, and it works with everything your WhatsApp account can see.
   someone chose for themselves shows as `~Name`, so nobody can pass for you or Kaya. If the search
   finds nothing, could not run, or a name matches nobody, the model is told. Kaya never sees a whole
   chat, only the excerpts it found.
+- **Facts about you.** After each answer a small model reads what you said and keeps what is worth
+  knowing for months, as one short line each: your work, the people in your life, where you live,
+  how you like answers. It changes a fact when you say it changed and drops one when you say to.
+  Facts go into every answer's context. They come only from your own words, never from someone
+  else's message an answer quotes, and codes, card, account and ID numbers are never kept.
+  `/remember` adds one yourself, `/facts` lists them with numbers, `/forget 12` drops one.
 - **Least-privilege database logins.** The gateway and core each have their own Postgres role.
   Core, the part that will talk to an LLM, can read chats but cannot see the WhatsApp session, its
   encryption keys, or the keys needed to fetch media.
@@ -125,8 +132,7 @@ contact, and it works with everything your WhatsApp account can see.
 
 In build order. Status for each stage is in the [roadmap](#project-status-and-roadmap).
 
-- Ask questions about your chats and get sourced answers, with meaning-based search over pgvector,
-  tagging and summaries
+- Tagging of new messages (important, task, reminder) and summaries of a day or a chat
 - An agent loop with tools, confirm-before-act, masking of private details and a prompt-injection
   guard
 - Voice-note transcription, so spoken commands and voice notes become searchable
@@ -366,6 +372,8 @@ erDiagram
     send_requests ||..o| messages : "becomes, by wa_id"
     messages ||..o| message_chunks : "is indexed in, no FK"
     chunks ||--|{ message_chunks : "holds"
+    messages ||..o{ facts : "was said in, no FK"
+    exchanges ||..o| fact_learning : "read up to"
 
     commands {
         bigint id PK
@@ -401,6 +409,19 @@ erDiagram
         bigint chunk_id FK
         timestamptz message_updated_at "as read"
     }
+    facts {
+        bigint id PK
+        text body UK "one short line, unique ignoring case"
+        text source "told or learned"
+        bigint message_id "the /remember or the question"
+        timestamptz created_at
+        timestamptz updated_at
+    }
+    fact_learning {
+        smallint id PK "always one row"
+        bigint exchange_id "last exchange learned from"
+        timestamptz updated_at
+    }
     pause_state {
         boolean only_row PK "always one row"
         timestamptz paused_at "null while running"
@@ -434,7 +455,9 @@ erDiagram
 each chunk is a few messages of one chat embedded as one vector, and each indexed message points at
 its chunk. `commands` is the inbox of what DJ typed in his own
 chat; finished rows are deleted after 30 days. `exchanges` is the conversation memory, one row per
-question and answer, kept for good. `pause_state` holds `/pause`. `gateway_events` and
+question and answer, kept for good. `facts` is what Kaya knows about DJ, told with `/remember` or
+learned from his exchanges; `fact_learning` is how far the learner has read them, moved in the same
+transaction as the facts each exchange gave. `pause_state` holds `/pause`. `gateway_events` and
 `send_requests` are the queues between the services; handled and finished rows are deleted after 7
 days.*
 
@@ -463,7 +486,8 @@ kaya/
 ├── core/               Go agent (its own Go module)
 │   ├── cmd/core/       main package: serve, send, healthcheck
 │   └── internal/       config, gateway (events), channel (inbox, sends), commands, pause, status,
-│                       llm (Groq, stub, o200k token counter), memory, chat, masking, text
+│                       llm (Groq, stub, o200k token counter), memory, chat, masking, text,
+│                       embeddings (Voyage, stub), search (index, search, excerpts), facts
 ├── gateway/            Go WhatsApp gateway (its own Go module)
 │   ├── cmd/gateway/    main package: serve, pair, media, healthcheck
 │   └── internal/       config, whatsapp, ingest, events, send, media, testdb
@@ -669,7 +693,7 @@ Status key: ✅ done · 🟨 in progress · ⬜ not started
 | 0. Foundation | Monorepo, config, Compose stack, migrations, logging, health, provider interfaces | ✅ |
 | 1. WhatsApp gateway | Contracts, pairing, live ingest, history sync, media, connection health, delivery to core and sending. Checked end to end against a real WhatsApp account. | ✅ |
 | 2. Talking to Kaya | Self-chat command channel and built-in commands `/help`, `/status`, `/pause`, `/resume`. Checked on a real account. | ✅ |
-| 3. Brain | Groq replies, lasting conversation memory, masking for cloud models (built), local embeddings, meaning-based search, Q&A with sources, tagging, summaries | 🟨 |
+| 3. Brain | Groq replies, lasting conversation memory, masking for cloud models, embeddings, search, answers from your chats, facts about you (built), tagging, summaries | 🟨 |
 | 4. Agent loop and safety | Masking, context picking, tool calling, confirm-before-act, prompt-injection guard, usage tracking | ⬜ |
 | 5. Voice notes | Transcription, spoken commands | ⬜ |
 | 6. Sending as you | Messages to contacts and groups after confirmation, with rate limits | ⬜ |
