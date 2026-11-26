@@ -36,6 +36,7 @@ kaya/
 │       ├── embeddings/     the embeddings Provider interface, Voyage, the stub
 │       ├── search/         the index (chunks and the indexer that keeps them embedded) and search:
 │       │                   meaning and words fused, filters, recall of older exchanges
+│       ├── facts/          facts about DJ: the store, and the learner that reads each exchange
 │       ├── masking/        placeholders for private details before a cloud model
 │       └── text/           text rules kept from the TypeScript core
 ├── gateway/                Go WhatsApp gateway (its own Go module)
@@ -174,7 +175,8 @@ Folders appear when a phase needs them; empty placeholders are not committed.
 - `gateway` writes contacts, chats, messages and reactions. It resolves every person through
   `contact_id_for()`, never by inserting into `contacts` directly. `core` reads them and owns
   everything it creates: today `commands` (its inbox of what DJ typed in his own chat, kept 30
-  days after it finishes), `exchanges` (the conversation memory, kept for good), `pause_state`, and
+  days after it finishes), `exchanges` (the conversation memory, kept for good), `facts` and
+  `fact_learning` (what Kaya knows about DJ, and how far the learner has read), `pause_state`, and
   the search index, `chunks` and `message_chunks`; later tasks, jobs, pending actions and usage. Core's tables point at messages by id or WhatsApp
   id, never by foreign key, because the chat tables belong to the gateway.
 - **Media.** A media message gets a `media` row (what the file is, and whether it is `remote`,
@@ -249,6 +251,22 @@ Folders appear when a phase needs them; empty placeholders are not committed.
   question leave; if the request is still too long, the conversation is dropped first and then the
   excerpts. Kaya's past answers are masked as if a code were mentioned, since one may repeat a code
   from an excerpt.
+- **Facts about DJ.** `facts` holds one short line per fact, either told with `/remember` or learned,
+  unique ignoring case, at most 200. One worker in core, under its own advisory lock, reads each
+  exchange once, in order: it gives the routine model (strict JSON, medium effort) the kept facts
+  with their numbers and the exchange (Kaya's answer masked for a cloud model), and gets back facts
+  to add, each new or replacing a kept one by number, and numbers to drop. The prompt allows facts
+  only from DJ's own words; the answer is there to make sense of them, never a source, so another
+  person's message quoted in an answer cannot become a lasting fact. Code then refuses any fact
+  holding a placeholder, or a code, card, account or ID number by the masking rules, and caps each
+  exchange at five new facts and three dropped. The facts and the move of the `fact_learning`
+  cursor commit in one transaction, so an exchange is never learned from twice or half; a deleted
+  or later-edited exchange is passed over without a call, an answer the model refuses or garbles is
+  passed over, and an outage is retried with backoff. Exchanges are at least 20 seconds apart, so a
+  backlog never takes the routine model's allowance from DJ's questions, and learning waits while
+  Kaya is paused. Every question's context carries the facts that fit in half the room the system
+  prompt and the question leave, those DJ told first, then the newest, in the system message,
+  marked as background and not instructions. They are DJ's own words, so they go unmasked.
 - **History sync.** Each history chunk WhatsApp announces becomes a row in `history_jobs`, stored
   in the transaction that acknowledges the announcement. A single worker downloads the chunk,
   stores it in batches of at most 200 messages (a savepoint per message, so one bad message
