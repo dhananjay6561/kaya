@@ -24,10 +24,13 @@ const (
 )
 
 // describe is one task as a line: its number and title, when it is due, and where it came from.
-func describe(t tagging.Task, zone *time.Location) string {
+func describe(t tagging.Task, zone *time.Location, now time.Time) string {
 	line := fmt.Sprintf("%d. %s", t.ID, text.Clip(t.Title, 200))
 	if t.Due != nil {
 		layout := "Mon 2 Jan"
+		if t.Due.In(zone).Year() != now.In(zone).Year() {
+			layout += " 2006"
+		}
 		if t.DueHasTime {
 			layout += " 15:04"
 		}
@@ -36,7 +39,7 @@ func describe(t tagging.Task, zone *time.Location) string {
 	return line + " (" + t.Chat + ", " + t.SentAt.In(zone).Format("2 Jan") + ")"
 }
 
-func listTasks(ctx context.Context, book TaskBook, zone *time.Location) (string, error) {
+func listTasks(ctx context.Context, book TaskBook, zone *time.Location, now time.Time) (string, error) {
 	if book == nil {
 		return noTaskBook, nil
 	}
@@ -49,7 +52,7 @@ func listTasks(ctx context.Context, book TaskBook, zone *time.Location) (string,
 	}
 	lines := make([]string, len(open))
 	for i, t := range open {
-		lines[i] = describe(t, zone)
+		lines[i] = describe(t, zone, now)
 	}
 	out := "*Open tasks*\n" + strings.Join(lines, "\n")
 	if len(open) == maxTasks {
@@ -64,7 +67,7 @@ func listTasks(ctx context.Context, book TaskBook, zone *time.Location) (string,
 	return out + "\n\nClose one with /done and its number.", nil
 }
 
-func done(ctx context.Context, book TaskBook, args string, zone *time.Location) (string, error) {
+func done(ctx context.Context, book TaskBook, args string, zone *time.Location, now time.Time) (string, error) {
 	if book == nil {
 		return noTaskBook, nil
 	}
@@ -81,7 +84,7 @@ func done(ctx context.Context, book TaskBook, args string, zone *time.Location) 
 	}
 	lines := make([]string, len(closed))
 	for i, t := range closed {
-		lines[i] = describe(t, zone)
+		lines[i] = describe(t, zone, now)
 	}
 	out := "Done:\n" + strings.Join(lines, "\n")
 	if missing := len(ids) - len(closed); missing > 0 {
