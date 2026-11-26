@@ -11,7 +11,6 @@ import (
 	"testing"
 	"time"
 
-
 	"github.com/dhananjay6561/kaya/core/internal/embeddings"
 	"github.com/dhananjay6561/kaya/core/internal/llm"
 	"github.com/dhananjay6561/kaya/core/internal/pause"
