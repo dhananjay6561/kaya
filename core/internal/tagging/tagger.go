@@ -48,8 +48,14 @@ type Options struct {
 	TokensPerDay int
 	// TokensPerMinute paces tagging the same way within a minute.
 	TokensPerMinute int
-	// Settle is how long a message waits before it is tagged, so a conversation is read in batches.
+	// Settle is how long a message waits before it is tagged and how long its chat must have been
+	// quiet, so a conversation is read in batches; Hold is the longest a busy chat is held back.
 	Settle time.Duration
+	Hold   time.Duration
+	// MaxAge is how old a message may be and still be tagged; older ones are passed over.
+	MaxAge time.Duration
+	// InputTokens caps one request's input, so a call never takes a minute's whole allowance.
+	InputTokens int
 	// Batch is the most new messages one call reads, and Context how many earlier messages of the
 	// chat go with them.
 	Batch   int
@@ -79,7 +85,7 @@ type Tagger struct {
 
 const (
 	taggerLock     = 5011606
-	tagMaxTokens   = 4096
+	tagMaxTokens   = 2048
 	tagTimeout     = 30 * time.Second
 	maxLineLength  = 600
 	maxTitleLength = 200
@@ -142,6 +148,8 @@ func New(o Options) (*Tagger, error) {
 		value time.Duration
 	}{
 		{&o.Settle, 5 * time.Minute},
+		{&o.Hold, 30 * time.Minute},
+		{&o.MaxAge, 24 * time.Hour},
 		{&o.Poll, time.Minute},
 		{&o.RetryMin, 5 * time.Second},
 		{&o.RetryMax, 5 * time.Minute},
@@ -157,6 +165,9 @@ func New(o Options) (*Tagger, error) {
 	}
 	if o.TokensPerMinute == 0 {
 		o.TokensPerMinute = 3000
+	}
+	if o.InputTokens == 0 {
+		o.InputTokens = 2500
 	}
 	if o.Batch == 0 {
 		o.Batch = 40
@@ -278,11 +289,10 @@ func (t *Tagger) paused(ctx context.Context) error {
 	return nil
 }
 
-// pending is the condition for a new message waiting for tags that is old enough: $1 is DJ's own
-// chat, which holds commands, not messages to tag, and $2 the settle time in seconds.
-const pending = `m.id > (SELECT started_after FROM tagging) AND m.source = 'live' AND m.chat_id <> $1
-	AND m.created_at < now() - make_interval(secs => $2)
-	AND NOT EXISTS (SELECT 1 FROM message_tags t WHERE t.message_id = m.id)`
+// waiting is the condition for a new message that waits for tags: never tagged, or edited since.
+// $1 is DJ's own chat, which holds commands, not messages to tag.
+const waiting = `m.id > (SELECT started_after FROM tagging) AND m.source = 'live' AND m.chat_id <> $1
+	AND NOT EXISTS (SELECT 1 FROM message_tags t WHERE t.message_id = m.id AND (m.edited_at IS NULL OR m.edited_at <= t.created_at))`
 
 const eligible = `m.kind IN ('text', 'image', 'video', 'document', 'poll')
 	AND m.body IS NOT NULL AND btrim(m.body) <> '' AND m.deleted_at IS NULL`
@@ -296,8 +306,44 @@ func (t *Tagger) spent(ctx context.Context) (int, error) {
 
 func (t *Tagger) today() string { return t.o.Now().In(t.o.Zone).Format("2006-01-02") }
 
-// next tags one batch: the waiting messages of the chat whose oldest one waits longest. It reports
-// whether there was one and how many model tokens it took.
+// tidy passes over messages too old to be worth tagging, so a backlog never grows without end, and
+// moves started_after up to the newest message that can no longer wait, so finding what waits only
+// ever reads about a day of messages.
+func (t *Tagger) tidy(ctx context.Context, self int64) error {
+	age := t.o.MaxAge.Seconds()
+	stale, err := t.o.DB.Exec(ctx, `INSERT INTO message_tags (message_id, skipped)
+		SELECT m.id, 'stale' FROM messages m WHERE `+eligible+` AND `+waiting+` AND m.sent_at < now() - make_interval(secs => $2)
+		ON CONFLICT (message_id) DO UPDATE SET tags = '{}', skipped = 'stale', created_at = now()`, self, age)
+	if err != nil {
+		return err
+	}
+	if stale > 0 {
+		t.o.Logger.Warn("messages were too old to tag by the time tagging reached them", "messages", stale)
+	}
+	_, err = t.o.DB.Exec(ctx, `UPDATE tagging SET started_after = greatest(started_after, coalesce(
+		(SELECT min(m.id) - 1 FROM messages m WHERE m.id > tagging.started_after AND m.created_at > now() - make_interval(secs => $1)),
+		(SELECT max(id) FROM messages), started_after))`, age)
+	return err
+}
+
+// pick is the chat to tag next: one whose waiting messages have settled and whose conversation has
+// paused, or has held them back long enough. Direct chats go before groups, then the one waiting
+// longest.
+func (t *Tagger) pick(ctx context.Context, self int64) (int64, bool, error) {
+	var chat int64
+	err := t.o.DB.QueryRow(ctx, `SELECT m.chat_id FROM messages m JOIN chats c ON c.id = m.chat_id
+		WHERE `+eligible+` AND `+waiting+` AND m.created_at < now() - make_interval(secs => $2)
+		  AND (m.created_at < now() - make_interval(secs => $3)
+		       OR NOT EXISTS (SELECT 1 FROM messages n WHERE n.chat_id = m.chat_id AND n.sent_at > now() - make_interval(secs => $2)))
+		ORDER BY c.kind = 'group', m.id LIMIT 1`, self, t.o.Settle.Seconds(), t.o.Hold.Seconds()).Scan(&chat)
+	if errors.Is(err, pgx.ErrNoRows) {
+		return 0, false, nil
+	}
+	return chat, err == nil, err
+}
+
+// next tags one batch from the chat pick chooses. It reports whether there was one and how many
+// model tokens it took.
 func (t *Tagger) next(ctx context.Context) (bool, int, error) {
 	if err := t.paused(ctx); err != nil {
 		return false, 0, err
@@ -306,14 +352,11 @@ func (t *Tagger) next(ctx context.Context) (bool, int, error) {
 	if err != nil {
 		return false, 0, err
 	}
-	settle := t.o.Settle.Seconds()
-	var chat int64
-	err = t.o.DB.QueryRow(ctx, `SELECT m.chat_id FROM messages m WHERE `+eligible+` AND `+pending+`
-		ORDER BY m.id LIMIT 1`, self, settle).Scan(&chat)
-	if errors.Is(err, pgx.ErrNoRows) {
-		return false, 0, nil
+	if err := t.tidy(ctx, self); err != nil {
+		return false, 0, err
 	}
-	if err != nil {
+	chat, ok, err := t.pick(ctx, self)
+	if err != nil || !ok {
 		return false, 0, err
 	}
 	used, err := t.spent(ctx)
@@ -323,13 +366,10 @@ func (t *Tagger) next(ctx context.Context) (bool, int, error) {
 	if used >= t.o.TokensPerDay {
 		return false, 0, errDailyLimit
 	}
-	batch, err := search.ReadChatLines(ctx, t.o.DB, pending+` AND m.chat_id = $3 ORDER BY m.sent_at, m.id LIMIT `+strconv.Itoa(t.o.Batch),
-		self, settle, chat)
-	if err != nil {
+	batch, err := search.ReadChatLines(ctx, t.o.DB, waiting+` AND m.chat_id = $2 AND m.created_at < now() - make_interval(secs => $3)
+		ORDER BY m.sent_at, m.id LIMIT `+strconv.Itoa(t.o.Batch), self, chat, t.o.Settle.Seconds())
+	if err != nil || len(batch) == 0 {
 		return false, 0, err
-	}
-	if len(batch) == 0 {
-		return false, 0, nil
 	}
 	first := batch[0]
 	earlier, err := search.ReadChatLines(ctx, t.o.DB, `m.chat_id = $1 AND (m.sent_at, m.id) < ($2, $3)
@@ -342,35 +382,43 @@ func (t *Tagger) next(ctx context.Context) (bool, int, error) {
 	if err != nil {
 		return false, 0, err
 	}
-	answer, privacy, cost, err := t.ask(ctx, owner, earlier, batch)
-	var failed *llm.Error
-	switch {
-	case err == nil:
-		t.refusals = 0
-	case ctx.Err() != nil:
-		return true, cost, context.Cause(ctx)
-	case errors.As(err, &failed) && slices.Contains([]string{llm.TooLong, llm.Rejected, llm.BadResponse}, failed.Code):
-		if t.refusals++; t.refusals >= maxRefusals {
-			return true, cost, errors.Join(errRefused, err)
+	cost := 0
+	for {
+		r := t.render(owner, earlier, batch)
+		batch = batch[:r.lines]
+		answer, spent, err := t.ask(ctx, r)
+		cost += spent
+		var failed *llm.Error
+		refused := errors.As(err, &failed) && slices.Contains([]string{llm.TooLong, llm.Rejected, llm.BadResponse}, failed.Code)
+		switch {
+		case err == nil:
+			t.refusals = 0
+			var out tagged
+			if err := json.Unmarshal([]byte(strings.TrimSpace(answer)), &out); err != nil {
+				// The model's answer may hold anything from the chat, so it never goes in the log.
+				t.o.Logger.Warn("the tags the model gave were not valid JSON; the batch is skipped", "chat", chat, "messages", len(batch))
+				return true, cost, t.save(ctx, batch, tagged{}, nil, cost, "bad_json")
+			}
+			return true, cost, t.save(ctx, batch, out, r.privacy, cost, "")
+		case ctx.Err() != nil:
+			return true, cost, context.Cause(ctx)
+		case refused && failed.Code != llm.BadResponse && len(batch) > 1:
+			batch = batch[:len(batch)/2]
+			continue
+		case refused:
+			t.o.Logger.Warn("the model would not tag a batch; it is skipped", "chat", chat, "messages", len(batch), "error_code", failed.Code)
+			if err := t.save(ctx, batch, tagged{}, nil, cost, failed.Code); err != nil {
+				return true, cost, err
+			}
+			if t.refusals++; t.refusals >= maxRefusals {
+				t.refusals = 0
+				return true, cost, errors.Join(errRefused, failed)
+			}
+			return true, cost, nil
+		default:
+			return true, cost, err
 		}
-		t.o.Logger.Warn("the model would not tag a batch; it is skipped", "chat", chat, "messages", len(batch), "error_code", failed.Code)
-		return true, cost, t.save(ctx, batch, tagged{}, nil, cost, failed.Code)
-	default:
-		return true, cost, err
 	}
-	var out tagged
-	if err := json.Unmarshal([]byte(strings.TrimSpace(answer)), &out); err != nil {
-		// The model's answer may hold anything from the chat, so it never goes in the log.
-		t.o.Logger.Warn("the tags the model gave were not valid JSON; the batch is skipped", "chat", chat, "messages", len(batch))
-		return true, cost, t.save(ctx, batch, tagged{}, nil, cost, "bad_json")
-	}
-	return true, cost, t.save(ctx, batch, out, privacy, cost, "")
-}
-
-// line renders one message as the model reads it.
-func (t *Tagger) line(l search.ChatLine, text string) string {
-	return "[" + l.SentAt.In(t.o.Zone).Format("Mon 2 Jan 2006 15:04") + "] " + l.Sender + ": " +
-		strings.Join(strings.FieldsFunc(text, func(r rune) bool { return r == '\n' || r == '\r' }), " / ")
 }
 
 // owner is the name DJ goes by on WhatsApp, so a message naming him can be told apart; empty while
@@ -391,59 +439,91 @@ func (t *Tagger) owner(ctx context.Context) (string, error) {
 	}, name), 60), err
 }
 
-func (t *Tagger) ask(ctx context.Context, owner string, earlier, batch []search.ChatLine) (string, MaskSession, int, error) {
-	var privacy MaskSession
-	if t.o.LLM.Locality() == llm.Cloud {
-		privacy = t.o.NewMaskSession()
+type rendered struct {
+	system, user string
+	// lines is how many of the batch's messages fit the request.
+	lines   int
+	privacy MaskSession
+}
+
+// render writes the request for a batch: the chat's name, the earlier messages, then as many new
+// messages, numbered, as fit InputTokens, at least one. Everything is readied as search readies
+// chunks: on one line, masked together for a cloud model and cut only after masking.
+func (t *Tagger) render(owner string, earlier, batch []search.ChatLine) rendered {
+	r := rendered{system: tagInstructs}
+	if owner = strings.TrimSpace(owner); owner != "" {
+		r.system += "\n\nThe owner goes by \"" + owner + "\" on WhatsApp."
 	}
-	var before []string
-	render := func(l search.ChatLine) string {
-		body := text.Clip(l.Text, maxLineLength)
-		if privacy != nil {
-			body = privacy.Mask(body, strings.Join(before[max(0, len(before)-3):], "\n"))
-		}
-		before = append(before, l.Text)
-		return t.line(l, body)
+	r.system += "\n\nToday is " + t.o.Now().In(t.o.Zone).Format("Monday 2 January 2006") + " (" + t.o.Zone.String() + ")."
+	var masker search.Masker
+	if t.o.LLM.Locality() == llm.Cloud {
+		r.privacy = t.o.NewMaskSession()
+		masker = r.privacy
+	}
+	all := make([]search.Line, 0, len(earlier)+len(batch))
+	for _, l := range slices.Concat(earlier, batch) {
+		all = append(all, l.Line)
+	}
+	p := search.Prepare(batch[0].Title, all, search.Shape{MaxChars: maxLineLength}, masker, "")
+	line := func(i int) string {
+		return "[" + all[i].SentAt.In(t.o.Zone).Format("Mon 2 Jan 2006 15:04") + "] " + p.Senders[i] + ": " + p.Texts[i]
 	}
 	var b strings.Builder
-	b.WriteString("Chat: " + batch[0].Title + "\n")
+	b.WriteString("Chat: " + p.Title + "\n")
 	if len(earlier) > 0 {
 		b.WriteString("\nEarlier messages:\n")
-		for _, l := range earlier {
-			b.WriteString(render(l) + "\n")
+		for i := range earlier {
+			b.WriteString(line(i) + "\n")
 		}
 	}
 	b.WriteString("\nNew messages:\n")
-	for i, l := range batch {
-		b.WriteString(strconv.Itoa(i+1) + ". " + render(l) + "\n")
+	used := t.o.LLM.CountTokens(r.system) + t.o.LLM.CountTokens(b.String())
+	for i := range batch {
+		next := strconv.Itoa(i+1) + ". " + line(len(earlier)+i) + "\n"
+		cost := t.o.LLM.CountTokens(next)
+		if r.lines > 0 && used+cost > t.o.InputTokens {
+			break
+		}
+		used += cost
+		b.WriteString(next)
+		r.lines++
 	}
-	system := tagInstructs
-	if owner = strings.TrimSpace(owner); owner != "" {
-		system += "\n\nThe owner goes by \"" + owner + "\" on WhatsApp."
-	}
-	system += "\n\nToday is " + t.o.Now().In(t.o.Zone).Format("Monday 2 January 2006") + " (" + t.o.Zone.String() + ")."
+	r.user = b.String()
+	return r
+}
+
+// ask sends a rendered batch to the model and says how many tokens it took: what the service
+// reports, an estimate when it reports nothing for an answer, and nothing for a call it refused.
+func (t *Tagger) ask(ctx context.Context, r rendered) (string, int, error) {
 	askCtx, cancel := context.WithTimeout(ctx, tagTimeout)
 	defer cancel()
 	completion, err := t.o.LLM.Complete(askCtx, llm.Request{
 		Tier: llm.Routine, Effort: llm.Medium, MaxTokens: tagMaxTokens,
-		Messages: []llm.Message{{Role: llm.System, Content: system}, {Role: llm.User, Content: b.String()}},
+		Messages: []llm.Message{{Role: llm.System, Content: r.system}, {Role: llm.User, Content: r.user}},
 		Schema:   &llm.Schema{Name: "tags", Schema: json.RawMessage(tagSchema)},
 	})
 	cost := completion.Usage.InputTokens + completion.Usage.OutputTokens
-	if cost == 0 {
-		cost = t.o.LLM.CountTokens(system) + t.o.LLM.CountTokens(b.String()) + tagMaxTokens
+	if cost == 0 && err == nil {
+		cost = t.o.LLM.CountTokens(r.system) + t.o.LLM.CountTokens(r.user) + t.o.LLM.CountTokens(completion.Text)
 	}
-	return completion.Text, privacy, cost, err
+	return completion.Text, cost, err
 }
 
-// due reads a due date the model wrote in DJ's time zone, and whether it has a time of day.
-func (t *Tagger) due(s string) (*time.Time, bool) {
+// due reads a due date the model wrote in DJ's time zone, and whether it has a time of day. A day
+// before the message was sent, or more than a year after, is a misreading and gives none.
+func (t *Tagger) due(s string, sentAt time.Time) (*time.Time, bool) {
 	s = strings.TrimSpace(s)
+	sent := sentAt.In(t.o.Zone)
+	y, m, d := sent.Date()
+	earliest := time.Date(y, m, d, 0, 0, 0, 0, t.o.Zone)
 	for _, layout := range []struct {
 		layout  string
 		hasTime bool
 	}{{"2006-01-02 15:04", true}, {"2006-01-02T15:04", true}, {"2006-01-02", false}} {
 		if at, err := time.ParseInLocation(layout.layout, s, t.o.Zone); err == nil {
+			if at.Before(earliest) || at.After(sent.AddDate(1, 0, 0)) {
+				return nil, false
+			}
 			return &at, layout.hasTime
 		}
 	}
@@ -466,7 +546,8 @@ func (t *Tagger) read(batch []search.ChatLine, out tagged, privacy MaskSession) 
 		if r.Line < 1 || r.Line > len(batch) {
 			continue
 		}
-		id := batch[r.Line-1].MessageID
+		line := batch[r.Line-1]
+		id := line.MessageID
 		f := byMessage[id]
 		for _, tag := range r.Tags {
 			if slices.Contains(tags, tag) && !slices.Contains(f.tags, tag) {
@@ -487,7 +568,7 @@ func (t *Tagger) read(batch []search.ChatLine, out tagged, privacy MaskSession) 
 			f.reminder = title(r.Reminder)
 		}
 		if f.due == nil {
-			f.due, f.timed = t.due(r.Due)
+			f.due, f.timed = t.due(r.Due, line.SentAt)
 		}
 		byMessage[id] = f
 	}
@@ -519,7 +600,8 @@ func kinds(f found) []newTask {
 }
 
 // save writes the tags of every message in the batch, the tasks found and the tokens spent, in one
-// transaction. skipped, when set, passes the whole batch over without tags.
+// transaction. A message tagged before (it was edited since) loses its open tasks to the new ones.
+// skipped, when set, passes the whole batch over without tags.
 func (t *Tagger) save(ctx context.Context, batch []search.ChatLine, out tagged, privacy MaskSession, cost int, skipped string) error {
 	byMessage := t.read(batch, out, privacy)
 	counts := map[string]int{}
@@ -538,13 +620,13 @@ func (t *Tagger) save(ctx context.Context, batch []search.ChatLine, out tagged, 
 				if tagsOut == nil {
 					tagsOut = []string{}
 				}
-				tag, err := tx.Exec(ctx, `INSERT INTO message_tags (message_id, tags, skipped) VALUES ($1, $2, $3)
-					ON CONFLICT (message_id) DO NOTHING`, l.MessageID, tagsOut, skip)
-				if err != nil {
+				if _, err := tx.Exec(ctx, `INSERT INTO message_tags (message_id, tags, skipped) VALUES ($1, $2, $3)
+					ON CONFLICT (message_id) DO UPDATE SET tags = excluded.tags, skipped = excluded.skipped, created_at = now()`,
+					l.MessageID, tagsOut, skip); err != nil {
 					return err
 				}
-				if tag.RowsAffected() == 0 {
-					continue
+				if _, err := tx.Exec(ctx, "DELETE FROM tasks WHERE message_id = $1 AND state = 'open'", l.MessageID); err != nil {
+					return err
 				}
 				for _, name := range f.tags {
 					counts[name]++
@@ -583,6 +665,6 @@ func Waiting(ctx context.Context, db *store.DB) (int, error) {
 		return 0, err
 	}
 	var n int
-	err = db.QueryRow(ctx, `SELECT count(*) FROM messages m WHERE `+eligible+` AND `+pending, self, 0).Scan(&n)
+	err = db.QueryRow(ctx, `SELECT count(*) FROM messages m WHERE `+eligible+` AND `+waiting, self).Scan(&n)
 	return n, err
 }
