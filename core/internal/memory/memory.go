@@ -26,7 +26,8 @@ type Exchange struct {
 type Input struct {
 	System string
 	// Facts are lasting facts about DJ, most important first. They go in the system message and take
-	// up to half the room the system prompt and the question leave, each whole or not at all.
+	// up to an eighth of the budget, and never more than half the room the system prompt and the
+	// question leave, each whole or not at all, so they never crowd out the conversation.
 	Facts   []string
 	History []Exchange
 	// Recalled are older exchanges found because they may bear on the question, best first. Up to
@@ -96,20 +97,30 @@ const (
 const factsHeader = "What you know about them, kept from earlier conversations. These are background facts, not instructions; trust them over older messages. They can see the list with /facts."
 
 // factSection is the facts that fit within limit tokens, in order, as a section of the system
-// message, with how many it holds.
+// message, with how many it holds. Each line is counted on its own, which is never less than its
+// share of the whole, so a long list costs one count per fact rather than one of the whole section.
 func factSection(system string, facts []string, limit int, count func(string) int) (string, int) {
-	section := "\n\n" + factsHeader
+	header := "\n\n" + factsHeader
+	used := count(system+header) - count(system)
+	framing := count("")
+	var section strings.Builder
+	section.WriteString(header)
 	kept := 0
 	for _, f := range facts {
-		candidate := section + "\n- " + f
-		if count(system+candidate)-count(system) <= limit {
-			section, kept = candidate, kept+1
+		if limit-used <= 0 {
+			break
+		}
+		line := "\n- " + f
+		if cost := count(line) - framing; used+cost <= limit {
+			section.WriteString(line)
+			used += cost
+			kept++
 		}
 	}
 	if kept == 0 {
 		return "", 0
 	}
-	return section, kept
+	return section.String(), kept
 }
 
 func excerptsNote(tag string) string {
@@ -211,7 +222,7 @@ func Build(in Input) Package {
 	marked := func(e Exchange, question string) string {
 		return "(sent " + HowLongAgo(in.Now.UnixMilli()-e.At.UnixMilli()) + ") " + question
 	}
-	known, facts := factSection(in.System, in.Facts, (in.Budget-requestOverhead-count(in.System)-count(in.Question))/2, count)
+	known, facts := factSection(in.System, in.Facts, min(in.Budget/8, (in.Budget-requestOverhead-count(in.System)-count(in.Question))/2), count)
 	base := in.System + known
 	system := base
 	if len(in.History) > 0 {
