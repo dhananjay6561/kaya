@@ -206,7 +206,7 @@ func TestChatFindsTheChatByNameAndReadsItsLastDayOrLastMessages(t *testing.T) {
 	r.say(r.group, 72*time.Hour, "quiet week message")
 	r.say(r.group, 71*time.Hour, "another old one")
 	r.say(r.direct, time.Hour, "not this chat")
-	m := &model{locality: llm.Local, reply: "Old news only."}
+	m := &model{locality: llm.Local, reply: "*College Gang*\nOld news only."}
 	got, err := r.summarizer(m).Chat(bg, "college gang")
 	if err != nil || got != "Summary of *College Gang*\nOld news only." {
 		t.Fatalf("got %q, %v", got, err)
