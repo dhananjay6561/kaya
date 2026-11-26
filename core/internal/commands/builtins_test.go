@@ -69,7 +69,7 @@ func TestLetsOnlyTheFourBuiltinsPastTheCommandCap(t *testing.T) {
 		"/pause": true, " /Resume.": true, "/pause 2h": false, "/nope": false, "hello": false,
 		"/facts": true, "/remember I like tea": false, "/forget 3": false, "/remember": true,
 		"/tasks": true, "/done 3": false, "/tasks please": false,
-		"/summary": true, "/summary office": false,
+		"/summary": false, "/summary office": false,
 	} {
 		if got := IsBuiltin(text); got != want {
 			t.Errorf("%q: got %v", text, got)

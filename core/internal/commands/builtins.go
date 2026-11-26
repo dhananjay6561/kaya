@@ -79,11 +79,12 @@ func argsOf(message string) string {
 	return text.Trim(message[i:])
 }
 
-// IsBuiltin reports whether message is exactly a built-in with nothing after it; only these are
-// urgent.
+// IsBuiltin reports whether message is exactly a built-in with nothing after it that makes no model
+// call; only these are urgent, so they never wait behind questions and questions never wait behind
+// a summary.
 func IsBuiltin(message string) bool {
 	s := ParseSlash(message)
-	return s != nil && s.Kind == Builtin && s.Args == ""
+	return s != nil && s.Kind == Builtin && s.Args == "" && s.Name != "summary"
 }
 
 const helpText = "Commands:\n" +
