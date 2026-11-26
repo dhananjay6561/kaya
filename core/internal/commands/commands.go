@@ -27,6 +27,8 @@ type Options struct {
 	Logger  *slog.Logger
 	Pause   pause.Switch
 	Status  func(ctx context.Context) (string, error)
+	// Facts keeps the facts /facts, /remember and /forget work on; nil answers them with a notice.
+	Facts FactBook
 	Chat    func(ctx context.Context, m channel.IncomingMessage) (ChatAnswer, error)
 	// DatabaseAway says whether an error means the database is down, so the command will run again
 	// and nothing is said; it must agree with the inbox, so pass channel.DatabaseAway.
@@ -208,7 +210,7 @@ func (h *handler) produce(ctx context.Context, m channel.IncomingMessage, slash 
 	var answer ChatAnswer
 	var err error
 	if slash != nil {
-		answer.Text, err = answerSlash(ctx, slash, m.ID, o.Pause, o.Status)
+		answer.Text, err = answerSlash(ctx, slash, m, o)
 	} else {
 		answer, err = o.Chat(ctx, m)
 	}
