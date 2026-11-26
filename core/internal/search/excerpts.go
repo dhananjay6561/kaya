@@ -437,3 +437,23 @@ func (s *Searcher) FindChat(ctx context.Context, name string) (int64, string, bo
 	err = s.DB.QueryRow(ctx, `SELECT `+ChatTitleSQL+` FROM chats ch LEFT JOIN contacts cc ON cc.id = ch.contact_id WHERE ch.id = $1`, best[0]).Scan(&found)
 	return best[0], found, err == nil, err
 }
+
+// OwnerName is the name DJ goes by on WhatsApp (the one he chose, else the one he saved for himself),
+// kept to letters, marks, spaces and . ' -, so a model can tell a message naming him; empty while it
+// is not known.
+func OwnerName(ctx context.Context, db *store.DB) (string, error) {
+	var name string
+	err := db.QueryRow(ctx, `SELECT coalesce(nullif(c.push_name, ''), nullif(c.first_name, ''), nullif(c.saved_name, ''), '')
+		FROM connection_state cs JOIN contacts c ON cs.own_jid IN (c.pn, c.lid)
+		ORDER BY cs.occurred_at DESC LIMIT 1`).Scan(&name)
+	if errors.Is(err, pgx.ErrNoRows) {
+		return "", nil
+	}
+	name = strings.Map(func(r rune) rune {
+		if unicode.IsLetter(r) || unicode.IsMark(r) || r == ' ' || r == '.' || r == '-' || r == '\'' {
+			return r
+		}
+		return -1
+	}, name)
+	return strings.TrimSpace(cut(oneLine(name), 60)), err
+}
