@@ -311,6 +311,12 @@ BEGIN
   ASSERT has_table_privilege('kaya_core', 'chunks', 'SELECT, INSERT, UPDATE, DELETE')
     AND has_table_privilege('kaya_core', 'message_chunks', 'SELECT, INSERT, UPDATE, DELETE'), 'core owns the search index';
   ASSERT NOT has_table_privilege('kaya_gateway', 'chunks', 'SELECT'), 'the gateway cannot read the search index';
+  ASSERT has_table_privilege('kaya_core', 'facts', 'SELECT, INSERT, UPDATE, DELETE'), 'core owns the facts about DJ';
+  ASSERT has_table_privilege('kaya_core', 'fact_learning', 'SELECT, UPDATE')
+    AND NOT has_table_privilege('kaya_core', 'fact_learning', 'INSERT')
+    AND NOT has_table_privilege('kaya_core', 'fact_learning', 'DELETE'), 'core moves the learning cursor but cannot add or remove it';
+  ASSERT NOT has_table_privilege('kaya_gateway', 'facts', 'SELECT')
+    AND NOT has_table_privilege('kaya_gateway', 'fact_learning', 'SELECT'), 'the gateway cannot read the facts';
   ASSERT EXISTS (SELECT 1 FROM pg_indexes WHERE indexname = 'messages_body_search_idx'), 'message text has a keyword index';
   ASSERT EXISTS (SELECT 1 FROM pg_indexes WHERE indexname = 'contacts_name_trgm_idx')
     AND EXISTS (SELECT 1 FROM pg_indexes WHERE indexname = 'chats_name_trgm_idx'), 'names have trigram indexes';
@@ -532,6 +538,15 @@ BEGIN
   INSERT INTO exchanges (question_message_id, answer_wa_id) VALUES (900100, '3EB0ANSWER');
   PERFORM pg_temp.expect_error($q$INSERT INTO exchanges (question_message_id, answer_wa_id) VALUES (900100, '3EB0AGAIN')$q$, '23505');
   PERFORM pg_temp.expect_error($q$INSERT INTO exchanges (question_message_id) VALUES (900101)$q$, '23502');
+  PERFORM 1 FROM fact_learning WHERE exchange_id = 0;
+  ASSERT FOUND, 'learning starts before the first exchange';
+  PERFORM pg_temp.expect_error('INSERT INTO fact_learning DEFAULT VALUES', '23505');
+  PERFORM pg_temp.expect_error('INSERT INTO fact_learning (id) VALUES (2)', '23514');
+  INSERT INTO facts (body, source) VALUES ('Works at Keploy', 'told');
+  PERFORM pg_temp.expect_error($q$INSERT INTO facts (body, source) VALUES ('works at KEPLOY', 'learned')$q$, '23505');
+  PERFORM pg_temp.expect_error($q$INSERT INTO facts (body, source) VALUES ('  ', 'told')$q$, '23514');
+  PERFORM pg_temp.expect_error($q$INSERT INTO facts (body, source) VALUES ('x', 'guessed')$q$, '23514');
+  PERFORM pg_temp.expect_error($q$INSERT INTO facts (body, source) VALUES (repeat('x', 501), 'told')$q$, '23514');
   INSERT INTO chunks (chat_id, first_sent_at, last_sent_at, message_count, text_hash, model, embedding)
   VALUES (1, now(), now(), 1, 'h', 'm', array_fill(0.1, ARRAY[1024])::halfvec(1024));
   INSERT INTO chunks (chat_id, first_sent_at, last_sent_at, message_count, text_hash, model, skipped)
