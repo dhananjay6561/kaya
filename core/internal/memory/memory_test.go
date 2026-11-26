@@ -421,3 +421,56 @@ func TestBuildSaysWhichNamesMatchNobodyWithinTheBudget(t *testing.T) {
 		t.Fatal("a failed search named unknown names")
 	}
 }
+
+func TestBuildPutsTheFactsThatFitInTheSystemMessageInOrder(t *testing.T) {
+	in := Input{
+		System:   "SYSTEM",
+		Facts:    []string{"Works at Keploy", strings.Repeat("long ", 200), "Sister is Priya"},
+		History:  []Exchange{exchange("1", 10)},
+		Question: "who am I?",
+		Budget:   600,
+		Count:    count,
+		Now:      at,
+	}
+	p := Build(in)
+	system := p.Messages[0].Content
+	if !strings.HasPrefix(system, "SYSTEM\n\n"+factsHeader+"\n- Works at Keploy\n- Sister is Priya") {
+		t.Fatalf("system = %q", system)
+	}
+	if strings.Contains(system, "long long") || p.Facts != 2 || p.Exchanges != 1 {
+		t.Fatalf("facts %d, exchanges %d, system %q", p.Facts, p.Exchanges, system)
+	}
+	if p.Tokens > in.Budget {
+		t.Fatalf("tokens %d over the budget", p.Tokens)
+	}
+}
+
+func TestBuildGivesFactsAtMostHalfTheRoomAndCountsThem(t *testing.T) {
+	var facts []string
+	for i := range 50 {
+		facts = append(facts, fmt.Sprintf("fact number %02d", i))
+	}
+	in := Input{System: "SYSTEM", Facts: facts, Question: "q", Budget: 800, Count: count, Now: at}
+	p := Build(in)
+	room := (in.Budget - requestOverhead - count("SYSTEM") - count("q")) / 2
+	if got := count(p.Messages[0].Content) - count("SYSTEM"); got > room || p.Facts == 0 || p.Facts == 50 {
+		t.Fatalf("facts took %d of %d with %d facts", got, room, p.Facts)
+	}
+	if !strings.Contains(p.Messages[0].Content, "- fact number 00") {
+		t.Fatal("the first fact was not kept")
+	}
+	if p.Tokens != requestOverhead+count(p.Messages[0].Content)+count("q") {
+		t.Fatalf("tokens = %d", p.Tokens)
+	}
+}
+
+func TestBuildWithoutFactsLeavesTheSystemMessageAsItWas(t *testing.T) {
+	p := Build(Input{System: "SYSTEM", Question: "q", Budget: 400, Count: count, Now: at})
+	if p.Messages[0].Content != "SYSTEM" || p.Facts != 0 {
+		t.Fatalf("system = %q", p.Messages[0].Content)
+	}
+	p = Build(Input{System: "SYSTEM", Facts: []string{strings.Repeat("x", 1000)}, Question: "q", Budget: 400, Count: count, Now: at})
+	if p.Messages[0].Content != "SYSTEM" || p.Facts != 0 {
+		t.Fatalf("a fact too big for the room was sent: %q", p.Messages[0].Content)
+	}
+}
