@@ -32,6 +32,7 @@ import (
 	"github.com/dhananjay6561/kaya/core/internal/pause"
 	"github.com/dhananjay6561/kaya/core/internal/search"
 	"github.com/dhananjay6561/kaya/core/internal/status"
+	"github.com/dhananjay6561/kaya/core/internal/tagging"
 	"github.com/dhananjay6561/kaya/kit/envfile"
 	"github.com/dhananjay6561/kaya/kit/httpapi"
 	"github.com/dhananjay6561/kaya/kit/logging"
@@ -155,6 +156,17 @@ func run(cfg config.Config, logger *slog.Logger) error {
 	if err != nil {
 		return err
 	}
+	tasks := tagging.NewTasks(db)
+	var tagger *tagging.Tagger
+	if cfg.TaggingTokensPerDay > 0 {
+		tagger, err = tagging.New(tagging.Options{
+			DB: db, LLM: model, Pause: switches, Logger: logger, Zone: zone, TokensPerDay: cfg.TaggingTokensPerDay,
+			NewMaskSession: func() tagging.MaskSession { return masking.NewSession() },
+		})
+		if err != nil {
+			return err
+		}
+	}
 	replies, err := chat.New(chat.Options{
 		LLM:    model,
 		Logger: logger,
@@ -191,6 +203,8 @@ func run(cfg config.Config, logger *slog.Logger) error {
 		Logger:  logger,
 		Pause:   switches,
 		Facts:   factStore,
+		Tasks:   tasks,
+		Zone:    zone,
 		Status: func(ctx context.Context) (string, error) {
 			st, err := status.Read(ctx, status.Source{
 				DB: db, Pause: switches, Version: version, StartedAt: startedAt,
@@ -199,6 +213,14 @@ func run(cfg config.Config, logger *slog.Logger) error {
 					return p.Indexed, p.Skipped, p.Total, err
 				},
 				Facts: factStore.Count,
+				Tagging: func(ctx context.Context) (int, int, error) {
+					open, err := tasks.CountOpen(ctx)
+					if err != nil || tagger == nil {
+						return 0, open, err
+					}
+					waiting, err := tagging.Waiting(ctx, db)
+					return waiting, open, err
+				},
 			})
 			if err != nil {
 				return "", err
@@ -233,6 +255,10 @@ func run(cfg config.Config, logger *slog.Logger) error {
 	defer indexer.Stop()
 	learner.Start()
 	defer learner.Stop()
+	if tagger != nil {
+		tagger.Start()
+		defer tagger.Stop()
+	}
 
 	ln, err := net.Listen("tcp", net.JoinHostPort(cfg.ListenHost, strconv.Itoa(cfg.Port)))
 	if err != nil {
