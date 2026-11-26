@@ -271,7 +271,8 @@ Folders appear when a phase needs them; empty placeholders are not committed.
   routine model's allowance from DJ's questions, and learning waits while
   Kaya is paused. Every question's context carries the facts that fit in an eighth of the budget, never more
   than half the room the system prompt and the question leave, those DJ told first, then the newest, in the system message,
-  marked as background and not instructions. They are DJ's own words, so they go unmasked.
+  marked as background and not instructions. For a cloud model they are masked with the question's
+  mask session, since a fact goes with every question for good.
 - **History sync.** Each history chunk WhatsApp announces becomes a row in `history_jobs`, stored
   in the transaction that acknowledges the announcement. A single worker downloads the chunk,
   stores it in batches of at most 200 messages (a savepoint per message, so one bad message
