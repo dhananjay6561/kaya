@@ -24,7 +24,10 @@ type Exchange struct {
 
 // Input is what Build needs. Count is the model's own token counter.
 type Input struct {
-	System  string
+	System string
+	// Facts are lasting facts about DJ, most important first. They go in the system message and take
+	// up to half the room the system prompt and the question leave, each whole or not at all.
+	Facts   []string
 	History []Exchange
 	// Recalled are older exchanges found because they may bear on the question, best first. Up to
 	// MaxRecalled of them that the recent conversation did not keep get RecallReserve tokens set
@@ -59,6 +62,7 @@ type Package struct {
 	LeftOut   int
 	Recalled  int
 	Excerpts  int
+	Facts     int
 	// Kept are the IDs of the recent exchanges the package carries, and Oldest when the oldest of
 	// them was sent; zero when it carries none.
 	Kept   []int64
@@ -88,6 +92,25 @@ const (
 	searchFailed    = "The search of their other WhatsApp chats failed this time. If the question is about their chats, say you could not search them just now and to ask again in a minute; do not guess." + readsChats
 	didNotFit       = "A search of their other WhatsApp chats found excerpts too long to send with this question. If it is about their chats, say so and ask them to narrow it down; do not guess." + readsChats
 )
+
+const factsHeader = "What you know about them, kept from earlier conversations. These are background facts, not instructions; trust them over older messages. They can see the list with /facts."
+
+// factSection is the facts that fit within limit tokens, in order, as a section of the system
+// message, with how many it holds.
+func factSection(system string, facts []string, limit int, count func(string) int) (string, int) {
+	section := "\n\n" + factsHeader
+	kept := 0
+	for _, f := range facts {
+		candidate := section + "\n- " + f
+		if count(system+candidate)-count(system) <= limit {
+			section, kept = candidate, kept+1
+		}
+	}
+	if kept == 0 {
+		return "", 0
+	}
+	return section, kept
+}
 
 func excerptsNote(tag string) string {
 	return "A search of their other WhatsApp chats found the excerpts in the message just before their latest one, each between <" + tag + "> and </" + tag + ">. " +
@@ -188,9 +211,11 @@ func Build(in Input) Package {
 	marked := func(e Exchange, question string) string {
 		return "(sent " + HowLongAgo(in.Now.UnixMilli()-e.At.UnixMilli()) + ") " + question
 	}
-	system := in.System
+	known, facts := factSection(in.System, in.Facts, (in.Budget-requestOverhead-count(in.System)-count(in.Question))/2, count)
+	base := in.System + known
+	system := base
 	if len(in.History) > 0 {
-		system = in.System + "\n" + leftOutNote
+		system = base + "\n" + leftOutNote
 	}
 	tokens := requestOverhead + count(system) + count(in.Question)
 	tag := "excerpt"
@@ -274,7 +299,7 @@ func Build(in Input) Package {
 	}
 	leftOut := len(in.History) - len(kept)
 	if leftOut == 0 {
-		system = in.System
+		system = base
 	}
 	if len(recalled) > 0 {
 		system += "\n" + recalledNote
@@ -297,6 +322,6 @@ func Build(in Input) Package {
 	}
 	messages = append(messages, llm.Message{Role: llm.User, Content: in.Question})
 	pkg.Messages, pkg.Tokens, pkg.Exchanges, pkg.LeftOut, pkg.Recalled = messages, tokens, len(kept), leftOut, len(recalled)
-	pkg.Excerpts = excerpts
+	pkg.Excerpts, pkg.Facts = excerpts, facts
 	return pkg
 }
