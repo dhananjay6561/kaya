@@ -29,7 +29,11 @@ type Options struct {
 	Status  func(ctx context.Context) (string, error)
 	// Facts keeps the facts /facts, /remember and /forget work on; nil answers them with a notice.
 	Facts FactBook
-	Chat  func(ctx context.Context, m channel.IncomingMessage) (ChatAnswer, error)
+	// Tasks keeps the tasks /tasks and /done work on; nil answers them with a notice.
+	Tasks TaskBook
+	// Zone is DJ's time zone, for the dates replies show; nil means UTC.
+	Zone *time.Location
+	Chat func(ctx context.Context, m channel.IncomingMessage) (ChatAnswer, error)
 	// DatabaseAway says whether an error means the database is down, so the command will run again
 	// and nothing is said; it must agree with the inbox, so pass channel.DatabaseAway.
 	DatabaseAway func(err error) bool
@@ -96,6 +100,9 @@ func Start(o Options) func() {
 	}
 	if o.Now == nil {
 		o.Now = time.Now
+	}
+	if o.Zone == nil {
+		o.Zone = time.UTC
 	}
 	h := &handler{o: o}
 	return o.Channel.OnMessage(h.handle)
