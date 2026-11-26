@@ -324,6 +324,9 @@ func (s *Summarizer) write(ctx context.Context, heading, lead string, chats []ch
 		return "I could not write a summary this time. Try again in a bit.", nil
 	}
 	if lead != "" {
+		if first, rest, ok := strings.Cut(text, "\n"); ok && strings.Contains(lead, strings.TrimSpace(first)) && strings.HasPrefix(strings.TrimSpace(first), "*") {
+			text = strings.TrimLeft(rest, "\n")
+		}
 		text = lead + "\n" + text
 	}
 	var tail []string
