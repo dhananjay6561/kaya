@@ -38,6 +38,7 @@ kaya/
 │       │                   meaning and words fused, filters, recall of older exchanges
 │       ├── facts/          facts about DJ: the store, and the learner that reads each exchange
 │       ├── tagging/        tags on new messages and the tasks they give: the tagger and the store
+│       ├── summary/        /summary: today across chats, or one chat found by name
 │       ├── masking/        placeholders for private details before a cloud model
 │       └── text/           text rules kept from the TypeScript core
 ├── gateway/                Go WhatsApp gateway (its own Go module)
@@ -297,6 +298,14 @@ Folders appear when a phase needs them; empty placeholders are not committed.
   A refused batch is halved down to the one message the model will not take, which is passed over
   with a code, as is a batch with a garbled answer; a third such pass in a row stops tagging for 10
   minutes. `/tasks` lists open tasks (due ones first) and `/done` closes them.
+- **Summaries.** `/summary` reads every message sent since midnight in DJ's time zone, except in his
+  own chat with Kaya and those tagged `ignore`, keeps each chat's newest 60, and puts direct chats
+  first, then chats by how many messages were tagged important, then the busiest. `/summary <name>`
+  finds the chat by `search.Searcher.FindChat` (the planner's trigram name matching over chat
+  titles) and reads its last day, or its last 20 messages when the day was quiet. Lines are readied
+  by `search.Prepare`, fitted newest first into the model's context budget, and sent to the heavy
+  model with the name DJ goes by, so a request to him reads as his; the answer has placeholders
+  put back, is formatted for WhatsApp and clipped, and says how many older messages did not fit.
 - **History sync.** Each history chunk WhatsApp announces becomes a row in `history_jobs`, stored
   in the transaction that acknowledges the announcement. A single worker downloads the chunk,
   stores it in batches of at most 200 messages (a savepoint per message, so one bad message
