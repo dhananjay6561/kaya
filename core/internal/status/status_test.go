@@ -179,3 +179,27 @@ func TestReadsTheIndexAndLeavesItOutWhenItCannot(t *testing.T) {
 		t.Fatalf("a failing index broke the status: %+v, %v", st, err)
 	}
 }
+
+func TestShowsHowManyFactsKayaKeeps(t *testing.T) {
+	if text := Format(healthy()); strings.Contains(text, "Facts") {
+		t.Fatal(text)
+	}
+	st := healthy()
+	st.Facts, st.FactsTold = 12, 3
+	matches(t, Format(st), `^Facts about you: 12, 3 of them you told me\.$`)
+}
+
+func TestReadsTheFactCountAndLeavesItOutWhenItCannot(t *testing.T) {
+	core, _ := testdb.MigratedPair(t, "kaya_core")
+	src := Source{
+		DB: core, Pause: &pause.Memory{}, Version: "test", StartedAt: time.Now(),
+		Facts: func(context.Context) (int, int, error) { return 4, 1, nil },
+	}
+	if st, err := Read(bg, src); err != nil || st.Facts != 4 || st.FactsTold != 1 {
+		t.Fatalf("got %+v, %v", st, err)
+	}
+	src.Facts = func(context.Context) (int, int, error) { return 9, 9, errors.New("facts away") }
+	if st, err := Read(bg, src); err != nil || st.Facts != 0 {
+		t.Fatalf("a failing count broke the status: %+v, %v", st, err)
+	}
+}
