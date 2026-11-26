@@ -167,7 +167,7 @@ func (r *rig) tags() []string {
 	if err != nil {
 		r.t.Fatal(err)
 	}
-	defer rows.Close()
+	defer func() { _ = rows.Close() }()
 	out := []string{}
 	for rows.Next() {
 		var body, tags, skipped string
