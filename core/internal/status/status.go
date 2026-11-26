@@ -10,6 +10,7 @@ import (
 
 	"github.com/jackc/pgx/v5"
 
+	"github.com/dhananjay6561/kaya/core/internal/facts"
 	"github.com/dhananjay6561/kaya/core/internal/gateway"
 	"github.com/dhananjay6561/kaya/core/internal/pause"
 	"github.com/dhananjay6561/kaya/kit/store"
@@ -130,7 +131,11 @@ func Format(st Status) string {
 		lines = append(lines, line+".")
 	}
 	if st.Facts > 0 {
-		lines = append(lines, fmt.Sprintf("Facts about you: %d, %d of them you told me.", st.Facts, st.FactsTold))
+		line := fmt.Sprintf("Facts about you: %d, %d of them you told me", st.Facts, st.FactsTold)
+		if st.Facts >= facts.MaxFacts {
+			line += " (the most I keep)"
+		}
+		lines = append(lines, line+".")
 	}
 	if st.EventsWaiting > 0 {
 		lines = append(lines, fmt.Sprintf("Events waiting for core: %d.", st.EventsWaiting))
