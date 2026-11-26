@@ -66,12 +66,13 @@ type rig struct {
 }
 
 type rigOptions struct {
-	status func(context.Context) (string, error)
-	chat   func(context.Context, channel.IncomingMessage) (ChatAnswer, error)
-	fail   func(channel.OutgoingMessage) error
-	now    func() time.Time
-	facts  FactBook
-	tasks  TaskBook
+	status  func(context.Context) (string, error)
+	chat    func(context.Context, channel.IncomingMessage) (ChatAnswer, error)
+	fail    func(channel.OutgoingMessage) error
+	now     func() time.Time
+	facts   FactBook
+	tasks   TaskBook
+	summary func(context.Context, string) (string, error)
 }
 
 // errAway is the rig's database outage; every other error is a handler's own.
@@ -90,7 +91,7 @@ func newRig(t *testing.T, o rigOptions) *rig {
 			return ChatAnswer{Text: "You said: " + Clip(m.Text), Remember: true}, nil
 		}
 	}
-	r.stop = Start(Options{Channel: r.ch, Logger: quiet, Pause: r.pause, Status: o.status, Chat: o.chat, Now: o.now, DatabaseAway: isAway, Facts: o.facts, Tasks: o.tasks, Zone: kolkata})
+	r.stop = Start(Options{Channel: r.ch, Logger: quiet, Pause: r.pause, Status: o.status, Chat: o.chat, Now: o.now, DatabaseAway: isAway, Facts: o.facts, Tasks: o.tasks, Zone: kolkata, Summary: o.summary})
 	if err := r.ch.Start(bg); err != nil {
 		t.Fatal(err)
 	}
@@ -527,7 +528,8 @@ func TestSendsTheTypeScriptCoresTexts(t *testing.T) {
 	help := "Commands:\n/help: this list\n/status: how Kaya is doing\n/pause: stop answering until /resume\n" +
 		"/resume: start answering again\n/facts: what I know about you\n/remember <fact>: keep a fact about you\n" +
 		"/forget <number>: drop a fact, by its number in /facts\n/tasks: open tasks and reminders found in your chats\n" +
-		"/done <number>: close a task, by its number in /tasks\nAnything else you send here goes to an AI model, " +
+		"/done <number>: close a task, by its number in /tasks\n/summary: what came in today; /summary <chat>: one chat's last day\n" +
+		"Anything else you send here goes to an AI model, " +
 		"which answers with what it knows about you, your conversation and what a search of your other chats finds."
 	same(t, r.answers("/help", now), []string{help})
 	same(t, r.answers("/pause", now), []string{"Paused. Until you send /resume I answer only slash commands, like /status."})
@@ -825,5 +827,33 @@ func TestTaskCommandsWithoutATaskBookSaySo(t *testing.T) {
 	r := newRig(t, rigOptions{})
 	for _, c := range []string{"/tasks", "/done 1"} {
 		same(t, r.answers(c, now), []string{"Tasks are not set up here."})
+	}
+}
+
+func TestSummaryOfTodayOrOfANamedChat(t *testing.T) {
+	var asked []string
+	r := newRig(t, rigOptions{summary: func(_ context.Context, chat string) (string, error) {
+		asked = append(asked, chat)
+		if chat == "" {
+			return "today in short", nil
+		}
+		return "about " + chat, nil
+	}})
+	same(t, r.answers("/summary", now), []string{"today in short"})
+	same(t, r.answers("/Summary  College Gang ", now), []string{"about College Gang"})
+	if !slices.Equal(asked, []string{"", "College Gang"}) {
+		t.Fatalf("asked %q", asked)
+	}
+	none := newRig(t, rigOptions{})
+	same(t, none.answers("/summary", now), []string{"Summaries are not set up here."})
+}
+
+func TestASummaryTheModelCannotWriteGetsTheUsualNotice(t *testing.T) {
+	r := newRig(t, rigOptions{summary: func(context.Context, string) (string, error) {
+		return "", &llm.Error{Provider: "groq", Code: llm.RateLimited}
+	}})
+	out, err := r.say("/summary", now)
+	if err == nil || len(out) != 1 || !strings.Contains(out[0], "limit") {
+		t.Fatalf("got %q, %v", out, err)
 	}
 }
