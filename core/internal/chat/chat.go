@@ -56,6 +56,9 @@ type Options struct {
 	// out from the question; nil means the chats are not searched. A failure is handled like
 	// History's, and the model is told the search failed.
 	Excerpts func(ctx context.Context, p search.Plan) (search.Found, error)
+	// Facts reads the lasting facts about DJ, most important first; nil means none. A failure is
+	// handled like History's.
+	Facts func(ctx context.Context) ([]string, error)
 	// DatabaseAway says whether a History error means the database is down, in which case the
 	// question fails and runs again later; any other error is logged and the question is answered
 	// without the conversation.
@@ -81,7 +84,7 @@ func New(o Options) (*Chat, error) {
 	switch {
 	case o.LLM == nil || o.Logger == nil || o.Zone == nil:
 		return nil, errors.New("chat needs a model, a logger and a time zone")
-	case (o.History != nil || o.Recall != nil || o.Excerpts != nil) && o.DatabaseAway == nil:
+	case (o.History != nil || o.Recall != nil || o.Excerpts != nil || o.Facts != nil) && o.DatabaseAway == nil:
 		return nil, errors.New("chat needs DatabaseAway to read history")
 	case o.LLM.Locality() == llm.Cloud && o.NewMaskSession == nil:
 		return nil, errors.New("chat needs masking to send the conversation to a cloud model")
@@ -103,7 +106,7 @@ func (c *Chat) Reply(ctx context.Context, q Question) (Answer, error) {
 	if o.LLM.Locality() == llm.Cloud {
 		privacy = o.NewMaskSession()
 	}
-	var excerpts, unknown []string
+	var excerpts, unknown, known []string
 	var chatSearch memory.ChatSearch
 	tag := strings.ToLower(rand.Text()[:10])
 	input := func(history, recalled []memory.Exchange) memory.Input {
@@ -113,6 +116,7 @@ func (c *Chat) Reply(ctx context.Context, q Question) (Answer, error) {
 			ChatSearch:  chatSearch,
 			Unknown:     unknown,
 			System:      SystemPrompt(now, o.Zone, o.LLM.Locality()),
+			Facts:       known,
 			History:     history,
 			Recalled:    recalled,
 			MaxRecalled: maxRecalled,
@@ -145,6 +149,7 @@ func (c *Chat) Reply(ctx context.Context, q Question) (Answer, error) {
 			"left_out", built.LeftOut,
 			"recalled", built.Recalled,
 			"excerpts", built.Excerpts,
+			"facts", built.Facts,
 			"ms", time.Since(started).Milliseconds(),
 		)
 		return completion, nil
@@ -163,6 +168,10 @@ func (c *Chat) Reply(ctx context.Context, q Question) (Answer, error) {
 			masked[i] = e
 		}
 		return masked
+	}
+	known, err := c.facts(ctx)
+	if err != nil {
+		return Answer{}, err
 	}
 	history, err := c.read(ctx, q, o.History, "could not read the conversation; answering without it")
 	if err != nil {
@@ -289,6 +298,25 @@ func written(names []string, q Question, history []memory.Exchange) []string {
 		}
 	}
 	return out
+}
+
+// facts reads the facts about DJ, handling a failure like read does.
+func (c *Chat) facts(ctx context.Context) ([]string, error) {
+	if c.o.Facts == nil {
+		return nil, nil
+	}
+	known, err := c.o.Facts(ctx)
+	switch {
+	case err == nil:
+		return known, nil
+	case ctx.Err() != nil:
+		return nil, context.Cause(ctx)
+	case c.o.DatabaseAway(err):
+		return nil, err
+	default:
+		c.o.Logger.Warn("could not read the facts; answering without them", logging.Err(err))
+		return nil, nil
+	}
 }
 
 // read gets exchanges from source. When the database is away the question fails and runs again
