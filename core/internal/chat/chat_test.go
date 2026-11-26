@@ -105,7 +105,7 @@ func (s *scripted) Locality() llm.Locality {
 	}
 	return llm.Local
 }
-func (s *scripted) ContextTokens() int          { return 4000 }
+func (s *scripted) ContextTokens() int          { return 5000 }
 func (s *scripted) CountTokens(text string) int { return len(text) }
 func (s *scripted) Complete(_ context.Context, r llm.Request) (llm.Completion, error) {
 	s.mu.Lock()
@@ -180,7 +180,7 @@ func TestSystemPromptSaysWhatKayaCannotDoYet(t *testing.T) {
 		"to-do lists, searching the web",
 		"you see only those excerpts, never whole chats",
 		"There are no sessions and nothing resets",
-		"cannot yet pin it as a lasting fact",
+		"saved as such a fact by itself",
 		"marked with how long ago",
 		"cannot check anything live",
 		"Never make up facts",
@@ -272,7 +272,7 @@ func TestReplyCarriesTheRecentConversationAskedForTheQuestionBeingAnswered(t *te
 }
 
 func TestReplyFitsTheConversationToTheModelsBudget(t *testing.T) {
-	stub := llm.NewStub(llm.StubOptions{Reply: func(llm.Request) string { return "ok" }, ContextTokens: 1000})
+	stub := llm.NewStub(llm.StubOptions{Reply: func(llm.Request) string { return "ok" }, ContextTokens: 1100})
 	long := strings.Repeat("x", 2000)
 	reply(t, newChat(t, Options{LLM: stub, History: history(
 		memory.Exchange{Question: long, Answer: long, At: now},
