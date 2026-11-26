@@ -153,6 +153,9 @@ func (s *Searcher) resolve(ctx context.Context, names []string, query func(condi
 			}
 			if words := strings.Fields(name); len(ids) == 0 && len(words) >= wordsOfName {
 				for _, w := range words {
+					if len([]rune(w)) <= shortName {
+						continue
+					}
 					if ids, err = find(w); err != nil || len(ids) > 0 {
 						break
 					}
@@ -407,8 +410,10 @@ func (s *Searcher) before(ctx context.Context, chatID int64, first Line) (string
 }
 
 // FindChat finds the chat a name stands for, a person's or a group's, matched the way the search
-// plan's names are (see resolve), never DJ's own chat with Kaya, and only one with messages: the
-// closest name first and, among names as close, the chat with the newest message. It returns the
+// plan's names are (see resolve), never DJ's own chat with Kaya, and only one with messages: a group
+// or a contact DJ saved before anyone named only by the name they chose, so a stranger cannot pass
+// for a group by taking its name; then the closest name and, among names as close, the chat with
+// the newest message. It returns the
 // chat and its title, or false when no chat matches.
 func (s *Searcher) FindChat(ctx context.Context, name string) (int64, string, bool, error) {
 	name = clean(name, maxNameLen)
@@ -425,7 +430,8 @@ func (s *Searcher) FindChat(ctx context.Context, name string) (int64, string, bo
 			SELECT ch.id FROM chats ch LEFT JOIN contacts cc ON cc.id = ch.contact_id
 			WHERE ch.id <> $3 AND ` + strings.ReplaceAll(condition, "NAME", title) + `
 			  AND EXISTS (SELECT 1 FROM messages m WHERE m.chat_id = ch.id)
-			ORDER BY round((` + strings.ReplaceAll(similarity, "NAME", title) + `)::numeric, 1) DESC,
+			ORDER BY ch.kind = 'group' OR nullif(cc.saved_name, '') IS NOT NULL OR nullif(cc.first_name, '') IS NOT NULL DESC,
+			         round((` + strings.ReplaceAll(similarity, "NAME", title) + `)::numeric, 1) DESC,
 			         (SELECT max(m.sent_at) FROM messages m WHERE m.chat_id = ch.id) DESC NULLS LAST,
 			         ch.id
 			LIMIT $2`
