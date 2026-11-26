@@ -405,3 +405,35 @@ func (s *Searcher) before(ctx context.Context, chatID int64, first Line) (string
 	}
 	return *text, nil
 }
+
+// FindChat finds the chat a name stands for, a person's or a group's, matched the way the search
+// plan's names are (see resolve), never DJ's own chat with Kaya, and only one with messages: the
+// closest name first and, among names as close, the chat with the newest message. It returns the
+// chat and its title, or false when no chat matches.
+func (s *Searcher) FindChat(ctx context.Context, name string) (int64, string, bool, error) {
+	name = clean(name, maxNameLen)
+	if name == "" {
+		return 0, "", false, nil
+	}
+	self, err := s.selfChat(ctx)
+	if err != nil {
+		return 0, "", false, err
+	}
+	const title = `lower(` + ChatTitleSQL + `)`
+	best, _, _, err := s.resolve(ctx, []string{name}, func(condition, similarity string) string {
+		return `
+			SELECT ch.id FROM chats ch LEFT JOIN contacts cc ON cc.id = ch.contact_id
+			WHERE ch.id <> $3 AND ` + strings.ReplaceAll(condition, "NAME", title) + `
+			  AND EXISTS (SELECT 1 FROM messages m WHERE m.chat_id = ch.id)
+			ORDER BY round((` + strings.ReplaceAll(similarity, "NAME", title) + `)::numeric, 1) DESC,
+			         (SELECT max(m.sent_at) FROM messages m WHERE m.chat_id = ch.id) DESC NULLS LAST,
+			         ch.id
+			LIMIT $2`
+	}, self)
+	if err != nil || len(best) == 0 {
+		return 0, "", false, err
+	}
+	var found string
+	err = s.DB.QueryRow(ctx, `SELECT `+ChatTitleSQL+` FROM chats ch LEFT JOIN contacts cc ON cc.id = ch.contact_id WHERE ch.id = $1`, best[0]).Scan(&found)
+	return best[0], found, err == nil, err
+}
