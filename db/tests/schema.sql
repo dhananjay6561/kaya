@@ -312,6 +312,13 @@ BEGIN
     AND has_table_privilege('kaya_core', 'message_chunks', 'SELECT, INSERT, UPDATE, DELETE'), 'core owns the search index';
   ASSERT NOT has_table_privilege('kaya_gateway', 'chunks', 'SELECT'), 'the gateway cannot read the search index';
   ASSERT has_table_privilege('kaya_core', 'facts', 'SELECT, INSERT, UPDATE, DELETE'), 'core owns the facts about DJ';
+  ASSERT has_table_privilege('kaya_core', 'message_tags', 'SELECT, INSERT, UPDATE, DELETE')
+    AND has_table_privilege('kaya_core', 'tasks', 'SELECT, INSERT, UPDATE, DELETE'), 'core owns tags and tasks';
+  ASSERT has_table_privilege('kaya_core', 'tagging', 'SELECT, UPDATE')
+    AND NOT has_table_privilege('kaya_core', 'tagging', 'INSERT')
+    AND NOT has_table_privilege('kaya_core', 'tagging', 'DELETE'), 'core moves tagging''s state but cannot add or remove it';
+  ASSERT NOT has_table_privilege('kaya_gateway', 'tasks', 'SELECT')
+    AND NOT has_table_privilege('kaya_gateway', 'message_tags', 'SELECT'), 'the gateway cannot read tags or tasks';
   ASSERT has_table_privilege('kaya_core', 'fact_learning', 'SELECT, UPDATE')
     AND NOT has_table_privilege('kaya_core', 'fact_learning', 'INSERT')
     AND NOT has_table_privilege('kaya_core', 'fact_learning', 'DELETE'), 'core moves the learning cursor but cannot add or remove it';
@@ -547,6 +554,16 @@ BEGIN
   PERFORM pg_temp.expect_error($q$INSERT INTO facts (body, source) VALUES ('  ', 'told')$q$, '23514');
   PERFORM pg_temp.expect_error($q$INSERT INTO facts (body, source) VALUES ('x', 'guessed')$q$, '23514');
   PERFORM pg_temp.expect_error($q$INSERT INTO facts (body, source) VALUES (repeat('x', 501), 'told')$q$, '23514');
+  PERFORM 1 FROM tagging WHERE started_after >= 0;
+  ASSERT FOUND, 'tagging knows where it starts';
+  PERFORM pg_temp.expect_error('INSERT INTO tagging (started_after) VALUES (0)', '23505');
+  INSERT INTO message_tags (message_id, tags) VALUES (900200, ARRAY['important', 'task']);
+  PERFORM pg_temp.expect_error($q$INSERT INTO message_tags (message_id, tags) VALUES (900201, ARRAY['spam'])$q$, '23514');
+  PERFORM pg_temp.expect_error($q$INSERT INTO message_tags (message_id, tags, skipped) VALUES (900202, ARRAY['ignore'], 'bad_json')$q$, '23514');
+  INSERT INTO tasks (message_id, chat_id, kind, title) VALUES (900200, 1, 'task', 'Send the deck');
+  PERFORM pg_temp.expect_error($q$INSERT INTO tasks (message_id, chat_id, kind, title) VALUES (900200, 1, 'task', 'again')$q$, '23505');
+  PERFORM pg_temp.expect_error($q$INSERT INTO tasks (message_id, chat_id, kind, title, state) VALUES (900203, 1, 'task', 'x', 'done')$q$, '23514');
+  PERFORM pg_temp.expect_error($q$INSERT INTO tasks (message_id, chat_id, kind, title, due_has_time) VALUES (900204, 1, 'reminder', 'x', true)$q$, '23514');
   INSERT INTO chunks (chat_id, first_sent_at, last_sent_at, message_count, text_hash, model, embedding)
   VALUES (1, now(), now(), 1, 'h', 'm', array_fill(0.1, ARRAY[1024])::halfvec(1024));
   INSERT INTO chunks (chat_id, first_sent_at, last_sent_at, message_count, text_hash, model, skipped)
