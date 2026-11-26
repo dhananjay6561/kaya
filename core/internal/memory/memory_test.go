@@ -428,7 +428,7 @@ func TestBuildPutsTheFactsThatFitInTheSystemMessageInOrder(t *testing.T) {
 		Facts:    []string{"Works at Keploy", strings.Repeat("long ", 200), "Sister is Priya"},
 		History:  []Exchange{exchange("1", 10)},
 		Question: "who am I?",
-		Budget:   600,
+		Budget:   2400,
 		Count:    count,
 		Now:      at,
 	}
@@ -445,22 +445,25 @@ func TestBuildPutsTheFactsThatFitInTheSystemMessageInOrder(t *testing.T) {
 	}
 }
 
-func TestBuildGivesFactsAtMostHalfTheRoomAndCountsThem(t *testing.T) {
+func TestBuildGivesFactsAnEighthOfTheBudgetAtMostAndCountsThem(t *testing.T) {
 	var facts []string
-	for i := range 50 {
-		facts = append(facts, fmt.Sprintf("fact number %02d", i))
+	for i := range 200 {
+		facts = append(facts, fmt.Sprintf("fact number %03d", i))
 	}
-	in := Input{System: "SYSTEM", Facts: facts, Question: "q", Budget: 800, Count: count, Now: at}
-	p := Build(in)
-	room := (in.Budget - requestOverhead - count("SYSTEM") - count("q")) / 2
-	if got := count(p.Messages[0].Content) - count("SYSTEM"); got > room || p.Facts == 0 || p.Facts == 50 {
-		t.Fatalf("facts took %d of %d with %d facts", got, room, p.Facts)
-	}
-	if !strings.Contains(p.Messages[0].Content, "- fact number 00") {
-		t.Fatal("the first fact was not kept")
-	}
-	if p.Tokens != requestOverhead+count(p.Messages[0].Content)+count("q") {
-		t.Fatalf("tokens = %d", p.Tokens)
+	for _, budget := range []int{800, 3200, 20000} {
+		in := Input{System: "SYSTEM", Facts: facts, Question: "q", Budget: budget, Count: count, Now: at}
+		p := Build(in)
+		room := min(budget/8, (budget-requestOverhead-count("SYSTEM")-count("q"))/2)
+		got := count(p.Messages[0].Content) - count("SYSTEM")
+		if got > room || p.Facts == 200 {
+			t.Fatalf("budget %d: facts took %d of %d with %d facts", budget, got, room, p.Facts)
+		}
+		if budget > 800 && (p.Facts == 0 || !strings.Contains(p.Messages[0].Content, "- fact number 000")) {
+			t.Fatalf("budget %d: the first fact was not kept", budget)
+		}
+		if p.Tokens != requestOverhead+count(p.Messages[0].Content)+count("q") {
+			t.Fatalf("tokens = %d", p.Tokens)
+		}
 	}
 }
 
