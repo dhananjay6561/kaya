@@ -625,11 +625,11 @@ func TestPlainMessagesGetAPlainNoticeWhenTheModelFails(t *testing.T) {
 
 // book is an in-memory FactBook.
 type book struct {
-	mu     sync.Mutex
-	facts  []facts.Fact
-	next   int64
-	err    error
-	waIDs  []string
+	mu    sync.Mutex
+	facts []facts.Fact
+	next  int64
+	err   error
+	waIDs []string
 }
 
 func (b *book) List(context.Context) ([]facts.Fact, error) {
