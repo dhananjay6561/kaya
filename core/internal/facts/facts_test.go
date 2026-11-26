@@ -166,14 +166,14 @@ func TestRememberRunAgainForTheSameCommandStillSaysKept(t *testing.T) {
 
 func TestCleanKeepsWhatScriptsAndEmojiNeedAndDropsControlCharacters(t *testing.T) {
 	england := "\U0001F3F4\U000E0067\U000E0062\U000E0065\U000E006E\U000E0067\U000E007F"
-	for in, want := range map[string]string{
-		"क्\u200cष":                 "क्\u200cष",
-		"Fan of " + england:         "Fan of " + england,
-		"a\x00b\x07c\u200bd\u2060e": "abcde",
-		" one\n\ttwo ":              "one two",
+	for _, c := range [][2]string{
+		{"क्\u200cष", "क्\u200cष"},
+		{"Fan of " + england, "Fan of " + england},
+		{"a\x00b\x07c\u200bd\u2060e", "abcde"},
+		{" one\n\ttwo ", "one two"},
 	} {
-		if got := Clean(in); got != want {
-			t.Errorf("Clean(%q) = %q, want %q", in, got, want)
+		if got := Clean(c[0]); got != c[1] {
+			t.Errorf("Clean(%q) = %q, want %q", c[0], got, c[1])
 		}
 	}
 }
