@@ -10,7 +10,6 @@ import (
 	"strings"
 	"sync"
 	"time"
-	"unicode"
 
 	"github.com/jackc/pgx/v5"
 
@@ -378,7 +377,7 @@ func (t *Tagger) next(ctx context.Context) (bool, int, error) {
 		return false, 0, err
 	}
 	slices.Reverse(earlier)
-	owner, err := t.owner(ctx)
+	owner, err := search.OwnerName(ctx, t.o.DB)
 	if err != nil {
 		return false, 0, err
 	}
@@ -419,24 +418,6 @@ func (t *Tagger) next(ctx context.Context) (bool, int, error) {
 			return true, cost, err
 		}
 	}
-}
-
-// owner is the name DJ goes by on WhatsApp, so a message naming him can be told apart; empty while
-// it is not known.
-func (t *Tagger) owner(ctx context.Context) (string, error) {
-	var name string
-	err := t.o.DB.QueryRow(ctx, `SELECT coalesce(nullif(c.push_name, ''), nullif(c.first_name, ''), nullif(c.saved_name, ''), '')
-		FROM connection_state cs JOIN contacts c ON cs.own_jid IN (c.pn, c.lid)
-		ORDER BY cs.occurred_at DESC LIMIT 1`).Scan(&name)
-	if errors.Is(err, pgx.ErrNoRows) {
-		return "", nil
-	}
-	return text.Clip(strings.Map(func(r rune) rune {
-		if unicode.IsLetter(r) || unicode.IsMark(r) || r == ' ' || r == '.' || r == '-' || r == '\'' {
-			return r
-		}
-		return -1
-	}, name), 60), err
 }
 
 type rendered struct {
