@@ -26,6 +26,16 @@ func TestKnowsTheFourBuiltinsWhateverTheCaseAndSpacing(t *testing.T) {
 func TestRefusesABuiltinWithWordsAfterIt(t *testing.T) {
 	sameSlash(t, "/pause 2h", slash(ExtraText, "pause"))
 	sameSlash(t, "/resume please", slash(ExtraText, "resume"))
+	sameSlash(t, "/facts all", slash(ExtraText, "facts"))
+}
+
+func TestKeepsTheWordsAfterRememberAndForgetAsWritten(t *testing.T) {
+	sameSlash(t, "/facts", slash(Builtin, "facts"))
+	sameSlash(t, "/Remember  I'm  vegetarian\nand allergic to ＰＥＡＮＵＴＳ. ", &Slash{Kind: Builtin, Name: "remember", Args: "I'm  vegetarian\nand allergic to ＰＥＡＮＵＴＳ."})
+	sameSlash(t, "\u200e／remember\u00a0मेरी बहन प्रिया है", &Slash{Kind: Builtin, Name: "remember", Args: "मेरी बहन प्रिया है"})
+	sameSlash(t, "/forget 12, 13", &Slash{Kind: Builtin, Name: "forget", Args: "12, 13"})
+	sameSlash(t, "/remember", slash(Builtin, "remember"))
+	sameSlash(t, "/forget.", slash(Builtin, "forget"))
 }
 
 func TestTreatsAnyOtherSlashAsUnknownAndPlainTextAsNoCommand(t *testing.T) {
@@ -57,6 +67,7 @@ func TestSeesThroughWhatPhonesAndKeyboardsAdd(t *testing.T) {
 func TestLetsOnlyTheFourBuiltinsPastTheCommandCap(t *testing.T) {
 	for text, want := range map[string]bool{
 		"/pause": true, " /Resume.": true, "/pause 2h": false, "/nope": false, "hello": false,
+		"/facts": true, "/remember I like tea": false, "/forget 3": false, "/remember": true,
 	} {
 		if got := IsBuiltin(text); got != want {
 			t.Errorf("%q: got %v", text, got)

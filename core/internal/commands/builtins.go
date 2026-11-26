@@ -10,11 +10,14 @@ import (
 
 	"golang.org/x/text/unicode/norm"
 
-	"github.com/dhananjay6561/kaya/core/internal/pause"
+	"github.com/dhananjay6561/kaya/core/internal/channel"
 	"github.com/dhananjay6561/kaya/core/internal/text"
 )
 
-var builtinNames = []string{"help", "status", "pause", "resume"}
+var builtinNames = []string{"help", "status", "pause", "resume", "facts", "remember", "forget"}
+
+// takesText are the built-ins that act on the words after them.
+var takesText = []string{"remember", "forget"}
 
 // Slash kinds.
 const (
@@ -24,10 +27,11 @@ const (
 )
 
 // Slash is a message that starts with a slash: a built-in, a built-in with words after it, or an
-// unknown command.
+// unknown command. Args is what follows a built-in that takes text, as DJ wrote it.
 type Slash struct {
 	Kind string
 	Name string
+	Args string
 }
 
 var trailingPunctuation = regexp.MustCompile(`[.!?]+$`)
@@ -55,16 +59,31 @@ func ParseSlash(message string) *Slash {
 	if !slices.Contains(builtinNames, name) {
 		return &Slash{Kind: Unknown, Name: text.FirstGraphemes(words[0], 30)}
 	}
+	if slices.Contains(takesText, name) {
+		return &Slash{Kind: Builtin, Name: name, Args: argsOf(message)}
+	}
 	if len(words) > 1 {
 		return &Slash{Kind: ExtraText, Name: name}
 	}
 	return &Slash{Kind: Builtin, Name: name}
 }
 
-// IsBuiltin reports whether message is exactly one of the four built-ins; only these are urgent.
+// argsOf is what follows the first word of message, taken from the message as written rather than
+// normalized, so a fact keeps its own characters.
+func argsOf(message string) string {
+	message = text.Trim(strings.TrimLeftFunc(message, func(r rune) bool { return unicode.Is(unicode.Cf, r) || text.IsSpace(r) }))
+	i := strings.IndexFunc(message, text.IsSpace)
+	if i < 0 {
+		return ""
+	}
+	return text.Trim(message[i:])
+}
+
+// IsBuiltin reports whether message is exactly a built-in with nothing after it; only these are
+// urgent.
 func IsBuiltin(message string) bool {
 	s := ParseSlash(message)
-	return s != nil && s.Kind == Builtin
+	return s != nil && s.Kind == Builtin && s.Args == ""
 }
 
 const helpText = "Commands:\n" +
@@ -72,10 +91,15 @@ const helpText = "Commands:\n" +
 	"/status: how Kaya is doing\n" +
 	"/pause: stop answering until /resume\n" +
 	"/resume: start answering again\n" +
-	"Anything else you send here goes to an AI model, which answers with your recent conversation in mind. It does not see your other chats yet."
+	"/facts: what I know about you\n" +
+	"/remember <fact>: keep a fact about you\n" +
+	"/forget <number>: drop a fact, by its number in /facts\n" +
+	"Anything else you send here goes to an AI model, which answers with what it knows about you, your conversation and what a search of your other chats finds."
 
 // answerSlash works out the reply to a slash command; /pause and /resume flip the switch.
-func answerSlash(ctx context.Context, s *Slash, commandID string, sw pause.Switch, status func(context.Context) (string, error)) (string, error) {
+func answerSlash(ctx context.Context, s *Slash, m channel.IncomingMessage, o Options) (string, error) {
+	sw, status := o.Pause, o.Status
+	commandID := m.ID
 	switch s.Kind {
 	case Unknown:
 		if s.Name == "" {
@@ -97,6 +121,12 @@ func answerSlash(ctx context.Context, s *Slash, commandID string, sw pause.Switc
 		return helpText, nil
 	case "status":
 		return status(ctx)
+	case "facts":
+		return listFacts(ctx, o.Facts)
+	case "remember":
+		return remember(ctx, o.Facts, s.Args, m.ID)
+	case "forget":
+		return forget(ctx, o.Facts, s.Args)
 	case "pause":
 		paused, err := sw.Pause(ctx, commandID)
 		if err != nil {
