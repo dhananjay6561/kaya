@@ -11,7 +11,6 @@ import (
 	"testing"
 	"time"
 
-	"github.com/jackc/pgx/v5/pgconn"
 
 	"github.com/dhananjay6561/kaya/core/internal/embeddings"
 	"github.com/dhananjay6561/kaya/core/internal/llm"
@@ -493,17 +492,6 @@ func TestReportsProgress(t *testing.T) {
 	p, err := r.ix.Progress(bg)
 	if err != nil || p != (Progress{Indexed: 1, Total: 2}) {
 		t.Fatalf("progress %+v, %v", p, err)
-	}
-}
-
-func TestTellsAWriteTheDatabaseWillNeverTakeFromAPassingFailure(t *testing.T) {
-	for code, want := range map[string]bool{"22000": true, "23505": true, "42P01": true, "08006": false, "57P01": false, "": false} {
-		if got := writeRefused(&pgconn.PgError{Code: code}); got != want {
-			t.Errorf("%q: %v", code, got)
-		}
-	}
-	if writeRefused(errors.New("plain")) {
-		t.Error("a plain error counted as refused")
 	}
 }
 

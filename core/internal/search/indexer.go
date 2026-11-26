@@ -4,7 +4,6 @@ import (
 	"context"
 	"errors"
 	"log/slog"
-	"slices"
 	"strconv"
 	"strings"
 	"sync"
@@ -12,7 +11,6 @@ import (
 	"unicode/utf8"
 
 	"github.com/jackc/pgx/v5"
-	"github.com/jackc/pgx/v5/pgconn"
 
 	"github.com/dhananjay6561/kaya/core/internal/embeddings"
 	"github.com/dhananjay6561/kaya/core/internal/llm"
@@ -189,7 +187,7 @@ func (ix *Indexer) run(ctx context.Context) {
 		case errors.As(err, &refused) && (refused.Code == embeddings.Auth || refused.Code == embeddings.Misconfigured):
 			ix.o.Logger.Error("the embedding service refused the key or the request; indexing waits", "error_code", refused.Code, "status", refused.Status)
 			ix.sleep(ctx, ix.o.Refused)
-		case writeRefused(err):
+		case store.IsRefused(err):
 			ix.o.Logger.Error("the database refused the index; indexing waits", logging.Err(err))
 			ix.sleep(ctx, ix.o.Refused)
 		default:
@@ -205,16 +203,6 @@ func (ix *Indexer) run(ctx context.Context) {
 			delay = min(delay*2, ix.o.RetryMax)
 		}
 	}
-}
-
-// writeRefused is a database error that trying again cannot fix: bad data, a broken constraint or
-// a schema mismatch (SQLSTATE classes 22, 23 and 42). Retrying would pay for embeddings each time.
-func writeRefused(err error) bool {
-	var pg *pgconn.PgError
-	if !errors.As(err, &pg) || len(pg.Code) < 2 {
-		return false
-	}
-	return slices.Contains([]string{"22", "23", "42"}, pg.Code[:2])
 }
 
 const eligible = `
