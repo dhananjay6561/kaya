@@ -78,7 +78,7 @@ contact, and it works with everything your WhatsApp account can see.
   `/pause` stops every answer until `/resume`. The pause is kept in the database, so it holds
   across restarts, and while paused Kaya still answers its slash commands. `/facts`, `/remember`
   and `/forget` show and change what Kaya knows about you; `/tasks` and `/done` show and close
-  the tasks found in your chats.
+  the tasks found in your chats; `/summary` sums up today or one chat.
 - **Answers from Groq, with lasting memory.** Anything else you type in your own chat is answered by
   Groq's `openai/gpt-oss-120b`, in your language and style, with today's date in your time zone.
   Kaya builds the context itself: facts about you, your conversation with it (kept for good) and
@@ -126,6 +126,12 @@ contact, and it works with everything your WhatsApp account can see.
   the open ones with where they came from; `/done 12` closes one. Messages are masked before they
   reach the model, and tagging stays inside a daily token allowance so your questions always have
   room. Older history is not tagged.
+- **Summaries on request.** `/summary` sums up what came in today across your chats, direct chats
+  and important ones first, promotions left out; `/summary Office Team` sums up one chat's last day,
+  found by name the way search finds people and groups. Each summary leads with what needs you,
+  then a line or two per chat, masked on the way to the model like everything else; when a day is
+  too long for the model's budget, the newest messages are kept and the summary says how many were
+  left out.
 - **Least-privilege database logins.** The gateway and core each have their own Postgres role.
   Core, the part that will talk to an LLM, can read chats but cannot see the WhatsApp session, its
   encryption keys, or the keys needed to fetch media.
@@ -141,7 +147,6 @@ contact, and it works with everything your WhatsApp account can see.
 
 In build order. Status for each stage is in the [roadmap](#project-status-and-roadmap).
 
-- Summaries of a day or a chat
 - An agent loop with tools, confirm-before-act, masking of private details and a prompt-injection
   guard
 - Voice-note transcription, so spoken commands and voice notes become searchable
@@ -525,7 +530,7 @@ kaya/
 │   └── internal/       config, gateway (events), channel (inbox, sends), commands, pause, status,
 │                       llm (Groq, stub, o200k token counter), memory, chat, masking, text,
 │                       embeddings (Voyage, stub), search (index, search, excerpts), facts,
-│                       tagging (tags and tasks)
+│                       tagging (tags and tasks), summary
 ├── gateway/            Go WhatsApp gateway (its own Go module)
 │   ├── cmd/gateway/    main package: serve, pair, media, healthcheck
 │   └── internal/       config, whatsapp, ingest, events, send, media, testdb
@@ -731,7 +736,7 @@ Status key: ✅ done · 🟨 in progress · ⬜ not started
 | 0. Foundation | Monorepo, config, Compose stack, migrations, logging, health, provider interfaces | ✅ |
 | 1. WhatsApp gateway | Contracts, pairing, live ingest, history sync, media, connection health, delivery to core and sending. Checked end to end against a real WhatsApp account. | ✅ |
 | 2. Talking to Kaya | Self-chat command channel and built-in commands `/help`, `/status`, `/pause`, `/resume`. Checked on a real account. | ✅ |
-| 3. Brain | Groq replies, lasting conversation memory, masking for cloud models, embeddings, search, answers from your chats, facts about you, tags and tasks (built), summaries | 🟨 |
+| 3. Brain | Groq replies, lasting conversation memory, masking for cloud models, embeddings, search, answers from your chats, facts about you, tags and tasks, summaries (built) | 🟨 |
 | 4. Agent loop and safety | Masking, context picking, tool calling, confirm-before-act, prompt-injection guard, usage tracking | ⬜ |
 | 5. Voice notes | Transcription, spoken commands | ⬜ |
 | 6. Sending as you | Messages to contacts and groups after confirmation, with rate limits | ⬜ |
