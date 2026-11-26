@@ -206,7 +206,15 @@ func (s *Summarizer) write(ctx context.Context, heading string, chats []chatLine
 		privacy = s.o.NewMaskSession()
 		masker = privacy
 	}
-	system := instructs + "\n\nIt is now " + s.o.Now().In(s.o.Zone).Format("Monday 2 January 2006, 15:04") + " (" + s.o.Zone.String() + ")."
+	owner, err := search.OwnerName(ctx, s.o.DB)
+	if err != nil {
+		return "", err
+	}
+	system := instructs
+	if owner != "" {
+		system += "\n\nThe owner goes by \"" + owner + "\" on WhatsApp, so a message to " + owner + " is to them."
+	}
+	system += "\n\nIt is now " + s.o.Now().In(s.o.Zone).Format("Monday 2 January 2006, 15:04") + " (" + s.o.Zone.String() + ")."
 	used := s.o.LLM.CountTokens(system) + s.o.LLM.CountTokens(heading)
 	var b strings.Builder
 	b.WriteString(heading)
