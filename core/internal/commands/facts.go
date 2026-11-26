@@ -98,19 +98,9 @@ func forget(ctx context.Context, book FactBook, args string) (string, error) {
 	if book == nil {
 		return noFactBook, nil
 	}
-	fields := strings.FieldsFunc(norm.NFKC.String(args), func(r rune) bool { return r == ',' || unicode.IsSpace(r) })
-	if len(fields) == 0 || len(fields) > 20 {
+	ids, ok := numbers(args)
+	if !ok {
 		return forgetUsage, nil
-	}
-	var ids []int64
-	for _, field := range fields {
-		id, err := strconv.ParseInt(strings.TrimRight(strings.TrimPrefix(field, "#"), ".!?"), 10, 64)
-		if err != nil || id <= 0 {
-			return forgetUsage, nil
-		}
-		if !slices.Contains(ids, id) {
-			ids = append(ids, id)
-		}
 	}
 	gone, err := book.Forget(ctx, ids)
 	if err != nil {
@@ -128,4 +118,24 @@ func forget(ctx context.Context, book FactBook, args string) (string, error) {
 		out += fmt.Sprintf("\n(%d of those numbers matched no fact.)", missing)
 	}
 	return out, nil
+}
+
+// numbers reads up to 20 item numbers, as /forget and /done take them: separated by spaces or
+// commas, each maybe after a # and before a full stop, in any digits a keyboard types.
+func numbers(args string) ([]int64, bool) {
+	fields := strings.FieldsFunc(norm.NFKC.String(args), func(r rune) bool { return r == ',' || unicode.IsSpace(r) })
+	if len(fields) == 0 || len(fields) > 20 {
+		return nil, false
+	}
+	var ids []int64
+	for _, field := range fields {
+		id, err := strconv.ParseInt(strings.TrimRight(strings.TrimPrefix(field, "#"), ".!?"), 10, 64)
+		if err != nil || id <= 0 {
+			return nil, false
+		}
+		if !slices.Contains(ids, id) {
+			ids = append(ids, id)
+		}
+	}
+	return ids, true
 }
