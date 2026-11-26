@@ -5,6 +5,7 @@ package facts
 import (
 	"context"
 	"errors"
+	"regexp"
 	"strings"
 	"time"
 	"unicode"
@@ -12,6 +13,7 @@ import (
 
 	"github.com/jackc/pgx/v5"
 
+	"github.com/dhananjay6561/kaya/core/internal/masking"
 	"github.com/dhananjay6561/kaya/core/internal/text"
 	"github.com/dhananjay6561/kaya/kit/store"
 )
@@ -23,7 +25,8 @@ const (
 )
 
 const (
-	// MaxFacts is the most facts kept; past it nothing new is added until some are removed.
+	// MaxFacts is the most facts kept. Past it a new fact takes the place of the learned fact
+	// changed longest ago; when every fact is one DJ told, nothing new is added.
 	MaxFacts = 200
 	// MaxLength is the most characters one fact may have.
 	MaxLength = 500
@@ -42,7 +45,33 @@ var (
 	ErrEmpty   = errors.New("a fact needs some text")
 	ErrTooLong = errors.New("a fact is too long")
 	ErrFull    = errors.New("no room for more facts")
+	ErrSecret  = errors.New("a fact holds a secret")
 )
+
+var (
+	placeholder = regexp.MustCompile(`\[[A-Z]+_\d+\]`)
+	// secretWords name things that are never kept, in the languages and spellings people type.
+	secretWords = regexp.MustCompile(`(?i)(^|[^\pL\pN])(pass ?words?|passwd|pwd|pass ?codes?|pass ?phrases?|cvv|cvc|security codes?|login pins?|atm pins?|upi pins?|mpin|tpin)($|[^\pL\pN])`)
+	// secretKinds are details the masking rules find that are never kept, whoever said them.
+	secretKinds = []string{masking.Card, masking.Account, masking.Aadhaar, masking.PAN, masking.Passport, masking.OTP}
+)
+
+// Secret reports whether text holds something never kept as a fact: a password or PIN by name, or a
+// code, card, account or ID number the masking rules find.
+func Secret(text string) bool {
+	if secretWords.MatchString(text) {
+		return true
+	}
+	session := masking.NewSession()
+	session.Mask(text, text)
+	counts := session.Counts()
+	for _, kind := range secretKinds {
+		if counts[kind] > 0 {
+			return true
+		}
+	}
+	return false
+}
 
 // Store reads and writes facts.
 type Store struct{ db *store.DB }
@@ -85,11 +114,14 @@ func lockFacts(ctx context.Context, tx pgx.Tx) error {
 	return err
 }
 
-// Clean is a fact's text on one line with its spacing tidied and invisible marks dropped (the
-// emoji joiner kept).
+// Clean is a fact's text on one line with its spacing tidied and control characters and invisible
+// marks dropped, keeping the joiners scripts and emoji need and the tags of flag emoji.
 func Clean(s string) string {
 	s = strings.Map(func(r rune) rune {
-		if unicode.Is(unicode.Cf, r) && r != 0x200d {
+		switch {
+		case r == 0x200c || r == 0x200d || r >= 0xe0020 && r <= 0xe007f, text.IsSpace(r):
+			return r
+		case unicode.Is(unicode.Cf, r), unicode.IsControl(r):
 			return -1
 		}
 		return r
@@ -98,7 +130,8 @@ func Clean(s string) string {
 }
 
 // Remember keeps a fact DJ told with the command whose WhatsApp id is waID. When the same fact is
-// kept already it is returned with false, marked as told if it was learned.
+// kept already it is returned with false, marked as told if it was learned, unless this same command
+// kept it (a retry), which counts as kept now.
 func (s *Store) Remember(ctx context.Context, body, waID string) (Fact, bool, error) {
 	body = Clean(body)
 	switch {
@@ -106,6 +139,8 @@ func (s *Store) Remember(ctx context.Context, body, waID string) (Fact, bool, er
 		return Fact{}, false, ErrEmpty
 	case utf8.RuneCountInString(body) > MaxLength:
 		return Fact{}, false, ErrTooLong
+	case Secret(body):
+		return Fact{}, false, ErrSecret
 	}
 	var f Fact
 	created := false
@@ -114,27 +149,44 @@ func (s *Store) Remember(ctx context.Context, body, waID string) (Fact, bool, er
 			return err
 		}
 		err := tx.QueryRow(ctx, `UPDATE facts SET source = 'told', updated_at = CASE WHEN source = 'told' THEN updated_at ELSE now() END
-			WHERE lower(body) = lower($1) RETURNING id, body, source, updated_at`, body).
-			Scan(&f.ID, &f.Text, &f.Source, &f.UpdatedAt)
-		if err == nil {
-			return nil
-		}
-		if !errors.Is(err, pgx.ErrNoRows) {
+			WHERE lower(body) = lower($1)
+			RETURNING id, body, source, updated_at, coalesce(message_id = (`+commandSQL+`), false)`, body, waID).
+			Scan(&f.ID, &f.Text, &f.Source, &f.UpdatedAt, &created)
+		if err == nil || !errors.Is(err, pgx.ErrNoRows) {
 			return err
 		}
-		var n int
-		if err := tx.QueryRow(ctx, "SELECT count(*) FROM facts").Scan(&n); err != nil {
+		if err := makeRoom(ctx, tx); err != nil {
 			return err
-		}
-		if n >= MaxFacts {
-			return ErrFull
 		}
 		created = true
-		return tx.QueryRow(ctx, `INSERT INTO facts (body, source, message_id)
-			VALUES ($1, 'told', (SELECT id FROM messages WHERE wa_id = $2 AND from_me ORDER BY id DESC LIMIT 1))
+		return tx.QueryRow(ctx, `INSERT INTO facts (body, source, message_id) VALUES ($1, 'told', (`+commandSQL+`))
 			RETURNING id, body, source, updated_at`, body, waID).Scan(&f.ID, &f.Text, &f.Source, &f.UpdatedAt)
 	})
 	return f, created, err
+}
+
+// commandSQL is the messages.id of DJ's command with WhatsApp id $2, or null.
+const commandSQL = `SELECT id FROM messages WHERE wa_id = $2 AND from_me AND $2 <> '' ORDER BY id DESC LIMIT 1`
+
+// makeRoom makes room for one more fact by removing the learned fact changed longest ago when the
+// facts are full, and returns ErrFull when every fact is one DJ told.
+func makeRoom(ctx context.Context, tx pgx.Tx) error {
+	var n int
+	if err := tx.QueryRow(ctx, "SELECT count(*) FROM facts").Scan(&n); err != nil {
+		return err
+	}
+	if n < MaxFacts {
+		return nil
+	}
+	removed, err := tx.Exec(ctx, `DELETE FROM facts WHERE id = (
+		SELECT id FROM facts WHERE source = 'learned' ORDER BY updated_at, id LIMIT 1)`)
+	if err != nil {
+		return err
+	}
+	if removed.RowsAffected() == 0 {
+		return ErrFull
+	}
+	return nil
 }
 
 // Forget removes the facts with these ids and returns the ones it removed.
