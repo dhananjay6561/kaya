@@ -9,6 +9,7 @@ import (
 	"unicode"
 	"unicode/utf8"
 
+	"github.com/dhananjay6561/kaya/kit/store"
 	"github.com/jackc/pgx/v5"
 )
 
@@ -209,12 +210,14 @@ func cleanNames(names []string) []string {
 	return out
 }
 
-// selfChat is DJ's own chat with Kaya: the direct chat with the account the gateway is linked to
+func (s *Searcher) selfChat(ctx context.Context) (int64, error) { return SelfChat(ctx, s.DB) }
+
+// SelfChat is DJ's own chat with Kaya: the direct chat with the account the gateway is linked to
 // or, while it is not linked (logged out), the chat of the latest exchange. It is zero before
 // either is known.
-func (s *Searcher) selfChat(ctx context.Context) (int64, error) {
+func SelfChat(ctx context.Context, db *store.DB) (int64, error) {
 	var id int64
-	err := s.DB.QueryRow(ctx, `
+	err := db.QueryRow(ctx, `
 		SELECT id FROM (
 			(SELECT ch.id, 0 AS rank FROM connection_state cs
 			 JOIN contacts c ON cs.own_jid IN (c.pn, c.lid)
