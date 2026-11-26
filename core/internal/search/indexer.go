@@ -218,8 +218,7 @@ SELECT m.id, m.chat_id, m.sent_at, m.updated_at,
             ELSE (SELECT CASE WHEN lower(n) IN ('me', 'kaya') THEN '~' || n ELSE n END FROM (
                     SELECT coalesce(nullif(c.saved_name, ''), nullif(c.first_name, ''), '~' || nullif(c.push_name, ''),
                                     '~' || nullif(c.business_name, ''), '+' || nullif(split_part(c.pn, '@', 1), ''), 'Someone') AS n) named) END,
-       coalesce(nullif(ch.name, ''), nullif(cc.saved_name, ''), nullif(cc.first_name, ''), '~' || nullif(cc.push_name, ''),
-                '~' || nullif(cc.business_name, ''), '+' || nullif(split_part(cc.pn, '@', 1), ''), 'a chat')
+       `+ChatTitleSQL+`
 FROM messages m
 JOIN chats ch ON ch.id = m.chat_id
 LEFT JOIN contacts c ON c.id = m.sender_id
@@ -231,9 +230,31 @@ const settled = `
 	AND m.created_at < now() - make_interval(secs => $1)
 	AND NOT EXISTS (SELECT 1 FROM message_chunks mc WHERE mc.message_id = m.id)`
 
+// ChatTitleSQL is how a chat is named, from chats ch and the contact cc of a direct chat: the group's
+// name, the name DJ saved, or the one the contact chose (marked ~), then the number.
+const ChatTitleSQL = `coalesce(nullif(ch.name, ''), nullif(cc.saved_name, ''), nullif(cc.first_name, ''), '~' || nullif(cc.push_name, ''),
+                '~' || nullif(cc.business_name, ''), '+' || nullif(split_part(cc.pn, '@', 1), ''), 'a chat')`
+
 type titledLine struct {
 	Line
 	title string
+}
+
+// ChatLine is a searchable message as search renders it, with its chat's title.
+type ChatLine struct {
+	Line
+	Title string
+}
+
+// ReadChatLines reads the searchable messages that match condition, an SQL condition on messages m
+// that may end with ORDER BY and LIMIT, with sender names as search writes them.
+func ReadChatLines(ctx context.Context, db *store.DB, condition string, args ...any) ([]ChatLine, error) {
+	lines, err := readLines(ctx, db, linesSQL+" AND "+condition, args...)
+	out := make([]ChatLine, len(lines))
+	for i, l := range lines {
+		out[i] = ChatLine{Line: l.Line, Title: l.title}
+	}
+	return out, err
 }
 
 func readLines(ctx context.Context, db *store.DB, sql string, args ...any) ([]titledLine, error) {
