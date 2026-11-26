@@ -649,6 +649,8 @@ func (b *book) Remember(_ context.Context, body, waID string) (facts.Fact, bool,
 		return facts.Fact{}, false, facts.ErrTooLong
 	case "full":
 		return facts.Fact{}, false, facts.ErrFull
+	case "secret":
+		return facts.Fact{}, false, facts.ErrSecret
 	}
 	for _, f := range b.facts {
 		if strings.EqualFold(f.Text, body) {
@@ -687,14 +689,37 @@ func TestRememberFactsAndForgetThemByNumber(t *testing.T) {
 	}
 	same(t, r.answers("/remember works at keploy", now), []string{"I already know that (fact 1)."})
 	same(t, r.answers("/remember too long", now), []string{"That is too long for one fact. Keep it under 500 characters."})
-	same(t, r.answers("/remember full", now), []string{"I already keep 200 facts, the most I can. Remove some with /forget first."})
+	same(t, r.answers("/remember full", now), []string{"You told me 200 facts already, the most I keep. Remove some with /forget first."})
+	same(t, r.answers("/remember secret", now), []string{"I don't keep passwords, PINs, codes, or card, account or ID numbers, even when asked."})
 	b.facts = append(b.facts, facts.Fact{ID: 7, Text: "Has a cat", Source: facts.Learned})
 	same(t, r.answers("/facts", now), []string{"*You told me*\n1. Works at Keploy\n\n*I picked up*\n7. Has a cat\n\nRemove one with /forget and its number."})
 	same(t, r.answers("/forget", now), []string{"Send /forget with the number of a fact from /facts, like /forget 12."})
 	same(t, r.answers("/forget the cat", now), []string{"Send /forget with the number of a fact from /facts, like /forget 12."})
-	same(t, r.answers("/forget 99", now), []string{"No fact has that number. Send /facts to see them."})
+	same(t, r.answers("/forget 99", now), []string{"No fact has that number now. Send /facts to see them."})
 	same(t, r.answers("/forget #7, 7 99", now), []string{"Forgot:\n7. Has a cat\n(1 of those numbers matched no fact.)"})
 	same(t, r.answers("/facts", now), []string{"*You told me*\n1. Works at Keploy\n\nRemove one with /forget and its number."})
+	b.facts = append(b.facts, facts.Fact{ID: 8, Text: "Plays chess", Source: facts.Learned})
+	same(t, r.answers("/forget １, 8.", now), []string{"Forgot:\n1. Works at Keploy\n8. Plays chess"})
+}
+
+func TestFactsListsALongListWithoutLosingTheEnd(t *testing.T) {
+	b := &book{}
+	for i := range facts.MaxFacts {
+		source := facts.Told
+		if i%2 == 1 {
+			source = facts.Learned
+		}
+		b.facts = append(b.facts, facts.Fact{ID: int64(i + 1), Text: strings.Repeat("x", facts.MaxLength), Source: source})
+	}
+	r := newRig(t, rigOptions{facts: b})
+	out := r.answers("/facts", now)[0]
+	if utf8.RuneCountInString(out) > maxListed || !strings.Contains(out, "more.") ||
+		!strings.HasSuffix(out, "a new one replaces the learned fact I have not needed longest.") {
+		t.Fatalf("%d characters, ends %q", utf8.RuneCountInString(out), out[max(0, len(out)-200):])
+	}
+	if strings.Contains(out, strings.Repeat("x", maxLine+1)) {
+		t.Fatal("a line was not cut")
+	}
 }
 
 func TestFactCommandsWorkWhilePausedAndWaitOutADatabaseOutage(t *testing.T) {
