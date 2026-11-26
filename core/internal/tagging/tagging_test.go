@@ -199,10 +199,10 @@ func TestTagsABatchAndKeepsItsTasksAndReminders(t *testing.T) {
 	r.say(msg{body: "and the call with Priya is tomorrow 5pm"})
 	r.say(msg{body: "50% off on shoes!!"})
 	m := (&model{locality: llm.Local}).script(`{"tagged":[
-		{"line":2,"tags":["important","task","task"],"title":"Send Rahul the deck","due":""},
-		{"line":3,"tags":["reminder"],"title":"Call with Priya","due":"2026-11-27 17:00"},
-		{"line":4,"tags":["ignore"],"title":"","due":""},
-		{"line":9,"tags":["important"],"title":"","due":""}]}`)
+		{"line":2,"tags":["important","task","task"],"task":"Send Rahul the deck","reminder":"","due":""},
+		{"line":3,"tags":["reminder"],"task":"","reminder":"Call with Priya","due":"2026-11-27 17:00"},
+		{"line":4,"tags":["ignore"],"task":"","reminder":"","due":""},
+		{"line":9,"tags":["important"],"task":"","reminder":"","due":""}]}`)
 	tg := r.tagger(m, Options{})
 	if found, err := r.step(tg); !found || err != nil {
 		t.Fatalf("found %v, err %v", found, err)
@@ -240,12 +240,16 @@ func TestLeavesOutDJsOwnChatHistoryUnsettledAndOldMessages(t *testing.T) {
 	r.exec("INSERT INTO connection_state (state, own_jid, occurred_at) VALUES ('connected', '919999999999@s.whatsapp.net', now())")
 	r.say(msg{chat: self, fromMe: true, body: "what did Rahul say?"})
 	r.say(msg{fromMe: true, body: "I'll send it by Friday"})
+	r.exec("UPDATE contacts SET push_name = 'DJ <b>' WHERE id = $1", r.me)
 	m := &model{locality: llm.Local}
 	tg := r.tagger(m, Options{})
 	if _, err := r.step(tg); err != nil {
 		t.Fatal(err)
 	}
 	same(t, r.tags(), []string{"I'll send it by Friday: -"})
+	if !strings.Contains(m.requests()[0].Messages[0].Content, "The owner goes by \"DJ b\" on WhatsApp.") {
+		t.Fatalf("system = %q", m.requests()[0].Messages[0].Content)
+	}
 	if !strings.Contains(m.requests()[0].Messages[1].Content, "] Me: I'll send it by Friday") {
 		t.Fatalf("request = %q", m.requests()[0].Messages[1].Content)
 	}
@@ -279,7 +283,7 @@ func TestShowsEarlierMessagesAsContextAndTagsOneChatAtATime(t *testing.T) {
 func TestMasksMessagesForACloudModelAndPutsDetailsBackInTitles(t *testing.T) {
 	r := newRig(t)
 	r.say(msg{body: "call me on 9876543210 tomorrow"})
-	m := (&model{locality: llm.Cloud}).script(`{"tagged":[{"line":1,"tags":["task"],"title":"Call Rahul on [PHONE_1]","due":""}]}`)
+	m := (&model{locality: llm.Cloud}).script(`{"tagged":[{"line":1,"tags":["task"],"task":"Call Rahul on [PHONE_1]","reminder":"","due":""}]}`)
 	if _, err := r.step(r.tagger(m, Options{})); err != nil {
 		t.Fatal(err)
 	}
@@ -296,21 +300,27 @@ func TestMasksMessagesForACloudModelAndPutsDetailsBackInTitles(t *testing.T) {
 	}
 }
 
-func TestAReminderWithoutADayBecomesATask(t *testing.T) {
+func TestAMessageCanGiveATaskAndAReminderAndAReminderWithoutADayIsATask(t *testing.T) {
 	r := newRig(t)
 	r.say(msg{body: "dentist sometime"})
 	r.say(msg{body: "exam on 3 dec"})
 	m := (&model{locality: llm.Local}).script(`{"tagged":[
-		{"line":1,"tags":["reminder"],"title":"Book the dentist","due":"soon"},
-		{"line":2,"tags":["reminder"],"title":"Exam","due":"2026-12-03"}]}`)
+		{"line":1,"tags":["reminder"],"task":"","reminder":"Book the dentist","due":"soon"},
+		{"line":2,"tags":["reminder","task"],"task":"Revise for the exam","reminder":"Exam","due":"2026-12-03"}]}`)
 	if _, err := r.step(r.tagger(m, Options{})); err != nil {
 		t.Fatal(err)
 	}
 	open, _ := NewTasks(r.core).Open(bg, 10)
-	if len(open) != 2 || open[0].Kind != KindReminder || open[0].DueHasTime || !open[0].Due.Equal(time.Date(2026, 12, 3, 0, 0, 0, 0, kolkata)) ||
-		open[1].Kind != KindTask || open[1].Due != nil {
+	if len(open) != 3 || open[0].Kind != KindReminder || open[0].Title != "Exam" || open[0].DueHasTime ||
+		!open[0].Due.Equal(time.Date(2026, 12, 3, 0, 0, 0, 0, kolkata)) {
 		t.Fatalf("open = %+v", open)
 	}
+	var rest []string
+	for _, task := range open[1:] {
+		rest = append(rest, task.Kind+": "+task.Title)
+	}
+	slices.Sort(rest)
+	same(t, rest, []string{"task: Book the dentist", "task: Revise for the exam"})
 }
 
 func TestStopsForTheDayWhenItsTokensAreSpent(t *testing.T) {
@@ -417,7 +427,7 @@ func TestDoneClosesOnlyOpenTasksAndOpenListsDueFirst(t *testing.T) {
 
 func TestRunsInTheBackgroundUntilStopped(t *testing.T) {
 	r := newRig(t)
-	m := (&model{locality: llm.Local}).script(&llm.Error{Code: llm.Unavailable}, `{"tagged":[{"line":1,"tags":["important"],"title":"","due":""}]}`)
+	m := (&model{locality: llm.Local}).script(&llm.Error{Code: llm.Unavailable}, `{"tagged":[{"line":1,"tags":["important"],"task":"","reminder":"","due":""}]}`)
 	tg := r.tagger(m, Options{})
 	tg.Start()
 	defer tg.Stop()
