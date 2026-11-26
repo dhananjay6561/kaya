@@ -205,3 +205,29 @@ func TestReadsTheFactCountAndLeavesItOutWhenItCannot(t *testing.T) {
 		t.Fatalf("a failing count broke the status: %+v, %v", st, err)
 	}
 }
+
+func TestShowsOpenTasksAndWhatWaitsForTags(t *testing.T) {
+	if text := Format(healthy()); strings.Contains(text, "tasks") {
+		t.Fatal(text)
+	}
+	st := healthy()
+	st.Tagging = &Tagging{OpenTasks: 3}
+	matches(t, Format(st), `^Open tasks: 3\.$`)
+	st.Tagging.Waiting = 12
+	matches(t, Format(st), `^Open tasks: 3; 12 new messages waiting for tags\.$`)
+}
+
+func TestReadsTaggingAndLeavesItOutWhenItCannot(t *testing.T) {
+	core, _ := testdb.MigratedPair(t, "kaya_core")
+	src := Source{
+		DB: core, Pause: &pause.Memory{}, Version: "test", StartedAt: time.Now(),
+		Tagging: func(context.Context) (int, int, error) { return 2, 5, nil },
+	}
+	if st, err := Read(bg, src); err != nil || st.Tagging == nil || *st.Tagging != (Tagging{Waiting: 2, OpenTasks: 5}) {
+		t.Fatalf("got %+v, %v", st, err)
+	}
+	src.Tagging = func(context.Context) (int, int, error) { return 0, 0, errors.New("away") }
+	if st, err := Read(bg, src); err != nil || st.Tagging != nil {
+		t.Fatalf("a failing count broke the status: %+v, %v", st, err)
+	}
+}

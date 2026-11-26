@@ -34,6 +34,15 @@ type Status struct {
 	// Facts and FactsTold are how many facts Kaya keeps about DJ and how many he told her.
 	Facts     int
 	FactsTold int
+	// Tagging is set when tagging is on: how many new messages wait for tags and how many tasks
+	// are open.
+	Tagging *Tagging
+}
+
+// Tagging is how tagging stands.
+type Tagging struct {
+	Waiting   int
+	OpenTasks int
 }
 
 // Source is where a status is read from.
@@ -46,6 +55,8 @@ type Source struct {
 	Index func(ctx context.Context) (indexed, skipped, total int, err error)
 	// Facts counts the facts kept and how many DJ told; nil leaves the line out.
 	Facts func(ctx context.Context) (all, told int, err error)
+	// Tagging reports what waits for tags and how many tasks are open; nil leaves the line out.
+	Tagging func(ctx context.Context) (waiting, openTasks int, err error)
 }
 
 // Read gathers the status.
@@ -80,6 +91,11 @@ func Read(ctx context.Context, src Source) (Status, error) {
 	if src.Facts != nil {
 		if all, told, err := src.Facts(ctx); err == nil {
 			st.Facts, st.FactsTold = all, told
+		}
+	}
+	if src.Tagging != nil {
+		if waiting, open, err := src.Tagging(ctx); err == nil {
+			st.Tagging = &Tagging{Waiting: waiting, OpenTasks: open}
 		}
 	}
 	st.Now = time.Now()
@@ -134,6 +150,13 @@ func Format(st Status) string {
 		line := fmt.Sprintf("Facts about you: %d, %d of them you told me", st.Facts, st.FactsTold)
 		if st.Facts >= facts.MaxFacts {
 			line += " (the most I keep)"
+		}
+		lines = append(lines, line+".")
+	}
+	if tg := st.Tagging; tg != nil {
+		line := fmt.Sprintf("Open tasks: %d", tg.OpenTasks)
+		if tg.Waiting > 0 {
+			line += fmt.Sprintf("; %d new messages waiting for tags", tg.Waiting)
 		}
 		lines = append(lines, line+".")
 	}
