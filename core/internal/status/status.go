@@ -30,6 +30,9 @@ type Status struct {
 	Indexed    int
 	Skipped    int
 	Searchable int
+	// Facts and FactsTold are how many facts Kaya keeps about DJ and how many he told her.
+	Facts     int
+	FactsTold int
 }
 
 // Source is where a status is read from.
@@ -40,6 +43,8 @@ type Source struct {
 	StartedAt time.Time
 	// Index reports the search index's progress; nil leaves the line out.
 	Index func(ctx context.Context) (indexed, skipped, total int, err error)
+	// Facts counts the facts kept and how many DJ told; nil leaves the line out.
+	Facts func(ctx context.Context) (all, told int, err error)
 }
 
 // Read gathers the status.
@@ -69,6 +74,11 @@ func Read(ctx context.Context, src Source) (Status, error) {
 	if src.Index != nil {
 		if indexed, skipped, total, err := src.Index(ctx); err == nil {
 			st.Indexed, st.Skipped, st.Searchable = indexed, skipped, total
+		}
+	}
+	if src.Facts != nil {
+		if all, told, err := src.Facts(ctx); err == nil {
+			st.Facts, st.FactsTold = all, told
 		}
 	}
 	st.Now = time.Now()
@@ -118,6 +128,9 @@ func Format(st Status) string {
 			line += fmt.Sprintf(", %d the embedding service would not take", st.Skipped)
 		}
 		lines = append(lines, line+".")
+	}
+	if st.Facts > 0 {
+		lines = append(lines, fmt.Sprintf("Facts about you: %d, %d of them you told me.", st.Facts, st.FactsTold))
 	}
 	if st.EventsWaiting > 0 {
 		lines = append(lines, fmt.Sprintf("Events waiting for core: %d.", st.EventsWaiting))
