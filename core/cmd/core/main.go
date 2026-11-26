@@ -32,6 +32,7 @@ import (
 	"github.com/dhananjay6561/kaya/core/internal/pause"
 	"github.com/dhananjay6561/kaya/core/internal/search"
 	"github.com/dhananjay6561/kaya/core/internal/status"
+	"github.com/dhananjay6561/kaya/core/internal/summary"
 	"github.com/dhananjay6561/kaya/core/internal/tagging"
 	"github.com/dhananjay6561/kaya/kit/envfile"
 	"github.com/dhananjay6561/kaya/kit/httpapi"
@@ -167,6 +168,13 @@ func run(cfg config.Config, logger *slog.Logger) error {
 			return err
 		}
 	}
+	summaries, err := summary.New(summary.Options{
+		DB: db, LLM: model, Searcher: searcher, Zone: zone,
+		NewMaskSession: func() summary.MaskSession { return masking.NewSession() },
+	})
+	if err != nil {
+		return err
+	}
 	replies, err := chat.New(chat.Options{
 		LLM:    model,
 		Logger: logger,
@@ -205,6 +213,12 @@ func run(cfg config.Config, logger *slog.Logger) error {
 		Facts:   factStore,
 		Tasks:   tasks,
 		Zone:    zone,
+		Summary: func(ctx context.Context, name string) (string, error) {
+			if strings.TrimSpace(name) == "" {
+				return summaries.Today(ctx)
+			}
+			return summaries.Chat(ctx, name)
+		},
 		Status: func(ctx context.Context) (string, error) {
 			st, err := status.Read(ctx, status.Source{
 				DB: db, Pause: switches, Version: version, StartedAt: startedAt,
