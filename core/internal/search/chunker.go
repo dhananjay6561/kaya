@@ -68,17 +68,25 @@ var (
 	justCode  = regexp.MustCompile(`^\d(?:[ -]?\d){3,7}$`)
 )
 
-// Render writes a chunk as its chat's name, then each day and "time sender: text" lines in zone.
+// Prepared is a chat's title and lines made ready to leave the machine: each on one line, masked
+// when a masker is given, and cut only after masking.
+type Prepared struct {
+	Title   string
+	Senders []string
+	Texts   []string
+}
+
+// Prepare readies a chat's title and lines as Render writes them.
 //
 // With a masker, the messages are masked together, one to a line, so a word in one message counts
 // for a number in the next; no masking rule crosses a line, so each message comes back on its own
-// line. before is the text of the messages just before the chunk in the same chat. When the chunk
-// or before mentions an OTP, a code or a PIN, or a message is nothing but a 4 to 8 digit number,
-// every code-shaped number in the chunk is masked as an OTP: the masking rules want the word right
+// line. before is the text of the messages just before the lines in the same chat. When the lines
+// or before mention an OTP, a code or a PIN, or a message is nothing but a 4 to 8 digit number,
+// every code-shaped number in them is masked as an OTP: the masking rules want the word right
 // before the number, and chat puts it a verb or a message earlier ("code bhej" ... "482913"), so for
 // text leaving the machine it is safer to mask a little too much. Names are masked apart from the
 // text, and nothing is cut until it is masked, so a cut never splits a detail.
-func Render(title string, lines []Line, zone *time.Location, s Shape, m Masker, before string) string {
+func Prepare(title string, lines []Line, s Shape, m Masker, before string) Prepared {
 	texts := make([]string, len(lines))
 	codeShaped := false
 	for i, line := range lines {
@@ -101,8 +109,20 @@ func Render(title string, lines []Line, zone *time.Location, s Shape, m Masker, 
 			}
 		}
 	}
+	p := Prepared{Title: cut(oneLine(mask(title)), 80), Senders: make([]string, len(lines)), Texts: texts}
+	for i, line := range lines {
+		p.Senders[i] = cut(oneLine(mask(line.Sender)), 60)
+		p.Texts[i] = cut(texts[i], s.MaxChars)
+	}
+	return p
+}
+
+// Render writes a chunk as its chat's name, then each day and "time sender: text" lines in zone,
+// prepared as Prepare does.
+func Render(title string, lines []Line, zone *time.Location, s Shape, m Masker, before string) string {
+	p := Prepare(title, lines, s, m, before)
 	var b strings.Builder
-	b.WriteString("Chat: " + cut(oneLine(mask(title)), 80))
+	b.WriteString("Chat: " + p.Title)
 	day := ""
 	for i, line := range lines {
 		at := line.SentAt.In(zone)
@@ -110,7 +130,7 @@ func Render(title string, lines []Line, zone *time.Location, s Shape, m Masker, 
 			b.WriteString("\n" + d)
 			day = d
 		}
-		b.WriteString("\n" + at.Format("15:04") + " " + cut(oneLine(mask(line.Sender)), 60) + ": " + cut(texts[i], s.MaxChars))
+		b.WriteString("\n" + at.Format("15:04") + " " + p.Senders[i] + ": " + p.Texts[i])
 	}
 	return b.String()
 }
