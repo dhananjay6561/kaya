@@ -16,7 +16,10 @@ import (
 	"github.com/dhananjay6561/kaya/core/internal/pause"
 )
 
-var quiet = slog.New(slog.DiscardHandler)
+var (
+	quiet      = slog.New(slog.DiscardHandler)
+	kolkata, _ = time.LoadLocation("Asia/Kolkata")
+)
 
 // model answers with the next scripted reply or error, and records what it was asked.
 type model struct {
@@ -65,7 +68,9 @@ func (r *rig) learner(m *model, sw pause.Switch) *Learner {
 	l, err := NewLearner(LearnerOptions{
 		DB: r.core, LLM: m, Pause: sw, Logger: quiet,
 		NewMasker: func() Masker { return masking.NewSession() },
-		Poll:      20 * time.Millisecond, RetryMin: 10 * time.Millisecond, RetryMax: 20 * time.Millisecond,
+		Zone:      kolkata,
+		Now:       func() time.Time { return time.Date(2026, 11, 26, 10, 0, 0, 0, time.UTC) },
+		Poll:      20 * time.Millisecond, Gap: time.Millisecond, RetryMin: 10 * time.Millisecond, RetryMax: 20 * time.Millisecond,
 	})
 	if err != nil {
 		r.t.Fatal(err)
@@ -102,7 +107,8 @@ func TestLearnerAddsWhatAnExchangeTaughtAndMovesPastIt(t *testing.T) {
 		t.Fatalf("asked %d times", len(m.requests()))
 	}
 	req := m.requests()[0]
-	if req.Tier != llm.Routine || req.Schema == nil || req.Messages[0].Role != llm.System {
+	if req.Tier != llm.Routine || req.Schema == nil || req.Messages[0].Role != llm.System ||
+		!strings.HasSuffix(req.Messages[0].Content, "\n\nToday is Thursday 26 November 2026.") {
 		t.Errorf("request = %+v", req)
 	}
 	if !strings.Contains(req.Messages[1].Content, `Their message: "main Keploy mein DevRel hoon"`) ||
