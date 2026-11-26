@@ -141,8 +141,11 @@ func New(o Options) (*Tagger, error) {
 		field *time.Duration
 		value time.Duration
 	}{
-		{&o.Settle, 5 * time.Minute}, {&o.Poll, time.Minute}, {&o.RetryMin, 5 * time.Second},
-		{&o.RetryMax, 5 * time.Minute}, {&o.Refused, 10 * time.Minute},
+		{&o.Settle, 5 * time.Minute},
+		{&o.Poll, time.Minute},
+		{&o.RetryMin, 5 * time.Second},
+		{&o.RetryMax, 5 * time.Minute},
+		{&o.Refused, 10 * time.Minute},
 	}
 	for _, d := range defaults {
 		if *d.field == 0 {

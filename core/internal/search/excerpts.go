@@ -9,8 +9,9 @@ import (
 	"unicode"
 	"unicode/utf8"
 
-	"github.com/dhananjay6561/kaya/kit/store"
 	"github.com/jackc/pgx/v5"
+
+	"github.com/dhananjay6561/kaya/kit/store"
 )
 
 // ExcerptDistance is how far in meaning a chunk may be from the question and still be shown to the
