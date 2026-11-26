@@ -59,14 +59,14 @@ func collect(rows pgx.Rows, err error) ([]Task, error) {
 	})
 }
 
-// Open returns up to limit open tasks: the ones with a due date first, soonest first, then the rest,
-// newest first.
+// Open returns up to limit open tasks, leaving out those whose message was deleted: the ones with
+// a due date first, soonest first, then the rest, newest first.
 func (s *Tasks) Open(ctx context.Context, limit int) ([]Task, error) {
 	var out []Task
 	err := s.db.InTx(ctx, func(tx pgx.Tx) error {
 		var err error
 		out, err = collect(tx.Query(ctx, `SELECT `+taskColumns+` FROM tasks t`+taskJoins+`
-			WHERE t.state = 'open'
+			WHERE t.state = 'open' AND m.deleted_at IS NULL
 			ORDER BY t.due_at IS NULL, t.due_at, t.created_at DESC, t.id DESC
 			LIMIT $1`, limit))
 		return err
@@ -77,7 +77,8 @@ func (s *Tasks) Open(ctx context.Context, limit int) ([]Task, error) {
 // CountOpen is how many tasks are open.
 func (s *Tasks) CountOpen(ctx context.Context) (int, error) {
 	var n int
-	err := s.db.QueryRow(ctx, "SELECT count(*) FROM tasks WHERE state = 'open'").Scan(&n)
+	err := s.db.QueryRow(ctx, `SELECT count(*) FROM tasks t LEFT JOIN messages m ON m.id = t.message_id
+		WHERE t.state = 'open' AND m.deleted_at IS NULL`).Scan(&n)
 	return n, err
 }
 
