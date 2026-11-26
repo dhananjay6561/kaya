@@ -279,18 +279,24 @@ Folders appear when a phase needs them; empty placeholders are not committed.
 - **Tagging.** One worker in core, under its own advisory lock, reads every new live message in
   DJ's chats once: only messages stored after the migration that added it (`tagging.started_after`),
   never his own chat with Kaya, the same kinds the search index reads, once they are five minutes
-  old. It takes the chat whose oldest waiting message is oldest, up to 40 of its waiting messages
-  with the five before them as context, rendered and named as search renders them and masked for
-  a cloud model, and asks the routine model (strict JSON, medium effort) for each message's tags
+  old and the chat has paused for five minutes (30 at most). Direct chats go before groups, then
+  the chat waiting longest: up to 40 of its waiting messages, as many as fit 2,500 input tokens, with
+  the five before them as context, readied by `search.Prepare` exactly as chunks are (one line each,
+  masked together for a cloud model, cut only after masking), and asks the routine model (strict JSON, medium effort) for each message's tags
   (important, ignore, task, reminder), a task's title, and a reminder's title and day in DJ's time
   zone, telling it the name DJ goes by and that messages are data, so an instruction inside one is
   never a task. Titles have private details put back. A reminder without a day becomes a task; one
   message can give both. Every message of the batch gets a `message_tags` row, tagged or not, in
-  the same transaction as its tasks and the day's tokens, so nothing is read twice. Tagging spends
+  the same transaction as its tasks and the day's tokens, so nothing is read twice; an edited message
+  is read again and its open tasks replaced, a deleted one's tasks leave `/tasks`, and a due day
+  before the message or a year past it is dropped. Messages a day old by the time tagging reaches
+  them are passed over as `stale`, and `started_after` moves up to the first message of the last
+  day, so finding what waits stays cheap. Tagging spends
   at most `TAGGING_TOKENS_PER_DAY` tokens a day (100,000 by default; 0 turns it off) and about
   3,000 a minute, on the same routine model the search planner uses, then waits for the next day.
-  Refusals and garbled answers pass a batch over with a code; a third refusal in a row stops it for
-  10 minutes instead. `/tasks` lists open tasks (due ones first) and `/done` closes them.
+  A refused batch is halved down to the one message the model will not take, which is passed over
+  with a code, as is a batch with a garbled answer; a third such pass in a row stops tagging for 10
+  minutes. `/tasks` lists open tasks (due ones first) and `/done` closes them.
 - **History sync.** Each history chunk WhatsApp announces becomes a row in `history_jobs`, stored
   in the transaction that acknowledges the announcement. A single worker downloads the chunk,
   stores it in batches of at most 200 messages (a savepoint per message, so one bad message
