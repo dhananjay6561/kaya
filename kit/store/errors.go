@@ -31,3 +31,17 @@ func IsConnectionError(err error) bool {
 	return errors.As(err, &connect) || errors.As(err, &network) || pgconn.SafeToRetry(err) ||
 		strings.Contains(err.Error(), "conn closed") || strings.Contains(err.Error(), "closed pool")
 }
+
+// IsRefused reports whether err is a database error that trying again cannot fix: bad data, a
+// broken constraint or a schema mismatch (SQLSTATE classes 22, 23 and 42).
+func IsRefused(err error) bool {
+	var pg *pgconn.PgError
+	if !errors.As(err, &pg) || len(pg.Code) < 2 {
+		return false
+	}
+	switch pg.Code[:2] {
+	case "22", "23", "42":
+		return true
+	}
+	return false
+}

@@ -59,3 +59,14 @@ func TestIsConnectionErrorForAnUnreachableServer(t *testing.T) {
 		t.Fatalf("an unreachable server should be a connection error, got %v", err)
 	}
 }
+
+func TestIsRefusedTellsAWriteTheDatabaseWillNeverTakeFromAPassingFailure(t *testing.T) {
+	for code, want := range map[string]bool{"22000": true, "23505": true, "42P01": true, "08006": false, "57P01": false, "": false} {
+		if got := IsRefused(&pgconn.PgError{Code: code}); got != want {
+			t.Errorf("%q: %v", code, got)
+		}
+	}
+	if IsRefused(errors.New("plain")) {
+		t.Error("a plain error counted as refused")
+	}
+}
