@@ -24,6 +24,7 @@ import (
 	"github.com/dhananjay6561/kaya/core/internal/commands"
 	"github.com/dhananjay6561/kaya/core/internal/config"
 	"github.com/dhananjay6561/kaya/core/internal/embeddings"
+	"github.com/dhananjay6561/kaya/core/internal/facts"
 	"github.com/dhananjay6561/kaya/core/internal/gateway"
 	"github.com/dhananjay6561/kaya/core/internal/llm"
 	"github.com/dhananjay6561/kaya/core/internal/masking"
@@ -146,6 +147,14 @@ func run(cfg config.Config, logger *slog.Logger) error {
 		queryEmbedder = embeddings.NewVoyage(cfg.Embeddings.Voyage, embeddings.VoyageOptions{Timeout: 4 * time.Second, MaxRetries: -1})
 	}
 	searcher := search.NewSearcher(db, queryEmbedder)
+	factStore := facts.NewStore(db)
+	learner, err := facts.NewLearner(facts.LearnerOptions{
+		DB: db, LLM: model, Pause: switches, Logger: logger,
+		NewMasker: func() facts.Masker { return masking.NewSession() },
+	})
+	if err != nil {
+		return err
+	}
 	replies, err := chat.New(chat.Options{
 		LLM:    model,
 		Logger: logger,
@@ -163,6 +172,14 @@ func run(cfg config.Config, logger *slog.Logger) error {
 			defer cancel()
 			return searcher.Excerpts(ctx, p, 3)
 		},
+		Facts: func(ctx context.Context) ([]string, error) {
+			all, err := factStore.List(ctx)
+			texts := make([]string, len(all))
+			for i, f := range all {
+				texts[i] = f.Text
+			}
+			return texts, err
+		},
 		DatabaseAway:   databaseAway,
 		NewMaskSession: func() chat.MaskSession { return masking.NewSession() },
 	})
@@ -173,6 +190,7 @@ func run(cfg config.Config, logger *slog.Logger) error {
 		Channel: ch,
 		Logger:  logger,
 		Pause:   switches,
+		Facts:   factStore,
 		Status: func(ctx context.Context) (string, error) {
 			st, err := status.Read(ctx, status.Source{
 				DB: db, Pause: switches, Version: version, StartedAt: startedAt,
@@ -180,6 +198,7 @@ func run(cfg config.Config, logger *slog.Logger) error {
 					p, err := indexer.Progress(ctx)
 					return p.Indexed, p.Skipped, p.Total, err
 				},
+				Facts: factStore.Count,
 			})
 			if err != nil {
 				return "", err
@@ -212,6 +231,8 @@ func run(cfg config.Config, logger *slog.Logger) error {
 	defer consumer.Stop()
 	indexer.Start()
 	defer indexer.Stop()
+	learner.Start()
+	defer learner.Stop()
 
 	ln, err := net.Listen("tcp", net.JoinHostPort(cfg.ListenHost, strconv.Itoa(cfg.Port)))
 	if err != nil {
