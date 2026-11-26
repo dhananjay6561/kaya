@@ -86,21 +86,24 @@ func TestRememberKeepsAToldFactOnceWhateverItsCaseAndSpacing(t *testing.T) {
 	r := newRig(t)
 	s := NewStore(r.core)
 	id := r.ask("x", "y")
-	f, created, err := s.Remember(bg, "  Works at\nKeploy ", &id)
+	f, created, err := s.Remember(bg, "  Works at\nKeploy ", "3EB0ASK1")
 	if err != nil || !created || f.Text != "Works at Keploy" || f.Source != Told {
 		t.Fatalf("got %+v %v %v", f, created, err)
 	}
-	again, created, err := s.Remember(bg, "works at keploy", nil)
+	again, created, err := s.Remember(bg, "works at keploy", "")
 	if err != nil || created || again.ID != f.ID {
 		t.Fatalf("a repeat made %+v %v %v", again, created, err)
 	}
 	same(t, r.texts(), []string{"told: Works at Keploy"})
+	if got := r.one("SELECT message_id FROM facts"); got != id {
+		t.Fatalf("message_id = %d, want %d", got, id)
+	}
 }
 
 func TestRememberMarksALearnedFactAsTold(t *testing.T) {
 	r := newRig(t)
 	r.exec("INSERT INTO facts (body, source) VALUES ('Lives in Delhi', 'learned')")
-	f, created, err := NewStore(r.core).Remember(bg, "lives in delhi", nil)
+	f, created, err := NewStore(r.core).Remember(bg, "lives in delhi", "")
 	if err != nil || created || f.Source != Told || f.Text != "Lives in Delhi" {
 		t.Fatalf("got %+v %v %v", f, created, err)
 	}
@@ -109,20 +112,20 @@ func TestRememberMarksALearnedFactAsTold(t *testing.T) {
 func TestRememberRefusesEmptyTooLongAndPastTheLimit(t *testing.T) {
 	r := newRig(t)
 	s := NewStore(r.core)
-	if _, _, err := s.Remember(bg, " \n​", nil); !errors.Is(err, ErrEmpty) {
+	if _, _, err := s.Remember(bg, " \n​", ""); !errors.Is(err, ErrEmpty) {
 		t.Errorf("empty: %v", err)
 	}
-	if _, _, err := s.Remember(bg, strings.Repeat("é", MaxLength+1), nil); !errors.Is(err, ErrTooLong) {
+	if _, _, err := s.Remember(bg, strings.Repeat("é", MaxLength+1), ""); !errors.Is(err, ErrTooLong) {
 		t.Errorf("too long: %v", err)
 	}
-	if _, _, err := s.Remember(bg, strings.Repeat("é", MaxLength), nil); err != nil {
+	if _, _, err := s.Remember(bg, strings.Repeat("é", MaxLength), ""); err != nil {
 		t.Errorf("the longest allowed: %v", err)
 	}
 	r.exec("INSERT INTO facts (body, source) SELECT 'fact ' || n, 'learned' FROM generate_series(2, $1) n", MaxFacts)
-	if _, _, err := s.Remember(bg, "one more", nil); !errors.Is(err, ErrFull) {
+	if _, _, err := s.Remember(bg, "one more", ""); !errors.Is(err, ErrFull) {
 		t.Errorf("past the limit: %v", err)
 	}
-	if _, created, err := s.Remember(bg, "FACT 7", nil); err != nil || created {
+	if _, created, err := s.Remember(bg, "FACT 7", ""); err != nil || created {
 		t.Errorf("a fact kept already is fine when full: %v %v", created, err)
 	}
 }
