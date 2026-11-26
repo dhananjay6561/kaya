@@ -40,7 +40,7 @@ func TestLiveLearning(t *testing.T) {
 		{"replies short aur Hinglish mein dena please", "Theek hai.", []string{"Hinglish"}, nil},
 	} {
 		r.ask(c.question, c.answer)
-		if _, err := l.next(bg); err != nil {
+		if _, _, err := l.next(bg); err != nil {
 			t.Fatalf("%q: %v", c.question, err)
 		}
 		kept := strings.Join(r.texts(), " | ")

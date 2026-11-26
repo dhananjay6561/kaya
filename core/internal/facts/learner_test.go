@@ -80,7 +80,8 @@ func (r *rig) learner(m *model, sw pause.Switch) *Learner {
 
 func (r *rig) step(l *Learner) (bool, error) {
 	r.t.Helper()
-	return l.next(bg)
+	found, _, err := l.next(bg)
+	return found, err
 }
 
 func (r *rig) cursor() int64 {
@@ -111,29 +112,48 @@ func TestLearnerAddsWhatAnExchangeTaughtAndMovesPastIt(t *testing.T) {
 		!strings.HasSuffix(req.Messages[0].Content, "\n\nToday is Thursday 26 November 2026.") {
 		t.Errorf("request = %+v", req)
 	}
-	if !strings.Contains(req.Messages[1].Content, `Their message: "main Keploy mein DevRel hoon"`) ||
+	if !strings.Contains(req.Messages[1].Content, `Their message, sent on Friday 20 November 2026: "main Keploy mein DevRel hoon"`) ||
 		!strings.Contains(req.Messages[1].Content, "(none yet)") {
 		t.Errorf("user message = %q", req.Messages[1].Content)
 	}
 }
 
-func TestLearnerShowsKeptFactsAndCanReplaceAndForgetThem(t *testing.T) {
+func TestLearnerShowsKeptFactsAndChangesAndDropsOnlyLearnedOnes(t *testing.T) {
 	r := newRig(t)
 	city := r.one("INSERT INTO facts (body, source) VALUES ('Lives in Delhi', 'told') RETURNING id")
 	pet := r.one("INSERT INTO facts (body, source) VALUES ('Has a cat', 'learned') RETURNING id")
-	r.ask("moved to Pune, and the cat is gone", "oh no")
-	m := (&model{locality: llm.Local}).script(`{"facts":[{"text":"Lives in Pune","replaces":` + itoa(city) + `}],"forget":[` + itoa(pet) + `]}`)
+	job := r.one("INSERT INTO facts (body, source) VALUES ('Works at Acme', 'learned') RETURNING id")
+	food := r.one("INSERT INTO facts (body, source) VALUES ('Vegetarian', 'told') RETURNING id")
+	r.ask("moved to Pune, joined Keploy, the cat is gone and I eat everything now", "big month")
+	m := (&model{locality: llm.Local}).script(`{"facts":[{"text":"Lives in Pune","replaces":` + itoa(city) + `},` +
+		`{"text":"Works at Keploy","replaces":` + itoa(job) + `}],"forget":[` + itoa(pet) + `,` + itoa(food) + `]}`)
 	l := r.learner(m, nil)
 	if _, err := r.step(l); err != nil {
 		t.Fatal(err)
 	}
-	same(t, r.texts(), []string{"learned: Lives in Pune"})
-	if got := r.one("SELECT id FROM facts"); got != city {
-		t.Errorf("the replaced fact got a new id %d", got)
+	same(t, r.texts(), []string{"told: Vegetarian", "told: Lives in Delhi", "learned: Lives in Pune", "learned: Works at Keploy"})
+	if got := r.one("SELECT id FROM facts WHERE body = 'Works at Keploy'"); got != job {
+		t.Errorf("the changed fact got a new id %d", got)
 	}
 	asked := m.requests()[0].Messages[1].Content
-	if !strings.Contains(asked, itoa(city)+". Lives in Delhi\n") || !strings.Contains(asked, itoa(pet)+". Has a cat\n") {
+	if !strings.Contains(asked, itoa(city)+". Lives in Delhi (theirs)\n") || !strings.Contains(asked, itoa(pet)+". Has a cat\n") {
 		t.Errorf("kept facts not shown: %q", asked)
+	}
+}
+
+func TestLearnerShowsOnlyTheFactsThatFitItsShare(t *testing.T) {
+	r := newRig(t)
+	r.exec("INSERT INTO facts (body, source) SELECT 'fact ' || n, 'learned' FROM generate_series(1, 50) n")
+	r.ask("hi", "hey")
+	m := &model{locality: llm.Local}
+	l := r.learner(m, nil)
+	l.o.FactTokens = 20
+	if _, err := r.step(l); err != nil {
+		t.Fatal(err)
+	}
+	shown := strings.Count(m.requests()[0].Messages[1].Content, ". fact ")
+	if shown == 0 || shown >= 50 {
+		t.Fatalf("%d facts shown", shown)
 	}
 }
 
@@ -147,29 +167,44 @@ func TestLearnerRefusesSecretsPlaceholdersDuplicatesAndTooMany(t *testing.T) {
 		{"text":"OTP for bank is 482913","replaces":0},
 		{"text":"Mother's number is [PHONE_1]","replaces":0},
 		{"text":"Plays chess","replaces":424242},
+		{"text":"Wifi password is kaya@1234","replaces":0},
 		{"text":"` + strings.Repeat("a", maxLearnedLength+1) + `","replaces":0},
-		{"text":"Five","replaces":0},
-		{"text":"Six","replaces":0}],"forget":[999]}`)
+		{"text":"Seven","replaces":0}],"forget":[999]}`)
 	if _, err := r.step(r.learner(m, nil)); err != nil {
 		t.Fatal(err)
 	}
 	same(t, r.texts(), []string{"told: Likes chai", "learned: Plays chess"})
 }
 
-func TestLearnerAddsNothingPastTheLimit(t *testing.T) {
+func TestLearnerMakesRoomByDroppingTheStalestLearnedFact(t *testing.T) {
 	r := newRig(t)
-	r.exec("INSERT INTO facts (body, source) SELECT 'fact ' || n, 'learned' FROM generate_series(1, $1) n", MaxFacts)
+	r.exec(`INSERT INTO facts (body, source, updated_at)
+		SELECT 'fact ' || n, CASE WHEN n = 1 THEN 'told' ELSE 'learned' END, now() - n * interval '1 hour'
+		FROM generate_series(1, $1) n`, MaxFacts)
 	r.ask("I like tea", "ok")
-	m := (&model{locality: llm.Local}).script(`{"facts":[{"text":"Likes tea","replaces":0},{"text":"Fact one, changed","replaces":` +
-		itoa(r.one("SELECT id FROM facts WHERE body = 'fact 1'")) + `}],"forget":[]}`)
+	m := (&model{locality: llm.Local}).script(`{"facts":[{"text":"Likes tea","replaces":0}],"forget":[]}`)
 	if _, err := r.step(r.learner(m, nil)); err != nil {
 		t.Fatal(err)
 	}
 	if n := r.one("SELECT count(*) FROM facts"); n != MaxFacts {
 		t.Fatalf("%d facts", n)
 	}
-	if n := r.one("SELECT count(*) FROM facts WHERE body = 'Fact one, changed'"); n != 1 {
-		t.Fatal("a change was refused when full")
+	if r.one("SELECT count(*) FROM facts WHERE body IN ('Likes tea', 'fact 1')") != 2 ||
+		r.one("SELECT count(*) FROM facts WHERE body = $1", "fact "+itoa(MaxFacts)) != 0 {
+		t.Fatal("the wrong fact made room")
+	}
+}
+
+func TestLearnerAddsNothingWhenEveryFactIsTold(t *testing.T) {
+	r := newRig(t)
+	r.exec("INSERT INTO facts (body, source) SELECT 'fact ' || n, 'told' FROM generate_series(1, $1) n", MaxFacts)
+	r.ask("I like tea", "ok")
+	m := (&model{locality: llm.Local}).script(`{"facts":[{"text":"Likes tea","replaces":0}],"forget":[]}`)
+	if _, err := r.step(r.learner(m, nil)); err != nil {
+		t.Fatal(err)
+	}
+	if r.one("SELECT count(*) FROM facts WHERE body = 'Likes tea'") != 0 || r.cursor() == 0 {
+		t.Fatal("added past the limit, or stuck")
 	}
 }
 
@@ -228,6 +263,62 @@ func TestLearnerSkipsAnswersItCannotReadButRetriesOutages(t *testing.T) {
 	}
 }
 
+func TestLearnerStopsMovingWhenTheModelKeepsRefusing(t *testing.T) {
+	r := newRig(t)
+	for range 4 {
+		r.ask("q", "a")
+	}
+	m := (&model{locality: llm.Local}).script(
+		&llm.Error{Code: llm.TooLong}, &llm.Error{Code: llm.Rejected}, &llm.Error{Code: llm.Rejected})
+	l := r.learner(m, nil)
+	for range 2 {
+		if _, err := r.step(l); err != nil {
+			t.Fatal(err)
+		}
+	}
+	before := r.cursor()
+	if _, err := r.step(l); !errors.Is(err, errRefused) {
+		t.Fatalf("err = %v", err)
+	}
+	if r.cursor() != before {
+		t.Fatal("a third refusal in a row moved the cursor")
+	}
+	if _, err := r.step(l); err != nil || r.cursor() == before {
+		t.Fatalf("an answer did not let it move on: %v", err)
+	}
+}
+
+func TestLearnerNeverAppliesAnExchangeTwice(t *testing.T) {
+	r := newRig(t)
+	r.ask("q", "a")
+	e := exchange{id: r.one("SELECT id FROM exchanges")}
+	r.exec("UPDATE fact_learning SET exchange_id = $1", e.id)
+	out := learned{Facts: []struct {
+		Text     string `json:"text"`
+		Replaces int64  `json:"replaces"`
+	}{{Text: "Likes tea"}}}
+	l := r.learner(&model{locality: llm.Local}, nil)
+	if err := l.apply(bg, e, out); !errors.Is(err, errLearned) {
+		t.Fatalf("err = %v", err)
+	}
+	if err := l.save(bg, e, out); err != nil {
+		t.Fatal(err)
+	}
+	if n := r.one("SELECT count(*) FROM facts"); n != 0 {
+		t.Fatal("applied twice")
+	}
+}
+
+func TestLearnerPacesByTheTokensItSpends(t *testing.T) {
+	l := &Learner{o: LearnerOptions{Gap: 20 * time.Second, TokensPerMinute: 3000}}
+	if got := l.pace(500); got != 20*time.Second {
+		t.Errorf("a small exchange waits %v", got)
+	}
+	if got := l.pace(6000); got != 2*time.Minute {
+		t.Errorf("a big exchange waits %v", got)
+	}
+}
+
 func TestLearnerMasksKayasAnswerForACloudModel(t *testing.T) {
 	r := newRig(t)
 	r.ask("what was mom's number?", "It is 9876543210, from your chat with Mom.")
@@ -269,7 +360,6 @@ func TestLearnerRunsInTheBackgroundUntilStopped(t *testing.T) {
 	l.Start()
 	defer l.Stop()
 	r.ask("my dog Bruno is sick", "get well soon Bruno")
-	l.Wake()
 	deadline := time.Now().Add(5 * time.Second)
 	for r.one("SELECT count(*) FROM facts") == 0 {
 		if time.Now().After(deadline) {

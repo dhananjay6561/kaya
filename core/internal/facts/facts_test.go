@@ -50,7 +50,7 @@ func (r *rig) exec(sql string, args ...any) {
 func (r *rig) ask(question, answer string) int64 {
 	r.t.Helper()
 	r.seq++
-	at := time.Now().Add(-time.Minute)
+	at := time.Date(2026, 11, 20, 10, 0, 0, 0, time.UTC)
 	stored := func(waID, body string) int64 {
 		return r.one(`INSERT INTO messages (chat_id, wa_id, sender_id, from_me, sent_at, kind, body, source)
 		              VALUES ($1, $2, $3, true, $4, 'text', $5, 'live') RETURNING id`, r.chat, waID, r.own, at, body)
@@ -121,12 +121,60 @@ func TestRememberRefusesEmptyTooLongAndPastTheLimit(t *testing.T) {
 	if _, _, err := s.Remember(bg, strings.Repeat("é", MaxLength), ""); err != nil {
 		t.Errorf("the longest allowed: %v", err)
 	}
-	r.exec("INSERT INTO facts (body, source) SELECT 'fact ' || n, 'learned' FROM generate_series(2, $1) n", MaxFacts)
+	for _, secret := range []string{"my card is 4111 1111 1111 1111", "Netflix password: hunter2", "ATM PIN 4821", "CVV 123"} {
+		if _, _, err := s.Remember(bg, secret, ""); !errors.Is(err, ErrSecret) {
+			t.Errorf("%q: %v", secret, err)
+		}
+	}
+	r.exec("INSERT INTO facts (body, source) SELECT 'fact ' || n, 'told' FROM generate_series(2, $1) n", MaxFacts)
 	if _, _, err := s.Remember(bg, "one more", ""); !errors.Is(err, ErrFull) {
 		t.Errorf("past the limit: %v", err)
 	}
 	if _, created, err := s.Remember(bg, "FACT 7", ""); err != nil || created {
 		t.Errorf("a fact kept already is fine when full: %v %v", created, err)
+	}
+}
+
+func TestRememberMakesRoomByDroppingTheStalestLearnedFact(t *testing.T) {
+	r := newRig(t)
+	r.exec(`INSERT INTO facts (body, source, updated_at)
+		SELECT 'fact ' || n, 'learned', now() - n * interval '1 hour' FROM generate_series(1, $1) n`, MaxFacts)
+	if _, created, err := NewStore(r.core).Remember(bg, "Likes tea", ""); err != nil || !created {
+		t.Fatalf("%v %v", created, err)
+	}
+	if r.one("SELECT count(*) FROM facts") != MaxFacts || r.one("SELECT count(*) FROM facts WHERE body = $1", "fact "+itoa(MaxFacts)) != 0 {
+		t.Fatal("the wrong fact made room")
+	}
+}
+
+func TestRememberRunAgainForTheSameCommandStillSaysKept(t *testing.T) {
+	r := newRig(t)
+	r.ask("x", "y")
+	s := NewStore(r.core)
+	first, created, err := s.Remember(bg, "Likes tea", "3EB0ASK1")
+	if err != nil || !created {
+		t.Fatal(created, err)
+	}
+	again, created, err := s.Remember(bg, "Likes tea", "3EB0ASK1")
+	if err != nil || !created || again.ID != first.ID {
+		t.Fatalf("a retry got %+v %v %v", again, created, err)
+	}
+	if _, created, _ := s.Remember(bg, "likes tea", "3EB0ANS1"); created {
+		t.Fatal("another command repeating it counted as new")
+	}
+}
+
+func TestCleanKeepsWhatScriptsAndEmojiNeedAndDropsControlCharacters(t *testing.T) {
+	england := "\U0001F3F4\U000E0067\U000E0062\U000E0065\U000E006E\U000E0067\U000E007F"
+	for in, want := range map[string]string{
+		"क्\u200cष":                 "क्\u200cष",
+		"Fan of " + england:         "Fan of " + england,
+		"a\x00b\x07c\u200bd\u2060e": "abcde",
+		" one\n\ttwo ":              "one two",
+	} {
+		if got := Clean(in); got != want {
+			t.Errorf("Clean(%q) = %q, want %q", in, got, want)
+		}
 	}
 }
 
