@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"io"
 	"log/slog"
 	"net/http"
@@ -1034,5 +1035,56 @@ func TestReplyAnswersWithoutFactsWhenTheyCannotBeReadButNotWhenTheDatabaseIsAway
 	}
 	if _, err := New(Options{LLM: stub, Logger: logger, Zone: time.UTC, Facts: func(context.Context) ([]string, error) { return nil, nil }}); err == nil {
 		t.Fatal("facts were accepted without DatabaseAway")
+	}
+}
+
+func realFacts(n int) []string {
+	out := make([]string, n)
+	for i := range out {
+		out[i] = fmt.Sprintf("Friend number %d from college, Rahul %d, lives in Pune and works in fintech as a product manager", i, i)
+	}
+	return out
+}
+
+func TestFactsNeverPushTheRecentConversationOutAtTheDefaultBudget(t *testing.T) {
+	groq, err := llm.NewGroq(config.Groq{HeavyModel: "openai/gpt-oss-120b", RoutineModel: "openai/gpt-oss-20b", ContextTokens: 2000}, llm.GroqOptions{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	now := time.Date(2026, 11, 26, 12, 0, 0, 0, time.UTC)
+	for _, n := range []int{0, 10, 30, 200} {
+		p := memory.Build(memory.Input{
+			System: SystemPrompt(now, time.UTC, llm.Cloud),
+			Facts:  realFacts(n),
+			History: []memory.Exchange{
+				{ID: 1, Question: "which laptop should I buy, the 14 inch or the 16 inch one?", Answer: "The 14: lighter, and you travel a lot.", At: now.Add(-2 * time.Minute)},
+				{ID: 2, Question: "and battery life?", Answer: "The 14 lasts about two hours longer.", At: now.Add(-time.Minute)},
+			},
+			Recalled:      []memory.Exchange{{ID: 9, Question: "laptop budget?", Answer: "Around 1.2 lakh, you said.", At: now.Add(-48 * time.Hour)}},
+			MaxRecalled:   3,
+			RecallReserve: 500,
+			Question:      "ok which one then?",
+			Budget:        2000,
+			Count:         groq.CountTokens,
+			Now:           now,
+		})
+		if p.Exchanges != 2 || p.Tokens > 2000 {
+			t.Errorf("%d facts: kept %d exchanges, %d tokens", n, p.Exchanges, p.Tokens)
+		}
+	}
+}
+
+func TestFittingFactsStaysFast(t *testing.T) {
+	groq, err := llm.NewGroq(config.Groq{HeavyModel: "openai/gpt-oss-120b", RoutineModel: "openai/gpt-oss-20b", ContextTokens: 30000}, llm.GroqOptions{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	now := time.Date(2026, 11, 26, 12, 0, 0, 0, time.UTC)
+	started := time.Now()
+	for _, budget := range []int{2000, 30000} {
+		memory.Build(memory.Input{System: SystemPrompt(now, time.UTC, llm.Cloud), Facts: realFacts(200), Question: "hi", Budget: budget, Count: groq.CountTokens, Now: now})
+	}
+	if took := time.Since(started); took > 150*time.Millisecond && !raceDetector {
+		t.Fatalf("took %v", took)
 	}
 }
