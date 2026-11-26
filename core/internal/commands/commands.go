@@ -31,6 +31,9 @@ type Options struct {
 	Facts FactBook
 	// Tasks keeps the tasks /tasks and /done work on; nil answers them with a notice.
 	Tasks TaskBook
+	// Summary answers /summary: of today when chat is empty, else of the chat it names; nil answers
+	// with a notice.
+	Summary func(ctx context.Context, chat string) (string, error)
 	// Zone is DJ's time zone, for the dates replies show; nil means UTC.
 	Zone *time.Location
 	Chat func(ctx context.Context, m channel.IncomingMessage) (ChatAnswer, error)

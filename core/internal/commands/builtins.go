@@ -14,10 +14,10 @@ import (
 	"github.com/dhananjay6561/kaya/core/internal/text"
 )
 
-var builtinNames = []string{"help", "status", "pause", "resume", "facts", "remember", "forget", "tasks", "done"}
+var builtinNames = []string{"help", "status", "pause", "resume", "facts", "remember", "forget", "tasks", "done", "summary"}
 
 // takesText are the built-ins that act on the words after them.
-var takesText = []string{"remember", "forget", "done"}
+var takesText = []string{"remember", "forget", "done", "summary"}
 
 // Slash kinds.
 const (
@@ -96,6 +96,7 @@ const helpText = "Commands:\n" +
 	"/forget <number>: drop a fact, by its number in /facts\n" +
 	"/tasks: open tasks and reminders found in your chats\n" +
 	"/done <number>: close a task, by its number in /tasks\n" +
+	"/summary: what came in today; /summary <chat>: one chat's last day\n" +
 	"Anything else you send here goes to an AI model, which answers with what it knows about you, your conversation and what a search of your other chats finds."
 
 // answerSlash works out the reply to a slash command; /pause and /resume flip the switch.
@@ -129,6 +130,11 @@ func answerSlash(ctx context.Context, s *Slash, m channel.IncomingMessage, o Opt
 		return remember(ctx, o.Facts, s.Args, m.ID)
 	case "forget":
 		return forget(ctx, o.Facts, s.Args)
+	case "summary":
+		if o.Summary == nil {
+			return "Summaries are not set up here.", nil
+		}
+		return o.Summary(ctx, s.Args)
 	case "tasks":
 		return listTasks(ctx, o.Tasks, o.Zone, o.Now())
 	case "done":
