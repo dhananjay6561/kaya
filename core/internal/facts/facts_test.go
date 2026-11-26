@@ -112,7 +112,7 @@ func TestRememberMarksALearnedFactAsTold(t *testing.T) {
 func TestRememberRefusesEmptyTooLongAndPastTheLimit(t *testing.T) {
 	r := newRig(t)
 	s := NewStore(r.core)
-	if _, _, err := s.Remember(bg, " \n​", ""); !errors.Is(err, ErrEmpty) {
+	if _, _, err := s.Remember(bg, " \n\u200b", ""); !errors.Is(err, ErrEmpty) {
 		t.Errorf("empty: %v", err)
 	}
 	if _, _, err := s.Remember(bg, strings.Repeat("é", MaxLength+1), ""); !errors.Is(err, ErrTooLong) {
