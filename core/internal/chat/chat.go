@@ -173,6 +173,13 @@ func (c *Chat) Reply(ctx context.Context, q Question) (Answer, error) {
 	if err != nil {
 		return Answer{}, err
 	}
+	if privacy != nil {
+		// A fact goes with every question for good, so details in it, such as a friend's number,
+		// are hidden like everything else DJ did not type in this message.
+		for i, f := range known {
+			known[i] = privacy.Mask(f, f)
+		}
+	}
 	history, err := c.read(ctx, q, o.History, "could not read the conversation; answering without it")
 	if err != nil {
 		return Answer{}, err
