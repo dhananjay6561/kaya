@@ -7,6 +7,7 @@ import (
 	"log/slog"
 	"net"
 	"regexp"
+	"slices"
 	"strings"
 	"sync"
 	"syscall"
@@ -15,6 +16,7 @@ import (
 	"unicode/utf8"
 
 	"github.com/dhananjay6561/kaya/core/internal/channel"
+	"github.com/dhananjay6561/kaya/core/internal/facts"
 	"github.com/dhananjay6561/kaya/core/internal/llm"
 	"github.com/dhananjay6561/kaya/core/internal/pause"
 )
@@ -66,6 +68,7 @@ type rigOptions struct {
 	chat   func(context.Context, channel.IncomingMessage) (ChatAnswer, error)
 	fail   func(channel.OutgoingMessage) error
 	now    func() time.Time
+	facts  FactBook
 }
 
 // errAway is the rig's database outage; every other error is a handler's own.
@@ -84,7 +87,7 @@ func newRig(t *testing.T, o rigOptions) *rig {
 			return ChatAnswer{Text: "You said: " + Clip(m.Text), Remember: true}, nil
 		}
 	}
-	r.stop = Start(Options{Channel: r.ch, Logger: quiet, Pause: r.pause, Status: o.status, Chat: o.chat, Now: o.now, DatabaseAway: isAway})
+	r.stop = Start(Options{Channel: r.ch, Logger: quiet, Pause: r.pause, Status: o.status, Chat: o.chat, Now: o.now, DatabaseAway: isAway, Facts: o.facts})
 	if err := r.ch.Start(bg); err != nil {
 		t.Fatal(err)
 	}
@@ -519,8 +522,9 @@ func TestUsesTheKeysTheTypeScriptCoreUsed(t *testing.T) {
 func TestSendsTheTypeScriptCoresTexts(t *testing.T) {
 	r := newRig(t, rigOptions{})
 	help := "Commands:\n/help: this list\n/status: how Kaya is doing\n/pause: stop answering until /resume\n" +
-		"/resume: start answering again\nAnything else you send here goes to an AI model, which answers with " +
-		"your recent conversation in mind. It does not see your other chats yet."
+		"/resume: start answering again\n/facts: what I know about you\n/remember <fact>: keep a fact about you\n" +
+		"/forget <number>: drop a fact, by its number in /facts\nAnything else you send here goes to an AI model, " +
+		"which answers with what it knows about you, your conversation and what a search of your other chats finds."
 	same(t, r.answers("/help", now), []string{help})
 	same(t, r.answers("/pause", now), []string{"Paused. Until you send /resume I answer only slash commands, like /status."})
 	same(t, r.answers("/pause", now), []string{"Already paused. Send /resume to start again."})
@@ -616,5 +620,97 @@ func TestPlainMessagesGetAPlainNoticeWhenTheModelFails(t *testing.T) {
 			t.Fatalf("%s: got %+v", c.code, r.ch.sent())
 		}
 		matches(t, out[0], c.notice)
+	}
+}
+
+// book is an in-memory FactBook.
+type book struct {
+	mu     sync.Mutex
+	facts  []facts.Fact
+	next   int64
+	err    error
+	waIDs  []string
+}
+
+func (b *book) List(context.Context) ([]facts.Fact, error) {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	return slices.Clone(b.facts), b.err
+}
+
+func (b *book) Remember(_ context.Context, body, waID string) (facts.Fact, bool, error) {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	if b.err != nil {
+		return facts.Fact{}, false, b.err
+	}
+	switch body {
+	case "too long":
+		return facts.Fact{}, false, facts.ErrTooLong
+	case "full":
+		return facts.Fact{}, false, facts.ErrFull
+	}
+	for _, f := range b.facts {
+		if strings.EqualFold(f.Text, body) {
+			return f, false, nil
+		}
+	}
+	b.next++
+	f := facts.Fact{ID: b.next, Text: body, Source: facts.Told}
+	b.facts, b.waIDs = append(b.facts, f), append(b.waIDs, waID)
+	return f, true, nil
+}
+
+func (b *book) Forget(_ context.Context, ids []int64) ([]facts.Fact, error) {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	var gone, kept []facts.Fact
+	for _, f := range b.facts {
+		if slices.Contains(ids, f.ID) {
+			gone = append(gone, f)
+		} else {
+			kept = append(kept, f)
+		}
+	}
+	b.facts = kept
+	return gone, b.err
+}
+
+func TestRememberFactsAndForgetThemByNumber(t *testing.T) {
+	b := &book{}
+	r := newRig(t, rigOptions{facts: b})
+	same(t, r.answers("/facts", now), []string{"I don't know any facts about you yet. Tell me one with /remember, or just mention things as we talk and I'll pick them up."})
+	same(t, r.answers("/remember", now), []string{"Send /remember with the fact after it, like /remember I'm vegetarian."})
+	same(t, r.answers("/remember Works at Keploy", channel.ReceiveOptions{ID: "3EB0R1"}), []string{"Got it, fact 1: Works at Keploy"})
+	if !slices.Equal(b.waIDs, []string{"3EB0R1"}) {
+		t.Fatalf("wa ids %q", b.waIDs)
+	}
+	same(t, r.answers("/remember works at keploy", now), []string{"I already know that (fact 1)."})
+	same(t, r.answers("/remember too long", now), []string{"That is too long for one fact. Keep it under 500 characters."})
+	same(t, r.answers("/remember full", now), []string{"I already keep 200 facts, the most I can. Remove some with /forget first."})
+	b.facts = append(b.facts, facts.Fact{ID: 7, Text: "Has a cat", Source: facts.Learned})
+	same(t, r.answers("/facts", now), []string{"*You told me*\n1. Works at Keploy\n\n*I picked up*\n7. Has a cat\n\nRemove one with /forget and its number."})
+	same(t, r.answers("/forget", now), []string{"Send /forget with the number of a fact from /facts, like /forget 12."})
+	same(t, r.answers("/forget the cat", now), []string{"Send /forget with the number of a fact from /facts, like /forget 12."})
+	same(t, r.answers("/forget 99", now), []string{"No fact has that number. Send /facts to see them."})
+	same(t, r.answers("/forget #7, 7 99", now), []string{"Forgot:\n7. Has a cat\n(1 of those numbers matched no fact.)"})
+	same(t, r.answers("/facts", now), []string{"*You told me*\n1. Works at Keploy\n\nRemove one with /forget and its number."})
+}
+
+func TestFactCommandsWorkWhilePausedAndWaitOutADatabaseOutage(t *testing.T) {
+	b := &book{}
+	r := newRig(t, rigOptions{facts: b})
+	_ = r.answers("/pause", now)
+	same(t, r.answers("/remember Likes chai", now), []string{"Got it, fact 1: Likes chai"})
+	b.err = errAway
+	if out, err := r.say("/facts", now); !errors.Is(err, errAway) || len(out) != 0 {
+		t.Fatalf("got %q, %v", out, err)
+	}
+}
+
+func TestFactCommandsWithoutAFactBookSaySo(t *testing.T) {
+	r := newRig(t, rigOptions{})
+	for _, c := range []string{"/facts", "/remember x", "/forget 1"} {
+		same(t, r.answers(c, now), []string{"Facts are not set up here."})
 	}
 }
