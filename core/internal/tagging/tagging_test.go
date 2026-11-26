@@ -270,13 +270,13 @@ func TestShowsEarlierMessagesAsContextAndTagsOneChatAtATime(t *testing.T) {
 			t.Fatal(err)
 		}
 	}
-	direct := m.requests()[1].Messages[1].Content
+	direct := m.requests()[0].Messages[1].Content
 	if !strings.Contains(direct, "Earlier messages:\n[") || !strings.Contains(direct, "Rahul: old 4\n") ||
 		strings.Contains(direct, "old 3") || !strings.Contains(direct, "New messages:\n1. [") || strings.Contains(direct, "group news") {
 		t.Fatalf("request = %q", direct)
 	}
-	if !strings.Contains(m.requests()[0].Messages[1].Content, "Chat: Office Team\n") {
-		t.Fatalf("first request = %q", m.requests()[0].Messages[1].Content)
+	if !strings.Contains(m.requests()[1].Messages[1].Content, "Chat: Office Team\n") {
+		t.Fatalf("a direct chat did not go first: %q", m.requests()[1].Messages[1].Content)
 	}
 }
 
@@ -356,9 +356,8 @@ func TestSkipsBatchesItCannotReadAndStopsWhenRefusalsRepeat(t *testing.T) {
 	g3 := r.one("INSERT INTO chats (kind, jid, name) VALUES ('group', '120363000000000003@g.us', 'Three') RETURNING id")
 	r.say(msg{chat: g2, body: "c"})
 	r.say(msg{chat: g3, body: "d"})
-	limited := &llm.Error{Code: llm.RateLimited}
 	m := (&model{locality: llm.Local}).script("not json", &llm.Error{Code: llm.Rejected}, &llm.Error{Code: llm.TooLong},
-		&llm.Error{Code: llm.Rejected}, limited)
+		&llm.Error{Code: llm.Rejected})
 	tg := r.tagger(m, Options{})
 	for range 3 {
 		if _, err := r.step(tg); err != nil {
@@ -368,14 +367,121 @@ func TestSkipsBatchesItCannotReadAndStopsWhenRefusalsRepeat(t *testing.T) {
 	if _, err := r.step(tg); !errors.Is(err, errRefused) {
 		t.Fatalf("err = %v", err)
 	}
-	if _, err := r.step(tg); !errors.Is(err, limited) {
-		t.Fatalf("err = %v", err)
+	same(t, r.tags(), []string{"a: - (skipped bad_json)", "b: - (skipped rejected)", "c: - (skipped too_long)", "d: - (skipped rejected)"})
+	if tg.refusals != 0 {
+		t.Fatal("the count of refusals was not reset after the pause")
 	}
-	same(t, r.tags(), []string{"a: - (skipped bad_json)", "b: - (skipped rejected)", "c: - (skipped too_long)"})
+}
+
+func TestHalvesABatchTheModelRefusesUntilOneMessageFails(t *testing.T) {
+	r := newRig(t)
+	for i := range 4 {
+		r.say(msg{body: fmt.Sprintf("m%d", i)})
+	}
+	m := (&model{locality: llm.Local}).script(&llm.Error{Code: llm.TooLong}, &llm.Error{Code: llm.Rejected},
+		`{"tagged":[{"line":1,"tags":["important"],"task":"","reminder":"","due":""}]}`)
+	tg := r.tagger(m, Options{})
 	if _, err := r.step(tg); err != nil {
 		t.Fatal(err)
 	}
-	same(t, r.tags(), []string{"a: - (skipped bad_json)", "b: - (skipped rejected)", "c: - (skipped too_long)", "d: -"})
+	same(t, r.tags(), []string{"m0: important"})
+	var sizes []int
+	for _, req := range m.requests() {
+		sizes = append(sizes, strings.Count(req.Messages[1].Content, "] Rahul: m"))
+	}
+	if !slices.Equal(sizes, []int{4, 2, 1}) {
+		t.Fatalf("batch sizes %v", sizes)
+	}
+	if _, err := r.step(tg); err != nil {
+		t.Fatal(err)
+	}
+	if n := r.one("SELECT count(*) FROM message_tags"); n != 4 {
+		t.Fatalf("%d rows", n)
+	}
+}
+
+func TestFitsABatchToItsInputTokens(t *testing.T) {
+	r := newRig(t)
+	for i := range 10 {
+		r.say(msg{body: fmt.Sprintf("message %d %s", i, strings.Repeat("words ", 40))})
+	}
+	m := &model{locality: llm.Local}
+	tg := r.tagger(m, Options{})
+	tg.o.InputTokens = 1000
+	if _, err := r.step(tg); err != nil {
+		t.Fatal(err)
+	}
+	asked := m.requests()[0]
+	if n := strings.Count(asked.Messages[1].Content, "] Rahul: message"); n == 0 || n == 10 {
+		t.Fatalf("%d messages in one request", n)
+	}
+	if n := r.one("SELECT count(*) FROM message_tags"); n == 0 || n == 10 {
+		t.Fatalf("%d rows", n)
+	}
+	one := &model{locality: llm.Local}
+	tiny := r.tagger(one, Options{})
+	tiny.o.InputTokens = 1
+	if _, err := r.step(tiny); err != nil || !strings.Contains(one.requests()[0].Messages[1].Content, "\n1. [") ||
+		strings.Contains(one.requests()[0].Messages[1].Content, "\n2. [") {
+		t.Fatalf("a request too small for any message did not carry one: %v", err)
+	}
+}
+
+func TestPassesOverOldMessagesAndRetagsEditedOnes(t *testing.T) {
+	r := newRig(t)
+	old := r.say(msg{body: "from last week", sentAt: time.Now().Add(-7 * 24 * time.Hour)})
+	edited := r.say(msg{body: "call at 4 tomorrow"})
+	m := (&model{locality: llm.Local}).script(
+		`{"tagged":[{"line":1,"tags":["reminder"],"task":"","reminder":"Call","due":"2026-11-27 16:00"}]}`,
+		`{"tagged":[{"line":1,"tags":["reminder"],"task":"","reminder":"Call","due":"2026-11-27 17:00"}]}`)
+	tg := r.tagger(m, Options{})
+	if _, err := r.step(tg); err != nil {
+		t.Fatal(err)
+	}
+	if got := r.one("SELECT count(*) FROM message_tags WHERE message_id = $1 AND skipped = 'stale'", old); got != 1 {
+		t.Fatal("an old message was not passed over")
+	}
+	r.exec("UPDATE messages SET body = 'call at 5 tomorrow', edited_at = now() + interval '1 second' WHERE id = $1", edited)
+	time.Sleep(1100 * time.Millisecond)
+	if _, err := r.step(tg); err != nil {
+		t.Fatal(err)
+	}
+	open, _ := NewTasks(r.core).Open(bg, 10)
+	if len(open) != 1 || !open[0].Due.Equal(time.Date(2026, 11, 27, 17, 0, 0, 0, kolkata)) {
+		t.Fatalf("open = %+v", open)
+	}
+	if started := r.one("SELECT started_after FROM tagging"); started >= edited {
+		t.Fatalf("started_after %d passed a message of the last day", started)
+	}
+}
+
+func TestDropsADueDayBeforeTheMessageOrAfterAYear(t *testing.T) {
+	r := newRig(t)
+	r.say(msg{body: "a"})
+	r.say(msg{body: "b"})
+	m := (&model{locality: llm.Local}).script(`{"tagged":[
+		{"line":1,"tags":["reminder"],"task":"","reminder":"Past","due":"2025-11-27 10:00"},
+		{"line":2,"tags":["reminder"],"task":"","reminder":"Far","due":"2031-01-01"}]}`)
+	if _, err := r.step(r.tagger(m, Options{})); err != nil {
+		t.Fatal(err)
+	}
+	open, _ := NewTasks(r.core).Open(bg, 10)
+	if len(open) != 2 || open[0].Kind != KindTask || open[1].Kind != KindTask {
+		t.Fatalf("open = %+v", open)
+	}
+}
+
+func TestOpenLeavesOutTasksFromDeletedMessages(t *testing.T) {
+	r := newRig(t)
+	a := r.say(msg{body: "a"})
+	r.exec(`INSERT INTO tasks (message_id, chat_id, kind, title) VALUES ($1, $2, 'task', 'gone')`, a, r.direct)
+	r.exec("UPDATE messages SET deleted_at = now(), body = NULL WHERE id = $1", a)
+	if open, _ := NewTasks(r.core).Open(bg, 10); len(open) != 0 {
+		t.Fatalf("open = %+v", open)
+	}
+	if n, _ := NewTasks(r.core).CountOpen(bg); n != 0 {
+		t.Fatalf("counted %d", n)
+	}
 }
 
 func TestWaitsWhilePaused(t *testing.T) {
@@ -442,4 +548,29 @@ func TestRunsInTheBackgroundUntilStopped(t *testing.T) {
 	tg.Stop()
 	tg.Stop()
 	same(t, r.tags(), []string{"urgent: call me: important"})
+}
+
+func TestMasksNamesCodesAcrossMessagesAndDetailsAtTheCut(t *testing.T) {
+	r := newRig(t)
+	stranger := r.one("SELECT contact_id_for('100000000000003@lid', $1)", "917777766666@s.whatsapp.net")
+	chat := r.one("INSERT INTO chats (kind, contact_id) VALUES ('direct', $1) RETURNING id", stranger)
+	send := func(body string) {
+		r.seq++
+		r.exec(`INSERT INTO messages (chat_id, wa_id, sender_id, from_me, sent_at, kind, body, source, created_at)
+			VALUES ($1, $2, $3, false, $4, 'text', $5, 'live', now() - interval '1 minute')`,
+			chat, fmt.Sprintf("3EB0S%d", r.seq), stranger, today.Add(time.Duration(r.seq)*time.Second), body)
+	}
+	send("bhai code bhej jaldi")
+	send("482913")
+	send(strings.Repeat("a", maxLineLength-5) + " 9876543210 later")
+	m := &model{locality: llm.Cloud}
+	if _, err := r.step(r.tagger(m, Options{})); err != nil {
+		t.Fatal(err)
+	}
+	asked := m.requests()[0].Messages[1].Content
+	for _, leak := range []string{"7777766666", "482913", "98765"} {
+		if strings.Contains(asked, leak) {
+			t.Errorf("%s reached the model: %q", leak, asked)
+		}
+	}
 }
