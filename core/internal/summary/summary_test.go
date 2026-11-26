@@ -25,8 +25,10 @@ type model struct {
 	locality llm.Locality
 	reply    string
 	tokens   int
-	mu       sync.Mutex
-	asked    []llm.Request
+	// answers, when set, gives each call's completion in turn.
+	answers []llm.Completion
+	mu      sync.Mutex
+	asked   []llm.Request
 }
 
 func (m *model) Name() string                { return "fake" }
@@ -38,7 +40,12 @@ func (m *model) Complete(_ context.Context, r llm.Request) (llm.Completion, erro
 	m.mu.Lock()
 	defer m.mu.Unlock()
 	m.asked = append(m.asked, r)
-	return llm.Completion{Text: m.reply}, nil
+	if len(m.answers) > 0 {
+		next := m.answers[0]
+		m.answers = m.answers[1:]
+		return next, nil
+	}
+	return llm.Completion{Text: m.reply, FinishReason: llm.FinishStop}, nil
 }
 
 func (m *model) user() string {
@@ -177,10 +184,10 @@ func TestTodayKeepsTheNewestMessagesThatFitAndSaysWhatWasLeftOut(t *testing.T) {
 		t.Fatal(err)
 	}
 	asked := m.user()
-	if !strings.Contains(asked, "message number 49") || strings.Contains(asked, "message number 00") || !strings.Contains(asked, "older messages did not fit") {
+	if !strings.Contains(asked, "message number 49") || strings.Contains(asked, "message number 00") || !strings.Contains(asked, "did not fit and were left out") {
 		t.Fatalf("asked %q", asked)
 	}
-	if !strings.Contains(got, "older ones were left out") {
+	if !strings.Contains(got, "messages from 1 chat did not fit and were left out._") {
 		t.Fatalf("got %q", got)
 	}
 }
@@ -201,7 +208,7 @@ func TestChatFindsTheChatByNameAndReadsItsLastDayOrLastMessages(t *testing.T) {
 	r.say(r.direct, time.Hour, "not this chat")
 	m := &model{locality: llm.Local, reply: "Old news only."}
 	got, err := r.summarizer(m).Chat(bg, "college gang")
-	if err != nil || got != "Old news only." {
+	if err != nil || got != "Summary of *College Gang*\nOld news only." {
 		t.Fatalf("got %q, %v", got, err)
 	}
 	asked := m.user()
@@ -221,10 +228,113 @@ func TestMasksChatsForACloudModelAndRestoresTheSummary(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if strings.Contains(m.user(), "9876501234") || got != "Rahul's new number: 9876501234" {
+	if strings.Contains(m.user(), "9876501234") || got != "Summary of *Rahul*\nRahul's new number: 9876501234" {
 		t.Fatalf("asked %q, got %q", m.user(), got)
 	}
 	if _, err := New(Options{DB: r.core, LLM: m, Searcher: search.NewSearcher(r.core, embeddings.NewStub()), Zone: kolkata}); err == nil {
 		t.Fatal("a cloud model was accepted without masking")
+	}
+}
+
+func TestTodayHearsFromEveryChatBeforeAnyChatGetsMore(t *testing.T) {
+	r := newRig(t)
+	if r.earlierToday() < 10*time.Minute {
+		t.Skip("too close to midnight in Kolkata")
+	}
+	var groups []int64
+	for g := range 12 {
+		id := r.one("INSERT INTO chats (kind, jid, name) VALUES ('group', $1, $2) RETURNING id",
+			fmt.Sprintf("1203630000000001%02d@g.us", g), fmt.Sprintf("Group %02d", g))
+		groups = append(groups, id)
+		for i := range 40 {
+			r.say(id, r.earlierToday()-time.Duration(g*40+i)*time.Second, fmt.Sprintf("g%02d line %02d %s", g, i, strings.Repeat("y", 60)))
+		}
+	}
+	m := &model{locality: llm.Local, reply: "busy day", tokens: 3000}
+	got, err := r.summarizer(m).Today(bg)
+	if err != nil {
+		t.Fatal(err)
+	}
+	asked := m.user()
+	for g := range groups {
+		if !strings.Contains(asked, fmt.Sprintf("Chat: Group %02d", g)) || !strings.Contains(asked, fmt.Sprintf("g%02d line 39", g)) {
+			t.Fatalf("group %d not heard from: %q", g, asked)
+		}
+	}
+	if !strings.Contains(got, "from 12 chats did not fit") {
+		t.Fatalf("got %q", got)
+	}
+	if tokens := m.CountTokens(m.asked[0].Messages[0].Content) + m.CountTokens(asked); tokens > 3000 {
+		t.Fatalf("the request was %d tokens", tokens)
+	}
+}
+
+func TestTodayCountsMessagesPastTheLimitPerChat(t *testing.T) {
+	r := newRig(t)
+	if r.earlierToday() < 10*time.Minute {
+		t.Skip("too close to midnight in Kolkata")
+	}
+	for i := range maxPerChat + 15 {
+		r.say(r.group, r.earlierToday()-time.Duration(i)*time.Second, fmt.Sprintf("short %d", i))
+	}
+	m := &model{locality: llm.Local, reply: "ok", tokens: 100_000}
+	got, err := r.summarizer(m).Today(bg)
+	if err != nil || !strings.Contains(got, "_15 messages from 1 chat did not fit and were left out._") {
+		t.Fatalf("got %q, %v", got, err)
+	}
+}
+
+func TestTodayStartsAtMidnightInDJsTimeZone(t *testing.T) {
+	r := newRig(t)
+	r.now = time.Date(2026, 11, 27, 0, 1, 0, 0, kolkata)
+	r.say(r.direct, 2*time.Minute, "late last night")
+	r.say(r.direct, 30*time.Second, "just after midnight")
+	m := &model{locality: llm.Local, reply: "ok"}
+	if _, err := r.summarizer(m).Today(bg); err != nil {
+		t.Fatal(err)
+	}
+	if asked := m.user(); strings.Contains(asked, "late last night") || !strings.Contains(asked, "just after midnight") {
+		t.Fatalf("asked %q", asked)
+	}
+}
+
+func TestChatSkipsMessagesItCannotReadWhenTakingTheLastOnes(t *testing.T) {
+	r := newRig(t)
+	r.say(r.group, 72*time.Hour, "the plan is friday")
+	for i := range minChatMessages + 5 {
+		r.seq++
+		r.exec(`INSERT INTO messages (chat_id, wa_id, sender_id, from_me, sent_at, kind, source) VALUES ($1, $2, $3, false, $4, 'sticker', 'live')`,
+			r.group, fmt.Sprintf("3EB0ST%d", i), r.rahul, r.now.Add(-48*time.Hour+time.Duration(i)*time.Second))
+	}
+	m := &model{locality: llm.Local, reply: "Friday plan."}
+	if _, err := r.summarizer(m).Chat(bg, "college gang"); err != nil || !strings.Contains(m.user(), "the plan is friday") {
+		t.Fatalf("asked %v, %v", m.asked, err)
+	}
+}
+
+func TestChatPrefersAGroupOverAStrangerWhoTookItsName(t *testing.T) {
+	r := newRig(t)
+	stranger := r.one("SELECT contact_id_for(NULL, '917777700000@s.whatsapp.net')")
+	r.exec("UPDATE contacts SET push_name = 'College Gang' WHERE id = $1", stranger)
+	fake := r.one("INSERT INTO chats (kind, contact_id) VALUES ('direct', $1) RETURNING id", stranger)
+	r.say(r.group, 72*time.Hour, "real group")
+	r.say(fake, time.Minute, "pretending")
+	m := &model{locality: llm.Local, reply: "ok"}
+	got, err := r.summarizer(m).Chat(bg, "college gang")
+	if err != nil || !strings.HasPrefix(got, "Summary of *College Gang*") || strings.Contains(m.user(), "pretending") {
+		t.Fatalf("got %q, asked %q, %v", got, m.user(), err)
+	}
+}
+
+func TestAnswersThatRanOutOfRoomAreRetriedOrMarked(t *testing.T) {
+	r := newRig(t)
+	r.say(r.direct, time.Minute, "hello")
+	m := &model{locality: llm.Local, answers: []llm.Completion{
+		{FinishReason: llm.FinishLength},
+		{Text: "half a summ", FinishReason: llm.FinishLength},
+	}}
+	got, err := r.summarizer(m).Chat(bg, "rahul")
+	if err != nil || len(m.asked) != 2 || m.asked[1].Effort != llm.Low || !strings.HasSuffix(got, "half a summ\n\n_Cut short here._") {
+		t.Fatalf("got %q, %d calls, %v", got, len(m.asked), err)
 	}
 }
