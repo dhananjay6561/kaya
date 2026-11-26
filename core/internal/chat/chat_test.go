@@ -1088,3 +1088,24 @@ func TestFittingFactsStaysFast(t *testing.T) {
 		t.Fatalf("took %v", took)
 	}
 }
+
+func TestReplyMasksFactsForACloudModelAndRestoresThemInTheAnswer(t *testing.T) {
+	cloud := cloudStub{llm.NewStub(llm.StubOptions{Reply: func(llm.Request) string { return "Suhani: [PHONE_1]" }})}
+	c := newChat(t, Options{
+		LLM: cloud, NewMaskSession: realMasking,
+		Facts: func(context.Context) ([]string, error) { return []string{"Friend Suhani's number is 9876543210"}, nil },
+	})
+	got := reply(t, c, "suhani ka number?")
+	system := cloud.Requests()[0].Messages[0].Content
+	if strings.Contains(system, "9876543210") || !strings.Contains(system, "- Friend Suhani's number is [PHONE_1]") {
+		t.Fatalf("system = %q", system)
+	}
+	if got.Text != "Suhani: 9876543210" {
+		t.Fatalf("got %q", got.Text)
+	}
+	local := llm.NewStub(llm.StubOptions{Reply: func(llm.Request) string { return "ok" }})
+	reply(t, newChat(t, Options{LLM: local, Facts: func(context.Context) ([]string, error) { return []string{"Friend Suhani's number is 9876543210"}, nil }}), "hi")
+	if !strings.Contains(local.Requests()[0].Messages[0].Content, "9876543210") {
+		t.Fatal("a local model got a masked fact")
+	}
+}
