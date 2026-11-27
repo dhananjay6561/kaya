@@ -501,3 +501,32 @@ func TestAnOutwardToolMustNeverRun(t *testing.T) {
 		t.Fatal("a tool that is not outward was allowed to propose")
 	}
 }
+
+func TestWhoAMessageGoesToMustComeFromTheOwnersOwnWords(t *testing.T) {
+	tool := sendTool()
+	tool.Grounded = []string{"to"}
+	propose := func(_ context.Context, p actions.Proposal) (actions.Action, error) {
+		return actions.Action{Proposal: p, ID: "a1"}, nil
+	}
+	for _, c := range []struct {
+		owner, to string
+		ok        bool
+	}{
+		{"Tell anmol testing kaya", "Anmol", true},
+		{"abhishek ko bol do main aa raha hu", "Abhishek Mishra", true},
+		{"Again\nTell anmol testing kaya", "Anmol", true},
+		{"Again", "Abhishek Mishra", false},
+		{"tell him ok", "Office Team", false},
+		{"bol do", "Al", false},
+	} {
+		m := &model{locality: llm.Local, steps: []step{calls(call("c1", "send_message", `{"to":"`+c.to+`","text":"hi"}`)), answer("ok")}}
+		res, err := Run(bg, Options{LLM: m, Tools: registry(t, tool), Logger: quiet, Propose: propose, OwnerWords: c.owner}, question)
+		if err != nil {
+			t.Fatal(err)
+		}
+		told := toolMessages(m.requests[1])[0].Content
+		if c.ok != (res.Proposed != nil) || !c.ok && !strings.Contains(told, "they did not write") {
+			t.Errorf("%q to %q: proposed %v, told %q", c.owner, c.to, res.Proposed != nil, told)
+		}
+	}
+}
