@@ -54,3 +54,10 @@ func ReadConversation(ctx context.Context, db *store.DB, maxExchanges int) ([]Ex
 	slices.Reverse(out)
 	return out, nil
 }
+
+// Interleave merges exchanges from several sources into one conversation, oldest first.
+func Interleave(lists ...[]Exchange) []Exchange {
+	out := slices.Concat(lists...)
+	slices.SortStableFunc(out, func(a, b Exchange) int { return a.At.Compare(b.At) })
+	return out
+}
