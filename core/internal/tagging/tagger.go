@@ -313,8 +313,7 @@ func (t *Tagger) paused(ctx context.Context) error {
 const waiting = `m.id > (SELECT started_after FROM tagging) AND m.source = 'live' AND m.chat_id <> $1
 	AND NOT EXISTS (SELECT 1 FROM message_tags t WHERE t.message_id = m.id AND (m.edited_at IS NULL OR m.edited_at <= t.created_at))`
 
-const eligible = `m.kind IN ('text', 'image', 'video', 'document', 'poll')
-	AND m.body IS NOT NULL AND btrim(m.body) <> '' AND m.deleted_at IS NULL`
+var eligible = search.Readable("m")
 
 // spent is today's tokens, zero on a new day.
 func (t *Tagger) spent(ctx context.Context) (int, error) {

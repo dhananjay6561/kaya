@@ -206,13 +206,22 @@ func (ix *Indexer) run(ctx context.Context) {
 }
 
 const eligible = `
-	m.kind IN ('text', 'image', 'video', 'document', 'poll')
-	AND m.body IS NOT NULL AND btrim(m.body) <> '' AND m.deleted_at IS NULL`
+	` + "(" + readableSQL + ")"
+
+// readableSQL is a message search, tagging and summaries can read, as m: one with words in it, or a
+// voice note once it has a transcript, and not deleted.
+const readableSQL = `(m.kind IN ('text', 'image', 'video', 'document', 'poll') AND m.body IS NOT NULL AND btrim(m.body) <> ''
+	OR m.kind = 'voice' AND EXISTS (SELECT 1 FROM transcripts tr WHERE tr.message_id = m.id AND tr.state = 'done' AND btrim(tr.text) <> ''))
+	AND m.deleted_at IS NULL`
+
+// Readable is the condition for a message readable as alias, shared by tagging and summaries.
+func Readable(alias string) string { return strings.ReplaceAll(readableSQL, "m.", alias+".") }
 
 const linesSQL = `
 SELECT m.id, m.chat_id, m.sent_at, m.updated_at,
        CASE m.kind WHEN 'image' THEN '(photo) ' WHEN 'video' THEN '(video) '
-                   WHEN 'document' THEN '(document) ' WHEN 'poll' THEN '(poll) ' ELSE '' END || m.body,
+                   WHEN 'document' THEN '(document) ' WHEN 'poll' THEN '(poll) ' WHEN 'voice' THEN '(voice note) ' ELSE '' END
+         || coalesce(nullif(btrim(m.body), ''), (SELECT tr.text FROM transcripts tr WHERE tr.message_id = m.id AND tr.state = 'done'), ''),
        CASE WHEN m.from_me AND EXISTS (SELECT 1 FROM exchanges e WHERE e.answer_wa_id = m.wa_id) THEN 'Kaya'
             WHEN m.from_me THEN 'Me'
             ELSE (SELECT CASE WHEN lower(n) IN ('me', 'kaya') THEN '~' || n ELSE n END FROM (
