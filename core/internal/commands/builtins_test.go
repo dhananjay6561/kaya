@@ -39,7 +39,7 @@ func TestKeepsTheWordsAfterRememberAndForgetAsWritten(t *testing.T) {
 }
 
 func TestTreatsAnyOtherSlashAsUnknownAndPlainTextAsNoCommand(t *testing.T) {
-	sameSlash(t, "/jobs", slash(Unknown, "jobs"))
+	sameSlash(t, "/weather", slash(Unknown, "weather"))
 	sameSlash(t, "/", slash(Unknown, ""))
 	sameSlash(t, "/ pause", slash(Unknown, ""))
 	sameSlash(t, "/usr/bin is here", slash(Unknown, "usr/bin"))

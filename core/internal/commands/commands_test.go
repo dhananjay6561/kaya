@@ -17,6 +17,7 @@ import (
 
 	"github.com/dhananjay6561/kaya/core/internal/channel"
 	"github.com/dhananjay6561/kaya/core/internal/facts"
+	"github.com/dhananjay6561/kaya/core/internal/jobs"
 	"github.com/dhananjay6561/kaya/core/internal/llm"
 	"github.com/dhananjay6561/kaya/core/internal/pause"
 	"github.com/dhananjay6561/kaya/core/internal/tagging"
@@ -77,6 +78,7 @@ type rigOptions struct {
 	decide  func(context.Context, channel.IncomingMessage) (string, bool, error)
 	replay  func(context.Context, channel.IncomingMessage) (string, bool, error)
 	shown   func(context.Context, string, channel.SentMessage) error
+	jobs    JobBook
 }
 
 // errAway is the rig's database outage; every other error is a handler's own.
@@ -95,7 +97,7 @@ func newRig(t *testing.T, o rigOptions) *rig {
 			return ChatAnswer{Text: "You said: " + Clip(m.Text), Remember: true}, nil
 		}
 	}
-	r.stop = Start(Options{Channel: r.ch, Logger: quiet, Pause: r.pause, Status: o.status, Chat: o.chat, Now: o.now, DatabaseAway: isAway, Facts: o.facts, Tasks: o.tasks, Zone: kolkata, Summary: o.summary, Alerts: o.alerts, Decide: o.decide, Replay: o.replay, Shown: o.shown})
+	r.stop = Start(Options{Channel: r.ch, Logger: quiet, Pause: r.pause, Status: o.status, Chat: o.chat, Now: o.now, DatabaseAway: isAway, Facts: o.facts, Tasks: o.tasks, Zone: kolkata, Summary: o.summary, Alerts: o.alerts, Decide: o.decide, Replay: o.replay, Shown: o.shown, Jobs: o.jobs})
 	if err := r.ch.Start(bg); err != nil {
 		t.Fatal(err)
 	}
@@ -510,7 +512,7 @@ func TestUsesTheKeysTheTypeScriptCoreUsed(t *testing.T) {
 		o             channel.ReceiveOptions
 	}{
 		{"/status", "3EB0A", "command:3EB0A:builtin:status", now},
-		{"/jobs", "3EB0B", "command:3EB0B:unknown:jobs", now},
+		{"/weather", "3EB0B", "command:3EB0B:unknown:weather", now},
 		{"/pause now", "3EB0C", "command:3EB0C:extra_text:pause", now},
 		{"canned", "3EB0D", "command:3EB0D:chat:canned", now},
 		{"fails", "3EB0E", "command:3EB0E:failed", now},
@@ -534,6 +536,7 @@ func TestSendsTheTypeScriptCoresTexts(t *testing.T) {
 		"/forget <number>: drop a fact, by its number in /facts\n/tasks: open tasks and reminders found in your chats\n" +
 		"/done <number>: close a task, by its number in /tasks\n/summary: what came in today; /summary <chat>: one chat's last day\n" +
 		"/alerts: whether I message you when something needs you; /alerts on, /alerts off\n" +
+		"/jobs: your reminders and scheduled messages; /cancel <number>: stop one\n" +
 		"Anything else you send here goes to an AI model, " +
 		"which answers with what it knows about you, your conversation and what a search of your other chats finds."
 	same(t, r.answers("/help", now), []string{help})
@@ -941,4 +944,35 @@ func TestALateYesThatAlreadyActedSaysWhatHappened(t *testing.T) {
 	if got := r.first("order the usual", channel.ReceiveOptions{SentAt: ago(11 * time.Minute)}); !strings.HasPrefix(got, "I was away when you sent this") {
 		t.Fatalf("got %q", got)
 	}
+}
+
+type jobBook struct{ list []jobs.Job }
+
+func (b *jobBook) List(context.Context) ([]jobs.Job, error) { return b.list, nil }
+func (b *jobBook) Cancel(_ context.Context, ids []int64) ([]jobs.Job, error) {
+	var gone, kept []jobs.Job
+	for _, j := range b.list {
+		if slices.Contains(ids, j.ID) {
+			gone = append(gone, j)
+		} else {
+			kept = append(kept, j)
+		}
+	}
+	b.list = kept
+	return gone, nil
+}
+
+func TestJobsListsRemindersAndCancelStopsThem(t *testing.T) {
+	due := time.Date(2026, 11, 28, 18, 0, 0, 0, kolkata)
+	book := &jobBook{list: []jobs.Job{
+		{ID: 3, Text: "Call Shaurya", Repeat: jobs.Repeat{Kind: jobs.Once}, NextAt: due},
+		{ID: 4, Text: "send me my open tasks", Ask: true, Repeat: jobs.Repeat{Kind: jobs.Weekdays}, NextAt: due.Add(15 * time.Hour)},
+	}}
+	r := newRig(t, rigOptions{jobs: book})
+	same(t, r.answers("/jobs", now), []string{"*Reminders*\n3. Sat 28 Nov, 18:00: Call Shaurya\n4. Sun 29 Nov, 09:00, then every weekday: send me my open tasks (I do it)"})
+	same(t, r.answers("/cancel 3", now), []string{"Cancelled: Call Shaurya."})
+	same(t, r.answers("/cancel 3", now), []string{"No reminder with that number is set. Send /jobs to see them."})
+	same(t, r.answers("/cancel soon", now), []string{cancelUsage})
+	none := newRig(t, rigOptions{})
+	same(t, none.answers("/jobs", now), []string{"Reminders are not set up here."})
 }
