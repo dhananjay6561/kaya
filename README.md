@@ -148,7 +148,8 @@ contact, and it works with everything your WhatsApp account can see.
   time. Nothing is sent once you have replied or the message was deleted, a note never carries a
   link, and one about a code or password always warns you. There are no quiet hours;
   `ALERTS_PER_HOUR` caps the messages (10 by default, reminders always go), and `/alerts off` and
-  `/alerts on` switch them.
+  `/alerts on` switch them. Alerts from the last 12 hours are part of your conversation with Kaya,
+  so a reply like "what did she want?" or "remind me later" knows which one you mean.
 - **Least-privilege database logins.** The gateway and core each have their own Postgres role.
   Core, the part that will talk to an LLM, can read chats but cannot see the WhatsApp session, its
   encryption keys, or the keys needed to fetch media.

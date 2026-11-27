@@ -355,7 +355,10 @@ Folders appear when a phase needs them; empty placeholders are not committed.
   sending, so a send cut off by a restart goes out again under the same key and never twice; a
   reminder's send expires at its time, and any send the gateway refuses passes its alerts over
   with the reason. There are no quiet hours. `/alerts off` passes over everything not yet sent,
-  so `/alerts on` never brings old news.
+  so `/alerts on` never brings old news. The last 5 alert messages of the past 12 hours join the
+  conversation the chat model reads (`alerts.Recent`, merged by time with `memory.Interleave`),
+  each as an exchange whose question is a note that Kaya sent it unasked, so a reply to one has it
+  in context, the search planner can take its names, and it is masked like any past answer.
 - **History sync.** Each history chunk WhatsApp announces becomes a row in `history_jobs`, stored
   in the transaction that acknowledges the announcement. A single worker downloads the chunk,
   stores it in batches of at most 200 messages (a savepoint per message, so one bad message
