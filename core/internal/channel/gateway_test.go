@@ -448,3 +448,34 @@ func TestAStopWhileAHandlerWaitsOnASendHandsTheCommandBack(t *testing.T) {
 		t.Fatalf("the attempt must be given back, got %v", got)
 	}
 }
+
+func TestQueuesAConfirmedRequestToAnotherChat(t *testing.T) {
+	r := newSendRig(t)
+	r.linked()
+	g := r.channel(nil)
+	action := contracts.NewID()
+	sending := send(g, bg, OutgoingMessage{IdempotencyKey: "action:" + action, Text: "running late", To: "918888888888@s.whatsapp.net", ActionID: action}, SendOptions{})
+	eventually(t, "the queued request", func() bool { return len(r.queued()) == 1 })
+	row := r.queued()[0]
+	raw, _ := json.Marshal(row.payload)
+	if _, err := r.v.DecodeSendRequest(raw); err != nil {
+		t.Fatalf("the stored request breaks the contract: %v", err)
+	}
+	p := row.payload
+	if p.To != "918888888888@s.whatsapp.net" || p.Authorization != (contracts.Authorization{Kind: "confirmed", ActionID: action}) || p.ReplyTo != nil {
+		t.Fatalf("got %+v", p)
+	}
+	r.gatewaySends(row.id, "3EB0SENT")
+	if got := await(t, sending); got.err != nil {
+		t.Fatal(got.err)
+	}
+	for _, m := range []OutgoingMessage{
+		{IdempotencyKey: "a", Text: "x", To: "918888888888@s.whatsapp.net"},
+		{IdempotencyKey: "b", Text: "x", ActionID: action},
+		{IdempotencyKey: "c", Text: "x", To: "918888888888@s.whatsapp.net", ActionID: action, ReplyTo: "3EB0Q"},
+	} {
+		if _, err := g.Send(bg, m, SendOptions{}); !errors.Is(err, ErrBadTarget) {
+			t.Errorf("%+v: err = %v", m, err)
+		}
+	}
+}

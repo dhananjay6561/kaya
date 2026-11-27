@@ -20,12 +20,19 @@ type IncomingMessage struct {
 	ReceivedAt time.Time
 }
 
-// OutgoingMessage is an answer from Kaya.
+// OutgoingMessage is an answer from Kaya, to DJ's own chat; or, with To and ActionID, a message to
+// another chat for an action DJ confirmed, which the gateway checks before sending.
 type OutgoingMessage struct {
 	IdempotencyKey string
 	Text           string
 	ReplyTo        string
+	To             string
+	ActionID       string
 }
+
+// ErrBadTarget refuses a message to another chat without the action that allows it, or one that
+// quotes a message there.
+var ErrBadTarget = errors.New("a message to another chat needs a confirmed action and cannot quote")
 
 // SendOptions tune one send.
 type SendOptions struct {
@@ -100,6 +107,9 @@ func (e *KeyReusedError) Error() string {
 func checkOutgoing(m OutgoingMessage) error {
 	if text.Trim(m.IdempotencyKey) == "" || text.Trim(m.Text) == "" {
 		return ErrEmpty
+	}
+	if (m.To == "") != (m.ActionID == "") || m.To != "" && m.ReplyTo != "" {
+		return ErrBadTarget
 	}
 	return nil
 }

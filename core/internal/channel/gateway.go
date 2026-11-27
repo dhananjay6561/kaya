@@ -304,7 +304,8 @@ func (g *Gateway) waitFor(ctx context.Context, id string, m *OutgoingMessage, te
 	}
 }
 
-// Send queues m as a request to DJ's own chat and waits until the gateway has sent it or given up.
+// Send queues m as a request, to DJ's own chat unless m.To says otherwise, and waits until the
+// gateway has sent it or given up.
 func (g *Gateway) Send(ctx context.Context, m OutgoingMessage, o SendOptions) (SentMessage, error) {
 	if err := ctx.Err(); err != nil {
 		return SentMessage{}, err
@@ -355,7 +356,11 @@ func (g *Gateway) enqueue(ctx context.Context, id string, m OutgoingMessage, o S
 	if m.ReplyTo != "" {
 		replyTo = &contracts.ReplyTo{WAID: m.ReplyTo, SenderJID: connection.OwnJID}
 	}
-	request, err := contracts.NewSendRequest(connection.OwnJID, m.Text, contracts.Authorization{Kind: "self_chat"}, replyTo, ttl)
+	to, auth := connection.OwnJID, contracts.Authorization{Kind: contracts.AuthSelfChat}
+	if m.To != "" {
+		to, auth = m.To, contracts.Authorization{Kind: contracts.AuthConfirmed, ActionID: m.ActionID}
+	}
+	request, err := contracts.NewSendRequest(to, m.Text, auth, replyTo, ttl)
 	if err != nil {
 		return err
 	}
