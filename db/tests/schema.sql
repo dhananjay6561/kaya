@@ -326,6 +326,10 @@ BEGIN
   ASSERT NOT has_table_privilege('kaya_gateway', 'alerts', 'SELECT'), 'the gateway cannot read alerts';
   ASSERT has_table_privilege('kaya_core', 'pending_actions', 'SELECT, INSERT, UPDATE')
     AND NOT has_table_privilege('kaya_core', 'pending_actions', 'DELETE'), 'core proposes and settles actions but keeps them';
+  ASSERT has_table_privilege('kaya_core', 'jobs', 'SELECT, INSERT, UPDATE')
+    AND has_table_privilege('kaya_core', 'job_runs', 'SELECT, INSERT, UPDATE')
+    AND NOT has_table_privilege('kaya_core', 'jobs', 'DELETE'), 'core schedules and fires jobs but keeps them';
+  ASSERT NOT has_table_privilege('kaya_gateway', 'jobs', 'SELECT'), 'the gateway cannot read jobs';
   ASSERT has_table_privilege('kaya_gateway', 'pending_actions', 'SELECT')
     AND NOT has_table_privilege('kaya_gateway', 'pending_actions', 'UPDATE')
     AND NOT has_table_privilege('kaya_gateway', 'pending_actions', 'INSERT'), 'the gateway checks actions but cannot confirm one';
@@ -584,6 +588,11 @@ BEGIN
   PERFORM pg_temp.expect_error($q$INSERT INTO alerts (message_id, chat_id, note) VALUES (900206, 1, ' ')$q$, '23514');
   PERFORM pg_temp.expect_error($q$INSERT INTO alerts (message_id, chat_id, note, sent_at) VALUES (900207, 1, 'x', now())$q$, '23514');
   PERFORM pg_temp.expect_error($q$INSERT INTO alerts (task_id, chat_id, note) VALUES (1, 1, 'reminder without its time')$q$, '23514');
+  INSERT INTO jobs (text, local_time, next_at) VALUES ('Call Rahul', '18:00', now() + interval '1 hour');
+  PERFORM pg_temp.expect_error($q$INSERT INTO jobs (text, local_time, next_at) VALUES ('x', '25:00', now())$q$, '23514');
+  PERFORM pg_temp.expect_error($q$INSERT INTO jobs (text, local_time, next_at, state) VALUES ('x', '10:00', now(), 'done')$q$, '23514');
+  PERFORM pg_temp.expect_error($q$INSERT INTO jobs (text, local_time, next_at, weekdays) VALUES ('x', '10:00', now(), '{1}')$q$, '23514');
+  PERFORM pg_temp.expect_error($q$INSERT INTO jobs (text, local_time, next_at, repeat) VALUES ('x', '10:00', now(), 'yearly')$q$, '23514');
   INSERT INTO pending_actions (kind, target_jid, summary, payload, expires_at)
     VALUES ('send_message', '918888888888@s.whatsapp.net', 'Send Rahul: running late', '{}', now() + interval '10 minutes');
   PERFORM pg_temp.expect_error($q$INSERT INTO pending_actions (kind, target_jid, summary, payload, expires_at)
