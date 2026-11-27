@@ -81,6 +81,8 @@ type Result struct {
 	Usage      llm.Usage
 	// Proposed is the action the model asked DJ to confirm, if it did.
 	Proposed *actions.Action
+	// Notes are lines tools wrote for DJ, shown under the answer as they are.
+	Notes []string
 }
 
 // ErrTooManyRounds is a model that kept calling tools after it was told to answer.
@@ -122,14 +124,15 @@ func (o *Options) defaults() error {
 // Run asks the model r with the tools offered, runs the calls it makes and asks again with the
 // results, until it answers without calling one. A call the provider could not read is asked
 // again once. When ctx ends, or a tool fails with a fatal error, Run stops with that error.
-func Run(ctx context.Context, o Options, r llm.Request) (Result, error) {
+func Run(ctx context.Context, o Options, r llm.Request) (res Result, err error) {
 	if err := o.defaults(); err != nil {
 		return Result{}, err
 	}
 	r.Tools = o.Tools.Specs()
 	r.Messages = append([]llm.Message(nil), r.Messages...)
+	ctx, noted := withNotes(ctx)
+	defer func() { res.Notes = noted.all() }()
 	specs := o.Tools.Tokens(o.LLM.CountTokens)
-	var res Result
 	retried := false
 	for round := 0; ; round++ {
 		c, err := o.LLM.Complete(ctx, r)
