@@ -4,11 +4,13 @@ package tagging
 
 import (
 	"context"
+	"fmt"
 	"time"
 
 	"github.com/jackc/pgx/v5"
 
 	"github.com/dhananjay6561/kaya/core/internal/search"
+	"github.com/dhananjay6561/kaya/core/internal/text"
 	"github.com/dhananjay6561/kaya/kit/store"
 )
 
@@ -93,4 +95,20 @@ func (s *Tasks) Done(ctx context.Context, ids []int64) ([]Task, error) {
 		return err
 	})
 	return out, err
+}
+
+// Describe is one task as a line: its number and title, when it is due, and where it came from.
+func Describe(t Task, zone *time.Location, now time.Time) string {
+	line := fmt.Sprintf("%d. %s", t.ID, text.Clip(t.Title, 200))
+	if t.Due != nil {
+		layout := "Mon 2 Jan"
+		if t.Due.In(zone).Year() != now.In(zone).Year() {
+			layout += " 2006"
+		}
+		if t.DueHasTime {
+			layout += " 15:04"
+		}
+		line += ", due " + t.Due.In(zone).Format(layout)
+	}
+	return line + " (" + t.Chat + ", " + t.SentAt.In(zone).Format("2 Jan") + ")"
 }
