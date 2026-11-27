@@ -80,6 +80,9 @@ func (f *fakeTranscriber) Transcribe(_ context.Context, path string) (Transcript
 	if f.err != nil {
 		return Transcript{}, f.err
 	}
+	if info, err := os.Stat(path); err != nil || info.IsDir() {
+		return Transcript{}, errors.New("cannot read the file")
+	}
 	return Transcript{Text: "kal 5 baje milte hain", Language: "hindi", Duration: 2, Model: "test"}, nil
 }
 
@@ -227,6 +230,12 @@ func TestAVoiceNoteWhoseFileWillNotComeIsPassedOver(t *testing.T) {
 	refused := r.voice("remote")
 	r.arrive(refused)
 	r.speech.err = &Error{Code: "http_400"}
+	if err := w.Step(bg); err != nil {
+		t.Fatal(err)
+	}
+	if state, _, _ := r.transcript(late); state != "" {
+		t.Fatalf("a file just asked for was given up: %s", state)
+	}
 	r.now = r.now.Add(11 * time.Minute)
 	if err := w.Step(bg); err != nil {
 		t.Fatal(err)
@@ -235,5 +244,54 @@ func TestAVoiceNoteWhoseFileWillNotComeIsPassedOver(t *testing.T) {
 		if state, _, code := r.transcript(id); state != "failed" || code != want {
 			t.Errorf("message %d: %s %s, want failed %s", id, state, code, want)
 		}
+	}
+}
+
+func TestSilenceAndTheHintAreNeverTakenForSpeech(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "abc")
+	_ = os.WriteFile(path, []byte("x"), 0o600)
+	for body, want := range map[string]string{
+		`{"text":"Haan bhai, kal milte hain.","segments":[{"text":"Haan bhai, kal milte hain.","no_speech_prob":0.1,"avg_logprob":-0.2}]}`:                                       "no_speech",
+		`{"text":"Thank you.","segments":[{"text":"Thank you.","no_speech_prob":0.9,"avg_logprob":-1.2}]}`:                                                                       "no_speech",
+		`{"text":"call me. Thank you.","segments":[{"text":"call me.","no_speech_prob":0.1,"avg_logprob":-0.3},{"text":"Thank you.","no_speech_prob":0.95,"avg_logprob":-1.5}]}`: "call me.",
+	} {
+		srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) { _, _ = io.WriteString(w, body) }))
+		got, err := NewGroq("k", "m", srv.URL).Transcribe(bg, path)
+		srv.Close()
+		var failed *Error
+		switch {
+		case want == "no_speech" && (!errors.As(err, &failed) || failed.Code != "no_speech" || failed.Retry):
+			t.Errorf("%s: got %q, %v", body, got.Text, err)
+		case want != "no_speech" && (err != nil || got.Text != want):
+			t.Errorf("%s: got %q, %v", body, got.Text, err)
+		}
+	}
+}
+
+func TestAVoiceNoteThatKeepsFailingIsGivenUpWithoutHoldingUpTheRest(t *testing.T) {
+	r := newRig(t)
+	w := r.worker()
+	stuck := r.voice("remote")
+	fine := r.voice("remote")
+	r.arrive(stuck)
+	r.arrive(fine)
+	var shaOfStuck string
+	if err := r.admin.QueryRow(bg, "SELECT sha256 FROM media WHERE message_id = $1", stuck).Scan(&shaOfStuck); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Remove(filepath.Join(r.media, shaOfStuck[:2], shaOfStuck)); err != nil {
+		t.Fatal(err)
+	}
+	_ = os.Mkdir(filepath.Join(r.media, shaOfStuck[:2], shaOfStuck), 0o700)
+	for range 5 {
+		if err := w.Step(bg); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if state, _, code := r.transcript(stuck); state != "failed" || code != "gave_up" {
+		t.Fatalf("stuck: %s %s", state, code)
+	}
+	if state, _, _ := r.transcript(fine); state != "done" {
+		t.Fatalf("the next voice note waited behind a bad one: %s", state)
 	}
 }

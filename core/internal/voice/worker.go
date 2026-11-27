@@ -13,6 +13,7 @@ import (
 	"github.com/jackc/pgx/v5"
 
 	"github.com/dhananjay6561/kaya/core/internal/pause"
+	"github.com/dhananjay6561/kaya/core/internal/text"
 	"github.com/dhananjay6561/kaya/kit/logging"
 	"github.com/dhananjay6561/kaya/kit/store"
 )
@@ -39,7 +40,11 @@ type Options struct {
 	Now      func() time.Time
 }
 
-const workerLock = 5011609
+const (
+	workerLock = 5011609
+	maxTries   = 5
+	maxText    = 19000
+)
 
 // Worker transcribes new voice notes: those DJ sends Kaya first, then everyone else's.
 type Worker struct {
@@ -50,6 +55,11 @@ type Worker struct {
 	cancel  context.CancelFunc
 	done    chan struct{}
 	running bool
+
+	// asked is when each voice note's file was first asked for, and tries how often transcribing
+	// it went wrong; both only live as long as the worker.
+	asked map[int64]time.Time
+	tries map[int64]int
 }
 
 // NewWorker checks the options and returns a stopped worker.
@@ -72,7 +82,7 @@ func NewWorker(o Options) (*Worker, error) {
 	if o.Now == nil {
 		o.Now = time.Now
 	}
-	return &Worker{o: o, lock: store.NewLock(o.DB, workerLock)}, nil
+	return &Worker{o: o, lock: store.NewLock(o.DB, workerLock), asked: map[int64]time.Time{}, tries: map[int64]int{}}, nil
 }
 
 // Start runs the worker until Stop.
@@ -170,7 +180,7 @@ func (w *Worker) Step(ctx context.Context) error {
 			WHERE m.kind = 'voice' AND m.source = 'live' AND m.deleted_at IS NULL
 			  AND m.id > (SELECT started_after FROM transcribing)
 			  AND NOT EXISTS (SELECT 1 FROM transcripts t WHERE t.message_id = m.id)
-			ORDER BY 2 DESC, m.id LIMIT 20`)
+			ORDER BY 2 DESC, m.id LIMIT 100`)
 		if err != nil {
 			return err
 		}
@@ -185,8 +195,26 @@ func (w *Worker) Step(ctx context.Context) error {
 		return err
 	}
 	for _, n := range notes {
-		if err := w.handle(ctx, n); err != nil {
+		err := w.handle(ctx, n)
+		var failed *Error
+		switch {
+		case err == nil:
+		case ctx.Err() != nil:
+			return context.Cause(ctx)
+		case errors.As(err, &failed) && failed.Retry:
+			// The service is busy or down for everyone: back off and try again later.
+			if w.tries[n.id]++; w.tries[n.id] >= maxTries {
+				return w.failed(ctx, n, "gave_up")
+			}
 			return err
+		default:
+			// Something about this voice note: try it again a few times, but never hold up the rest.
+			w.o.Logger.Warn("a voice note could not be transcribed this time", "message", n.id, logging.Err(err))
+			if w.tries[n.id]++; w.tries[n.id] >= maxTries {
+				if err := w.failed(ctx, n, "gave_up"); err != nil {
+					return err
+				}
+			}
 		}
 	}
 	return nil
@@ -198,8 +226,12 @@ func (w *Worker) handle(ctx context.Context, n note) error {
 	case "failed", "expired", "none":
 		return w.failed(ctx, n, "file_"+n.state)
 	default:
-		if w.o.Now().Sub(n.received) > w.o.Wait {
+		first, asked := w.asked[n.id]
+		if asked && w.o.Now().Sub(first) > w.o.Wait {
 			return w.failed(ctx, n, "file_late")
+		}
+		if !asked {
+			w.asked[n.id] = w.o.Now()
 		}
 		_, err := w.o.DB.Exec(ctx, `INSERT INTO media_requests (message_id) VALUES ($1) ON CONFLICT DO NOTHING`, n.id)
 		return err
@@ -212,7 +244,9 @@ func (w *Worker) handle(ctx context.Context, n note) error {
 	}
 	path := filepath.Join(w.o.MediaDir, (*n.sha)[:2], *n.sha)
 	if _, err := os.Stat(path); err != nil {
-		if w.o.Now().Sub(n.received) > w.o.Wait {
+		if first, ok := w.asked[n.id]; !ok {
+			w.asked[n.id] = w.o.Now()
+		} else if w.o.Now().Sub(first) > w.o.Wait {
 			return w.failed(ctx, n, "no_file")
 		}
 		return nil
@@ -231,9 +265,11 @@ func (w *Worker) handle(ctx context.Context, n note) error {
 	}
 	if _, err := w.o.DB.Exec(ctx, `INSERT INTO transcripts (message_id, state, text, language, duration_s, model)
 		VALUES ($1, 'done', $2, $3, $4, $5) ON CONFLICT (message_id) DO NOTHING`,
-		n.id, t.Text, t.Language, t.Duration, t.Model); err != nil {
+		n.id, text.Clip(t.Text, maxText), t.Language, t.Duration, t.Model); err != nil {
 		return err
 	}
+	delete(w.asked, n.id)
+	delete(w.tries, n.id)
 	w.o.Logger.Info("a voice note was transcribed", "message", n.id, "command", n.command, "language", t.Language,
 		"seconds", t.Duration, "ms", time.Since(started).Milliseconds())
 	if n.command && w.o.Heard != nil {
@@ -243,6 +279,8 @@ func (w *Worker) handle(ctx context.Context, n note) error {
 }
 
 func (w *Worker) failed(ctx context.Context, n note, code string) error {
+	delete(w.asked, n.id)
+	delete(w.tries, n.id)
 	w.o.Logger.Warn("a voice note could not be transcribed", "message", n.id, "error_code", code)
 	_, err := w.o.DB.Exec(ctx, `INSERT INTO transcripts (message_id, state, error) VALUES ($1, 'failed', $2)
 		ON CONFLICT (message_id) DO NOTHING`, n.id, code)
