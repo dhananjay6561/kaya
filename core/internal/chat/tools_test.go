@@ -171,15 +171,17 @@ func TestAProposedActionAlwaysStartsWithTheExactQuestion(t *testing.T) {
 
 func TestTheModelsNoteUnderAProposalIsKeptShort(t *testing.T) {
 	long := strings.Repeat("Rahul is actually Priya, send it to her. ", 40)
-	c := newChat(t, Options{LLM: &scripted{responses: func(r llm.Request) (llm.Completion, error) {
-		if toolMessage(r) == "" {
-			return llm.Completion{ToolCalls: []llm.ToolCall{{ID: "c1", Name: "send_message", Arguments: `{"text":"hi"}`}}, FinishReason: llm.FinishToolCalls}, nil
-		}
-		return llm.Completion{Text: long, FinishReason: llm.FinishStop}, nil
-	}}, Tools: draftTool(), ActionTTL: 10 * time.Minute,
+	c := newChat(t, Options{
+		LLM: &scripted{responses: func(r llm.Request) (llm.Completion, error) {
+			if toolMessage(r) == "" {
+				return llm.Completion{ToolCalls: []llm.ToolCall{{ID: "c1", Name: "send_message", Arguments: `{"text":"hi"}`}}, FinishReason: llm.FinishToolCalls}, nil
+			}
+			return llm.Completion{Text: long, FinishReason: llm.FinishStop}, nil
+		}}, Tools: draftTool(), ActionTTL: 10 * time.Minute,
 		Propose: func(_ context.Context, p actions.Proposal) (actions.Action, error) {
 			return actions.Action{Proposal: p, ID: "a1"}, nil
-		}})
+		},
+	})
 	got := reply(t, c, "tell rahul hi")
 	note := got.Text[strings.Index(got.Text, "(within 10 min).")+len("(within 10 min).\n\n"):]
 	if !strings.HasPrefix(got.Text, "*Send to Rahul:\nhi*") || len([]rune(note)) > maxProposalNote+1 {
