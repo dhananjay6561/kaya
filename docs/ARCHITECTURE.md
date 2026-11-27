@@ -432,8 +432,11 @@ Folders appear when a phase needs them; empty placeholders are not committed.
   gateway downloads it under its usual caps; once `stored`, core reads the file by its sha256
   through a read-only mount of the gateway's media folder (`MEDIA_DIR`), sends it to Groq's
   Whisper with a Hinglish hint so Hindi comes back in Latin letters, and keeps the text in
-  `transcripts`. A file that expired, failed, never arrived within 10 minutes, is over 25 MB or was
-  refused by the service gets a failed transcript; a busy service is retried with backoff. The
+  `transcripts` (cut to fit). A file that expired, failed, never arrived within 10 minutes of being
+  asked for, is over 25 MB, was refused by the service, kept failing five times or held no speech
+  (an echo of the hint) gets a failed transcript; a busy service is retried with backoff, and one
+  bad note never holds up the rest. A partial index on live voice messages keeps the worker's scan
+  small. The
   inbox takes a voice note DJ sends his own chat as a command, waits up to two minutes for its
   transcript (the worker wakes it), then hands the transcript on as the command, or a note that it
   could not be heard. Search, tagging and summaries share one rule for a readable message,
