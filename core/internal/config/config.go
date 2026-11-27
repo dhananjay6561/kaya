@@ -55,6 +55,9 @@ type Config struct {
 	TaggingTokensPerDay int
 	// AlertsPerHour is the most alert messages Kaya sends DJ in an hour; 0 turns alerts off.
 	AlertsPerHour int
+	// SendsPerHour is the most messages Kaya sends to other chats for DJ in an hour, each after his
+	// yes; 0 turns sending for him off.
+	SendsPerHour int
 }
 
 // Error lists every problem found in the config. It never includes the values themselves.
@@ -171,6 +174,16 @@ func Load(getenv func(string) string, baseDir string) (Config, error) {
 			fail("ALERTS_PER_HOUR", "must be 0 (off) or a positive whole number")
 		default:
 			cfg.AlertsPerHour = n
+		}
+	}
+	cfg.SendsPerHour = 20
+	if raw := strings.TrimSpace(getenv("SENDS_PER_HOUR")); raw != "" {
+		n, err := strconv.Atoi(raw)
+		switch {
+		case err != nil || n < 0:
+			fail("SENDS_PER_HOUR", "must be 0 (off) or a positive whole number")
+		default:
+			cfg.SendsPerHour = n
 		}
 	}
 	if cfg.LLM.Provider == "groq" && cfg.LLM.Groq.APIKey == "" {

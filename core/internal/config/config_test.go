@@ -64,6 +64,7 @@ func TestDefaults(t *testing.T) {
 		Telephony:           "stub",
 		TaggingTokensPerDay: 100_000,
 		AlertsPerHour:       10,
+		SendsPerHour:        20,
 	}
 	if cfg != want {
 		t.Fatalf("got %+v, want %+v", cfg, want)
@@ -74,11 +75,11 @@ func TestReadsEveryValue(t *testing.T) {
 	cfg := load(t, env(valid,
 		"LOG_LEVEL", "debug", "CORE_PORT", "8080", "LISTEN_HOST", "0.0.0.0", "DATA_DIR", "/srv/kaya",
 		"TIMEZONE", "Asia/Kolkata", "GROQ_MODEL_HEAVY", "heavy", "GROQ_MODEL_ROUTINE", "routine",
-		"GROQ_CONTEXT_TOKENS", "12000", "TAGGING_TOKENS_PER_DAY", "50000", "ALERTS_PER_HOUR", "4",
+		"GROQ_CONTEXT_TOKENS", "12000", "TAGGING_TOKENS_PER_DAY", "50000", "ALERTS_PER_HOUR", "4", "SENDS_PER_HOUR", "3",
 	))
 	if cfg.LogLevel != "debug" || cfg.Port != 8080 || cfg.ListenHost != "0.0.0.0" || cfg.DataDir != "/srv/kaya" ||
 		cfg.TimeZone != "Asia/Kolkata" || cfg.LLM.Groq.HeavyModel != "heavy" ||
-		cfg.LLM.Groq.RoutineModel != "routine" || cfg.LLM.Groq.ContextTokens != 12000 || cfg.TaggingTokensPerDay != 50000 || cfg.AlertsPerHour != 4 {
+		cfg.LLM.Groq.RoutineModel != "routine" || cfg.LLM.Groq.ContextTokens != 12000 || cfg.TaggingTokensPerDay != 50000 || cfg.AlertsPerHour != 4 || cfg.SendsPerHour != 3 {
 		t.Fatalf("not every value was read: %+v", cfg)
 	}
 }
