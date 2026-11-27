@@ -17,6 +17,7 @@ import (
 	"github.com/jackc/pgx/v5"
 
 	"github.com/dhananjay6561/kaya/core/internal/channel"
+	"github.com/dhananjay6561/kaya/core/internal/memory"
 	"github.com/dhananjay6561/kaya/core/internal/pause"
 	"github.com/dhananjay6561/kaya/core/internal/search"
 	"github.com/dhananjay6561/kaya/core/internal/text"
@@ -395,4 +396,51 @@ func format(batch []waiting) string {
 		b.WriteString("\n• " + label(w) + ": " + w.note)
 	}
 	return b.String()
+}
+
+// HeadsUp stands where DJ's question would be for an alert message in the conversation, since
+// Kaya sent it without being asked.
+const HeadsUp = "(Nothing from them here: you sent the heads-up below on your own.)"
+
+// Recent is the alert messages sent since, as exchanges for the conversation, oldest first, at most
+// limit of the newest, so a reply to one ("what did she want?") has it in context.
+func Recent(ctx context.Context, db *store.DB, since time.Time, limit int) ([]memory.Exchange, error) {
+	type row struct {
+		batch string
+		sent  time.Time
+		w     waiting
+	}
+	var rows []row
+	err := db.InTx(ctx, func(tx pgx.Tx) error {
+		r, err := tx.Query(ctx, `WITH recent AS (
+				SELECT batch, max(sent_at) AS sent FROM alerts WHERE sent_at > $1 GROUP BY batch ORDER BY sent DESC LIMIT $2)
+			SELECT a.batch, r.sent, a.id, a.urgent, a.note, `+search.ChatTitleSQL+`, a.task_id IS NOT NULL, a.due_at, a.created_at
+			FROM alerts a JOIN recent r ON r.batch = a.batch
+			LEFT JOIN chats ch ON ch.id = a.chat_id LEFT JOIN contacts cc ON cc.id = ch.contact_id
+			WHERE a.sent_at IS NOT NULL
+			ORDER BY r.sent, a.batch, a.urgent DESC, a.created_at, a.id`, since, limit)
+		if err != nil {
+			return err
+		}
+		rows, err = pgx.CollectRows(r, func(cr pgx.CollectableRow) (row, error) {
+			var x row
+			err := cr.Scan(&x.batch, &x.sent, &x.w.id, &x.w.urgent, &x.w.note, &x.w.chat, &x.w.task, &x.w.due, &x.w.created)
+			return x, err
+		})
+		return err
+	})
+	if err != nil {
+		return nil, err
+	}
+	var out []memory.Exchange
+	for i := 0; i < len(rows); {
+		j := i
+		var batch []waiting
+		for ; j < len(rows) && rows[j].batch == rows[i].batch; j++ {
+			batch = append(batch, rows[j].w)
+		}
+		out = append(out, memory.Exchange{Question: HeadsUp, Answer: format(batch), At: rows[i].sent})
+		i = j
+	}
+	return out, nil
 }
