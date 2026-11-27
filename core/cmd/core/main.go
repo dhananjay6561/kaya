@@ -31,6 +31,7 @@ import (
 	"github.com/dhananjay6561/kaya/core/internal/embeddings"
 	"github.com/dhananjay6561/kaya/core/internal/facts"
 	"github.com/dhananjay6561/kaya/core/internal/gateway"
+	"github.com/dhananjay6561/kaya/core/internal/jobs"
 	"github.com/dhananjay6561/kaya/core/internal/llm"
 	"github.com/dhananjay6561/kaya/core/internal/masking"
 	"github.com/dhananjay6561/kaya/core/internal/memory"
@@ -175,7 +176,11 @@ func run(cfg config.Config, logger *slog.Logger) error {
 		}
 	}
 	actionStore := actions.NewStore(db, time.Now, 10*time.Minute)
-	toolset := []agent.Tool{tools.Clock(zone, time.Now), tools.OpenTasks(tasks, zone, time.Now)}
+	jobStore := jobs.NewStore(db)
+	toolset := []agent.Tool{
+		tools.Clock(zone, time.Now), tools.OpenTasks(tasks, zone, time.Now),
+		tools.SetReminder(jobStore, zone, time.Now), tools.ListReminders(jobStore, zone, time.Now), tools.CancelReminder(jobStore, zone, time.Now),
+	}
 	runner := &actions.Runner{
 		Store: actionStore, Logger: logger, Executors: map[string]actions.Executor{}, MessageID: ownMessageID(db),
 		Judge: actions.NewJudge(model, func() actions.Masker { return masking.NewSession() }, logger),
@@ -205,7 +210,11 @@ func run(cfg config.Config, logger *slog.Logger) error {
 				return nil, err
 			}
 			sent, err := alerts.Recent(ctx, db, time.Now().Add(-12*time.Hour), 5)
-			return memory.Interleave(past, sent), err
+			if err != nil {
+				return nil, err
+			}
+			fired, err := jobs.Recent(ctx, db, time.Now().Add(-12*time.Hour), 5)
+			return memory.Interleave(past, sent, fired), err
 		},
 		Recall: func(ctx context.Context, query string, exclude []int64, before time.Time) ([]memory.Exchange, error) {
 			ctx, cancel := context.WithTimeout(ctx, 5*time.Second)
@@ -243,6 +252,16 @@ func run(cfg config.Config, logger *slog.Logger) error {
 		if err != nil {
 			return err
 		}
+	}
+	scheduler, err := jobs.NewScheduler(jobs.Options{
+		DB: db, Channel: ch, Pause: switches, Logger: logger, Zone: zone,
+		Ask: func(ctx context.Context, text string) (string, error) {
+			answer, err := replies.Reply(ctx, chat.Question{ID: "job", Text: text, SentAt: time.Now()})
+			return answer.Text, err
+		},
+	})
+	if err != nil {
+		return err
 	}
 	stopCommands := commands.Start(commands.Options{
 		Channel: ch,
@@ -286,6 +305,7 @@ func run(cfg config.Config, logger *slog.Logger) error {
 		},
 		DatabaseAway: databaseAway,
 		Alerts:       alertsCommand(alerter, alertSwitch),
+		Jobs:         jobStore,
 		Decide: func(ctx context.Context, m channel.IncomingMessage) (string, bool, error) {
 			return runner.Handle(ctx, m.ID, m.Text)
 		},
@@ -330,6 +350,8 @@ func run(cfg config.Config, logger *slog.Logger) error {
 		alerter.Start()
 		defer alerter.Stop()
 	}
+	scheduler.Start()
+	defer scheduler.Stop()
 
 	ln, err := net.Listen("tcp", net.JoinHostPort(cfg.ListenHost, strconv.Itoa(cfg.Port)))
 	if err != nil {
