@@ -185,36 +185,62 @@ func (s *Scheduler) Step(ctx context.Context) (time.Duration, error) {
 	return min(max(next.Sub(s.o.Now()), 0), s.o.MaxWait), nil
 }
 
-// fire sends one due job, once for its time, and moves it to its next time.
+// fire sends one due job, once for its time, and moves it to its next time. The time is claimed
+// only while the job is still active at it, so a cancel or a change made since the jobs were read
+// wins; an ask job's answer is kept before sending, so a retry sends the same words without asking
+// the model again; a one-off reminder the gateway could not send is tried again five minutes later,
+// up to six times.
 func (s *Scheduler) fire(ctx context.Context, j Job) error {
 	now := s.o.Now()
 	due := j.NextAt
 	late := now.Sub(due)
-	var sent *time.Time
-	if _, err := s.o.DB.Exec(ctx, `INSERT INTO job_runs (job_id, due_at, late) VALUES ($1, $2, $3) ON CONFLICT DO NOTHING`,
-		j.ID, due, late > s.o.Late); err != nil {
+	if _, err := s.o.DB.Exec(ctx, `INSERT INTO job_runs (job_id, due_at, late)
+		SELECT id, next_at, $3 FROM jobs WHERE id = $1 AND next_at = $2 AND state = 'active'
+		ON CONFLICT DO NOTHING`, j.ID, due, late > s.o.Late); err != nil {
 		return err
 	}
-	if err := s.o.DB.QueryRow(ctx, `SELECT sent_at FROM job_runs WHERE job_id = $1 AND due_at = $2`, j.ID, due).Scan(&sent); err != nil {
+	var sent *time.Time
+	var kept *string
+	err := s.o.DB.QueryRow(ctx, `SELECT sent_at, text FROM job_runs WHERE job_id = $1 AND due_at = $2`, j.ID, due).Scan(&sent, &kept)
+	if errors.Is(err, pgx.ErrNoRows) {
+		return nil
+	}
+	if err != nil {
 		return err
+	}
+	if j.Repeat.Kind == Once {
+		var first time.Time
+		if err := s.o.DB.QueryRow(ctx, `SELECT min(due_at) FROM job_runs WHERE job_id = $1`, j.ID).Scan(&first); err != nil {
+			return err
+		}
+		late = now.Sub(first)
 	}
 	switch {
 	case sent != nil:
 	case j.Repeat.Kind != Once && late > s.o.Stale:
 		s.o.Logger.Info("a repeating job was too late to send; it moves on", "job", j.ID, "late_minutes", int(late.Minutes()))
 	default:
-		text := s.message(ctx, j, late > s.o.Late)
+		text := ""
+		if kept != nil {
+			text = *kept
+		} else {
+			text = s.message(ctx, j, late > s.o.Late)
+			if _, err := s.o.DB.Exec(ctx, `UPDATE job_runs SET text = $3 WHERE job_id = $1 AND due_at = $2`, j.ID, due, text); err != nil {
+				return err
+			}
+		}
 		_, err := s.o.Channel.Send(ctx, channel.OutgoingMessage{IdempotencyKey: fmt.Sprintf("job:%d:%d", j.ID, due.Unix()), Text: text},
-			channel.SendOptions{TTL: time.Hour, TextMayChange: true})
+			channel.SendOptions{TTL: 10 * time.Minute})
 		var failed *channel.SendFailedError
 		switch {
+		case errors.As(err, &failed) && j.Repeat.Kind == Once:
+			return s.retry(ctx, j, now, failed.Code)
 		case errors.As(err, &failed):
-			s.o.Logger.Warn("a job's message was not sent", "job", j.ID, "error_code", failed.Code)
+			s.o.Logger.Warn("a job's message was not sent; it moves on", "job", j.ID, "error_code", failed.Code)
 		case err != nil:
 			return err
 		default:
-			if _, err := s.o.DB.Exec(ctx, `UPDATE job_runs SET sent_at = now(), text = $3 WHERE job_id = $1 AND due_at = $2`,
-				j.ID, due, text); err != nil {
+			if _, err := s.o.DB.Exec(ctx, `UPDATE job_runs SET sent_at = now() WHERE job_id = $1 AND due_at = $2`, j.ID, due); err != nil {
 				return err
 			}
 			s.o.Logger.Info("a job fired", "job", j.ID, "ask", j.Ask, "late_seconds", int(late.Seconds()))
@@ -223,11 +249,34 @@ func (s *Scheduler) fire(ctx context.Context, j Job) error {
 	return s.advance(ctx, j, now)
 }
 
-// message is what a job sends: the reminder itself, or for an ask job the chat model's answer.
+// retry tries a one-off reminder the gateway could not send again five minutes later, under a new
+// time and so a new key, up to six tries; then it gives up.
+func (s *Scheduler) retry(ctx context.Context, j Job, now time.Time, code string) error {
+	var tries int
+	if err := s.o.DB.QueryRow(ctx, `SELECT count(*) FROM job_runs WHERE job_id = $1 AND sent_at IS NULL`, j.ID).Scan(&tries); err != nil {
+		return err
+	}
+	if tries >= 6 {
+		s.o.Logger.Error("a reminder could not be sent after six tries; it is given up", "job", j.ID, "error_code", code)
+		_, err := s.o.DB.Exec(ctx, `UPDATE jobs SET state = 'done', next_at = NULL WHERE id = $1 AND next_at = $2`, j.ID, j.NextAt)
+		return err
+	}
+	s.o.Logger.Warn("a reminder was not sent; trying again in five minutes", "job", j.ID, "error_code", code, "tries", tries)
+	_, err := s.o.DB.Exec(ctx, `UPDATE jobs SET next_at = $3 WHERE id = $1 AND next_at = $2 AND state = 'active'`,
+		j.ID, j.NextAt, now.Add(5*time.Minute).Truncate(time.Second))
+	return err
+}
+
+// message is what a job sends: the reminder itself, or for an ask job the chat model's answer. A
+// late one says when it was due; a one-off says the time it was set for, however often retried.
 func (s *Scheduler) message(ctx context.Context, j Job, late bool) string {
 	note := ""
 	if late {
-		note = "\n(It was due at " + j.NextAt.In(s.o.Zone).Format("15:04") + "; I was offline then.)"
+		at := j.NextAt.In(s.o.Zone).Format("15:04")
+		if j.Repeat.Kind == Once {
+			at = j.Clock
+		}
+		note = "\n(It was due at " + at + ".)"
 	}
 	if !j.Ask || s.o.Ask == nil {
 		return "*Reminder:* " + j.Text + note
