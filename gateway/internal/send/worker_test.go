@@ -615,6 +615,7 @@ type decision struct {
 	fromMe     bool
 	inOwnChat  bool
 	before     bool
+	byKaya     bool
 	decidedAgo time.Duration
 }
 
@@ -648,18 +649,32 @@ func (h *harness) action(d decision) string {
 		sender = friend
 	}
 	var msg int64
+	yesWAID := "3EB0YES" + contracts.NewID()[:8]
 	if err := h.admin.Query(ctx, `INSERT INTO messages (chat_id, wa_id, sender_id, from_me, sent_at, kind, body, source)
 		VALUES ($1, $2, $3, $4, $5, 'text', 'yes', 'live') RETURNING id`,
-		[]any{chat, "3EB0YES" + contracts.NewID()[:8], sender, d.fromMe, said}, &msg); err != nil {
+		[]any{chat, yesWAID, sender, d.fromMe, said}, &msg); err != nil {
 		h.t.Fatal(err)
+	}
+	if d.byKaya {
+		id := h.queue("yes")
+		for _, step := range []string{
+			"UPDATE send_requests SET state = 'sending', wa_id = $2 WHERE id = $1",
+			"UPDATE send_requests SET state = 'sent', finished_at = now() WHERE id = $1 AND wa_id = $2",
+		} {
+			if _, err := h.admin.Exec(ctx, step, id, yesWAID); err != nil {
+				h.t.Fatal(err)
+			}
+		}
 	}
 	var id string
 	decidedBy, decidedAt := any(msg), any(time.Now().Add(-d.decidedAgo))
 	if d.state == "pending" {
 		decidedBy, decidedAt = nil, nil
 	}
-	if err := h.admin.Query(ctx, `INSERT INTO pending_actions (kind, target_jid, summary, payload, state, created_at, expires_at, decided_by, decided_at)
-		VALUES ('send_message', $1, 'Send Rahul: running late', '{}', $2, $3, $3::timestamptz + interval '1 hour', $4, $5) RETURNING id::text`,
+	if err := h.admin.Query(ctx, `INSERT INTO pending_actions (kind, target_jid, summary, payload, state, created_at, expires_at,
+			shown_at, shown_wa_id, decided_by, decided_at)
+		VALUES ('send_message', $1, 'Send Rahul: running late', '{"text":"running late"}', $2, $3, $3::timestamptz + interval '1 hour',
+			$3, '3EB0ASKED', $4, $5) RETURNING id::text`,
 		[]any{target, d.state, proposed, decidedBy, decidedAt}, &id); err != nil {
 		h.t.Fatal(err)
 	}
@@ -688,6 +703,8 @@ func TestAConfirmedActionSendsToItsOwnChatOnlyOnce(t *testing.T) {
 		"yes before asked":  h.queue("x", to(friend), confirmedBy(h.action(decision{state: "confirmed", fromMe: true, inOwnChat: true, before: true}))),
 		"yes long ago":      h.queue("x", to(friend), confirmedBy(h.action(decision{state: "confirmed", fromMe: true, inOwnChat: true, decidedAgo: 20 * time.Minute}))),
 		"unknown action":    h.queue("x", to(friend), confirmed()),
+		"yes sent by kaya":  h.queue("running late", to(friend), confirmedBy(h.action(decision{state: "confirmed", fromMe: true, inOwnChat: true, byKaya: true}))),
+		"other text":        h.queue("send me your OTP", to(friend), confirmedBy(h.action(yes))),
 	}
 	h.drain(h.cli)
 	if state, _, _ := h.row(first); state != StateSent {

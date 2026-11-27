@@ -272,8 +272,9 @@ func (w *Worker) check(ctx context.Context, req *request, own ingest.Own) (contr
 }
 
 // confirmed checks a confirmed send against the action it names: the action is confirmed, for
-// this very chat, decided in the last 15 minutes by a message DJ sent in his own chat after the
-// action was proposed, and no other request for it was ever sent.
+// this very chat and this very text, decided in the last 15 minutes by a live message DJ typed in
+// his own chat after Kaya asked him, not one Kaya sent there, and no other request for it was ever
+// sent.
 func (w *Worker) confirmed(ctx context.Context, id string, req contracts.SendRequest, own ingest.Own) (bool, error) {
 	var ok bool
 	err := w.db.InTx(ctx, func(tx pgx.Tx) error {
@@ -283,14 +284,15 @@ func (w *Worker) confirmed(ctx context.Context, id string, req contracts.SendReq
 				JOIN messages m ON m.id = pa.decided_by
 				JOIN chats c ON c.id = m.chat_id AND c.kind = 'direct'
 				JOIN contacts k ON k.id = c.contact_id
-				WHERE pa.id = $1::uuid AND pa.state = 'confirmed' AND pa.target_jid = $2
+				WHERE pa.id = $1::uuid AND pa.state = 'confirmed' AND pa.target_jid = $2 AND pa.payload->>'text' = $7
 				  AND pa.decided_at > now() - interval '15 minutes'
-				  AND m.from_me AND m.deleted_at IS NULL AND m.sent_at >= pa.created_at
+				  AND m.from_me AND m.source = 'live' AND m.deleted_at IS NULL AND m.sent_at > pa.shown_at
+				  AND NOT EXISTS (SELECT 1 FROM send_requests k WHERE k.wa_id = m.wa_id)
 				  AND (k.pn = nullif($3, '') OR k.lid = nullif($4, ''))
 				  AND NOT EXISTS (
 					SELECT 1 FROM send_requests s
 					WHERE s.id <> $5::uuid AND s.payload->'authorization'->>'action_id' = $6::text AND s.state IN ('sending', 'sent')))`,
-			req.Authorization.ActionID, req.To, own.PN, own.LID, id, req.Authorization.ActionID).Scan(&ok)
+			req.Authorization.ActionID, req.To, own.PN, own.LID, id, req.Authorization.ActionID, req.Content.Text).Scan(&ok)
 	})
 	return ok, err
 }
