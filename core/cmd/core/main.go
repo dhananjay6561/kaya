@@ -236,6 +236,7 @@ func run(cfg config.Config, logger *slog.Logger) error {
 		},
 		DatabaseAway:   databaseAway,
 		NewMaskSession: func() chat.MaskSession { return masking.NewSession() },
+		OwnerName:      func(ctx context.Context) (string, error) { return search.OwnerName(ctx, db) },
 		Tools:          registry,
 		Propose:        actionStore.Propose,
 		ActionTTL:      actionStore.TTL(),
