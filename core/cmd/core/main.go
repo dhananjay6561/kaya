@@ -200,7 +200,7 @@ func run(cfg config.Config, logger *slog.Logger) error {
 	if err != nil {
 		return err
 	}
-	replies, err := chat.New(chat.Options{
+	chatOptions := chat.Options{
 		LLM:    model,
 		Logger: logger,
 		Zone:   zone,
@@ -239,7 +239,16 @@ func run(cfg config.Config, logger *slog.Logger) error {
 		Tools:          registry,
 		Propose:        actionStore.Propose,
 		ActionTTL:      actionStore.TTL(),
-	})
+	}
+	replies, err := chat.New(chatOptions)
+	if err != nil {
+		return err
+	}
+	// Scheduled jobs run with no one watching, so they may read and remind but never draft an
+	// action for DJ to confirm.
+	unattended := chatOptions
+	unattended.Propose = nil
+	scheduled, err := chat.New(unattended)
 	if err != nil {
 		return err
 	}
@@ -256,7 +265,7 @@ func run(cfg config.Config, logger *slog.Logger) error {
 	scheduler, err := jobs.NewScheduler(jobs.Options{
 		DB: db, Channel: ch, Pause: switches, Logger: logger, Zone: zone,
 		Ask: func(ctx context.Context, text string) (string, error) {
-			answer, err := replies.Reply(ctx, chat.Question{ID: "job", Text: text, SentAt: time.Now()})
+			answer, err := scheduled.Reply(ctx, chat.Question{ID: "job", Text: text, SentAt: time.Now()})
 			return answer.Text, err
 		},
 	})
