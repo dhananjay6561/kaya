@@ -191,7 +191,8 @@ func (a *Alerter) queueReminders(ctx context.Context, now time.Time) error {
 		rows, err := tx.Query(ctx, `SELECT t.id, t.chat_id, t.title, t.due_at FROM tasks t JOIN messages m ON m.id = t.message_id
 		WHERE t.kind = 'reminder' AND t.state = 'open' AND t.due_has_time AND m.deleted_at IS NULL
 		  AND t.due_at > $1 AND t.due_at <= $2
-		  AND NOT EXISTS (SELECT 1 FROM alerts a WHERE a.task_id = t.id)`, now, now.Add(a.o.Ahead))
+		  AND NOT EXISTS (SELECT 1 FROM alerts a WHERE a.task_id IS NOT NULL AND a.chat_id = t.chat_id AND a.due_at = t.due_at)`,
+			now, now.Add(a.o.Ahead))
 		if err != nil {
 			return err
 		}
@@ -208,33 +209,45 @@ func (a *Alerter) queueReminders(ctx context.Context, now time.Time) error {
 	for _, s := range found {
 		minutes := max(1, int(s.due.Sub(now).Round(time.Minute).Minutes()))
 		note := fmt.Sprintf("In %d min, at %s: %s", minutes, s.due.In(a.o.Zone).Format("15:04"), text.Clip(s.title, 250))
-		if _, err := a.o.DB.Exec(ctx, `INSERT INTO alerts (task_id, chat_id, urgent, note) VALUES ($1, $2, true, $3)
-			ON CONFLICT (task_id) DO NOTHING`, s.id, s.chat, note); err != nil {
+		if _, err := a.o.DB.Exec(ctx, `INSERT INTO alerts (task_id, due_at, chat_id, urgent, note) VALUES ($1, $2, $3, true, $4)
+			ON CONFLICT DO NOTHING`, s.id, s.due, s.chat, note); err != nil {
 			return err
 		}
 	}
 	return nil
 }
 
-// tidy passes over waiting alerts that no longer matter: DJ has written in that chat since, the
-// message was deleted, the task was closed or its time has passed, or the alert is too old.
+// answered is true when DJ has written back since message m: in a direct chat any message of his,
+// in a group a reply to that message or its sender, or anything within ten minutes of it.
+const answered = `EXISTS (SELECT 1 FROM messages r JOIN chats c ON c.id = r.chat_id
+	WHERE r.chat_id = m.chat_id AND r.from_me AND r.deleted_at IS NULL AND r.sent_at > m.sent_at
+	  AND (c.kind <> 'group' OR r.reply_to_wa_id = m.wa_id OR r.reply_to_sender_id = m.sender_id
+	       OR r.sent_at <= m.sent_at + interval '10 minutes'))`
+
+// tidy passes over alerts that no longer matter: DJ has written back since, the message was
+// deleted or is too old, the reminder was closed, moved, deleted or has come, or the alert waited
+// too long. A batch given a key but never sent is passed over too once it is too old.
 func (a *Alerter) tidy(ctx context.Context, now time.Time) error {
+	old := now.Add(-a.o.MaxAge)
 	_, err := a.o.DB.Exec(ctx, `UPDATE alerts a SET skipped = CASE
 			WHEN m.deleted_at IS NOT NULL THEN 'deleted'
-			WHEN EXISTS (SELECT 1 FROM messages r WHERE r.chat_id = a.chat_id AND r.from_me AND r.sent_at > m.sent_at) THEN 'answered'
+			WHEN `+answered+` THEN 'answered'
 			ELSE 'stale' END
 		FROM messages m
-		WHERE a.message_id = m.id AND a.sent_at IS NULL AND a.batch IS NULL AND a.skipped IS NULL AND (
-		  m.deleted_at IS NOT NULL OR a.created_at < $1
-		  OR EXISTS (SELECT 1 FROM messages r WHERE r.chat_id = a.chat_id AND r.from_me AND r.sent_at > m.sent_at))`,
-		now.Add(-a.o.MaxAge))
+		WHERE a.message_id = m.id AND a.sent_at IS NULL AND a.skipped IS NULL
+		  AND (a.batch IS NULL OR a.created_at < $1)
+		  AND (m.deleted_at IS NOT NULL OR a.created_at < $1 OR m.sent_at < $1 OR (a.batch IS NULL AND `+answered+`))`, old)
 	if err != nil {
 		return err
 	}
-	_, err = a.o.DB.Exec(ctx, `UPDATE alerts a SET skipped = CASE WHEN t.state <> 'open' THEN 'done' ELSE 'late' END
-		FROM tasks t
-		WHERE a.task_id = t.id AND a.sent_at IS NULL AND a.batch IS NULL AND a.skipped IS NULL
-		  AND (t.state <> 'open' OR t.due_at IS NULL OR t.due_at <= $1)`, now)
+	_, err = a.o.DB.Exec(ctx, `UPDATE alerts a SET skipped = CASE
+			WHEN t.id IS NULL THEN 'gone'
+			WHEN t.state <> 'open' THEN 'done'
+			WHEN t.due_at IS DISTINCT FROM a.due_at THEN 'moved'
+			ELSE 'late' END
+		FROM alerts x LEFT JOIN tasks t ON t.id = x.task_id
+		WHERE x.id = a.id AND a.task_id IS NOT NULL AND a.sent_at IS NULL AND a.skipped IS NULL
+		  AND (t.id IS NULL OR t.state <> 'open' OR t.due_at IS DISTINCT FROM a.due_at OR a.due_at <= $1)`, now)
 	return err
 }
 
@@ -244,11 +257,13 @@ type waiting struct {
 	note    string
 	chat    string
 	task    bool
+	due     *time.Time
 	created time.Time
 }
 
 // send sends a batch cut off earlier under its own key, or else the waiting alerts once one is
-// urgent or has waited Gather, within PerHour messages an hour.
+// urgent or has waited Gather. Past PerHour messages in the last hour only reminders go out, since
+// they cannot wait.
 func (a *Alerter) send(ctx context.Context, now time.Time) error {
 	key, batch, err := a.unfinished(ctx)
 	if err != nil {
@@ -259,10 +274,11 @@ func (a *Alerter) send(ctx context.Context, now time.Time) error {
 		if err := a.o.DB.QueryRow(ctx, `SELECT count(DISTINCT batch) FROM alerts WHERE sent_at > $1`, now.Add(-time.Hour)).Scan(&sent); err != nil {
 			return err
 		}
+		condition := "a.batch IS NULL AND a.sent_at IS NULL AND a.skipped IS NULL"
 		if sent >= a.o.PerHour {
-			return nil
+			condition += " AND a.task_id IS NOT NULL"
 		}
-		all, err := a.read(ctx, "a.batch IS NULL AND a.sent_at IS NULL AND a.skipped IS NULL")
+		all, err := a.read(ctx, condition)
 		if err != nil || len(all) == 0 {
 			return err
 		}
@@ -273,29 +289,40 @@ func (a *Alerter) send(ctx context.Context, now time.Time) error {
 		if !due {
 			return nil
 		}
-		batch = all[:min(len(all), perSend)]
-		ids := make([]string, len(batch))
-		for i, w := range batch {
+		picked := all[:min(len(all), perSend)]
+		ids := make([]string, len(picked))
+		for i, w := range picked {
 			ids[i] = strconv.FormatInt(w.id, 10)
 		}
 		sum := sha256.Sum256([]byte(strings.Join(ids, ",")))
 		key = "alerts-" + hex.EncodeToString(sum[:12])
-		if _, err := a.o.DB.Exec(ctx, `UPDATE alerts SET batch = $1 WHERE id = ANY($2) AND batch IS NULL`, key, idsOf(batch)); err != nil {
+		if _, err := a.o.DB.Exec(ctx, `UPDATE alerts SET batch = $1 WHERE id = ANY($2) AND batch IS NULL AND skipped IS NULL AND sent_at IS NULL`,
+			key, idsOf(picked)); err != nil {
+			return err
+		}
+		if batch, err = a.read(ctx, "a.batch = $1 AND a.sent_at IS NULL AND a.skipped IS NULL", key); err != nil || len(batch) == 0 {
 			return err
 		}
 	}
+	ttl := sendTTL
+	for _, w := range batch {
+		if w.due != nil {
+			ttl = min(ttl, max(w.due.Sub(now), time.Minute))
+		}
+	}
 	_, err = a.o.Channel.Send(ctx, channel.OutgoingMessage{IdempotencyKey: key, Text: format(batch)},
-		channel.SendOptions{TTL: sendTTL, TextMayChange: true})
+		channel.SendOptions{TTL: ttl, TextMayChange: true})
 	var failed *channel.SendFailedError
 	switch {
-	case errors.As(err, &failed) && (failed.Code == "expired" || failed.Code == "no_answer"):
-		a.o.Logger.Warn("an alert message was never sent; its alerts are passed over", "alerts", len(batch), "error_code", failed.Code)
-		_, err = a.o.DB.Exec(ctx, `UPDATE alerts SET skipped = 'not_sent' WHERE batch = $1 AND sent_at IS NULL`, key)
+	case errors.As(err, &failed):
+		a.o.Logger.Warn("an alert message was not sent; its alerts are passed over", "alerts", len(batch), "error_code", failed.Code)
+		_, err = a.o.DB.Exec(ctx, `UPDATE alerts SET skipped = $2 WHERE batch = $1 AND sent_at IS NULL AND skipped IS NULL`,
+			key, "send_"+failed.Code)
 		return err
 	case err != nil:
 		return err
 	}
-	if _, err := a.o.DB.Exec(ctx, `UPDATE alerts SET sent_at = now() WHERE batch = $1 AND sent_at IS NULL`, key); err != nil {
+	if _, err := a.o.DB.Exec(ctx, `UPDATE alerts SET sent_at = now() WHERE batch = $1 AND sent_at IS NULL AND skipped IS NULL`, key); err != nil {
 		return err
 	}
 	urgent := 0
@@ -326,7 +353,7 @@ func (a *Alerter) unfinished(ctx context.Context) (string, []waiting, error) {
 func (a *Alerter) read(ctx context.Context, condition string, args ...any) ([]waiting, error) {
 	var out []waiting
 	err := a.o.DB.InTx(ctx, func(tx pgx.Tx) error {
-		rows, err := tx.Query(ctx, `SELECT a.id, a.urgent, a.note, `+search.ChatTitleSQL+`, a.task_id IS NOT NULL, a.created_at
+		rows, err := tx.Query(ctx, `SELECT a.id, a.urgent, a.note, `+search.ChatTitleSQL+`, a.task_id IS NOT NULL, a.due_at, a.created_at
 		FROM alerts a LEFT JOIN chats ch ON ch.id = a.chat_id LEFT JOIN contacts cc ON cc.id = ch.contact_id
 		WHERE `+condition+` ORDER BY a.urgent DESC, a.created_at, a.id`, args...)
 		if err != nil {
@@ -334,7 +361,7 @@ func (a *Alerter) read(ctx context.Context, condition string, args ...any) ([]wa
 		}
 		out, err = pgx.CollectRows(rows, func(row pgx.CollectableRow) (waiting, error) {
 			var w waiting
-			err := row.Scan(&w.id, &w.urgent, &w.note, &w.chat, &w.task, &w.created)
+			err := row.Scan(&w.id, &w.urgent, &w.note, &w.chat, &w.task, &w.due, &w.created)
 			return w, err
 		})
 		return err
@@ -350,16 +377,17 @@ func idsOf(batch []waiting) []int64 {
 	return ids
 }
 
-// format writes alerts as one WhatsApp message: urgent ones first, each with the chat it came from.
+// format writes alerts as one WhatsApp message, urgent ones first: each says which chat it is about,
+// so a note always reads as Kaya's summary of someone else's message.
 func format(batch []waiting) string {
 	label := func(w waiting) string {
 		if w.task {
 			return "Reminder"
 		}
-		return text.Clip(w.chat, 60)
+		return "From " + text.Clip(w.chat, 60)
 	}
 	if len(batch) == 1 {
-		return "*Heads up* (" + label(batch[0]) + ")\n" + batch[0].note
+		return "*Heads up*\n" + label(batch[0]) + ": " + batch[0].note
 	}
 	var b strings.Builder
 	b.WriteString("*Heads up*")
