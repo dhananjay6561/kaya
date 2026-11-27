@@ -34,6 +34,8 @@ type Options struct {
 	// Summary answers /summary: of today when chat is empty, else of the chat it names; nil answers
 	// with a notice.
 	Summary func(ctx context.Context, chat string) (string, error)
+	// Alerts switches alerts for /alerts; nil answers it with a notice.
+	Alerts AlertSwitch
 	// Zone is DJ's time zone, for the dates replies show; nil means UTC.
 	Zone *time.Location
 	Chat func(ctx context.Context, m channel.IncomingMessage) (ChatAnswer, error)
