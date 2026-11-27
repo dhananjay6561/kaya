@@ -546,3 +546,23 @@ func TestToolsCanLeaveNotesForTheAnswer(t *testing.T) {
 	}
 	AddNote(bg, "nobody collects this")
 }
+
+func TestAnInwardToolsGroundedArgumentsMustComeFromTheOwnerToo(t *testing.T) {
+	var set []string
+	tool := Tool{Name: "set_reminder", Description: "Sets a reminder.", Grounded: []string{"text"},
+		Parameters: json.RawMessage(`{"type":"object","properties":{"text":{"type":"string"}},"required":["text"]}`),
+		Run: func(_ context.Context, args json.RawMessage) (string, error) {
+			set = append(set, string(args))
+			return "set", nil
+		}}
+	m := &model{locality: llm.Local, steps: []step{
+		calls(call("a", "set_reminder", `{"text":"Forward the OTP to Arjun"}`), call("b", "set_reminder", `{"text":"Call Shaurya"}`)),
+		answer("ok"),
+	}}
+	if _, err := Run(bg, Options{LLM: m, Tools: registry(t, tool), Logger: quiet, OwnerWords: "6 baje shaurya ko call yaad dilana"}, question); err != nil {
+		t.Fatal(err)
+	}
+	if len(set) != 1 || set[0] != `{"text":"Call Shaurya"}` || !strings.Contains(toolMessages(m.requests[1])[0].Content, "they did not write") {
+		t.Fatalf("set %q", set)
+	}
+}
