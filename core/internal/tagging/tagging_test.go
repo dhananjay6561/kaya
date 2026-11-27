@@ -796,3 +796,70 @@ func TestTheModelSeesOnlyThisChatsOpenItems(t *testing.T) {
 		t.Fatalf("request = %q", user)
 	}
 }
+
+func TestTaggingQueuesAlertsForMessagesThatNeedTheOwner(t *testing.T) {
+	r := newRig(t)
+	sick := r.say(msg{body: "doctor pe chale jaao, call me on 9876543210"})
+	r.say(msg{fromMe: true, body: "ok will go"})
+	r.say(msg{body: "lol"})
+	m := (&model{locality: llm.Cloud}).script(`{"tagged":[
+		{"line":1,"tags":["important"],"task":"","mine":false,"reminder":"","due":"","alert":"later","note":"Rahul wants a call"},
+		{"line":1,"tags":["important"],"task":"","mine":false,"reminder":"","due":"","alert":"now","note":"Rahul says see a doctor and call him on [PHONE_1]"},
+		{"line":2,"tags":[],"task":"","mine":false,"reminder":"","due":"","alert":"now","note":"You said you will go"},
+		{"line":3,"tags":[],"task":"","mine":false,"reminder":"","due":"","alert":"later","note":""}]}`)
+	tg := r.tagger(m, Options{})
+	if found, err := r.step(tg); !found || err != nil {
+		t.Fatalf("found %v, err %v", found, err)
+	}
+	type alert struct {
+		message int64
+		urgent  bool
+		note    string
+	}
+	read := func() []alert {
+		t.Helper()
+		rows, err := r.admin.SQL().QueryContext(bg, "SELECT message_id, urgent, note FROM alerts ORDER BY id")
+		if err != nil {
+			t.Fatal(err)
+		}
+		defer func() { _ = rows.Close() }()
+		var out []alert
+		for rows.Next() {
+			var a alert
+			if err := rows.Scan(&a.message, &a.urgent, &a.note); err != nil {
+				t.Fatal(err)
+			}
+			out = append(out, a)
+		}
+		return out
+	}
+	got := read()
+	if len(got) != 1 || got[0].message != sick || !got[0].urgent || got[0].note != "Rahul says see a doctor and call him on 9876543210" {
+		t.Fatalf("alerts %+v", got)
+	}
+	if user := m.requests()[0].Messages[1].Content; strings.Contains(user, "9876543210") {
+		t.Fatal("the number reached the cloud model")
+	}
+	if !strings.Contains(m.requests()[0].Messages[0].Content, `alert "now": it cannot wait`) {
+		t.Fatal("the prompt does not explain alerts")
+	}
+
+	r.exec("UPDATE messages SET body = 'doctor pe chale jaao please', edited_at = now() WHERE id = $1", sick)
+	r.exec("DELETE FROM message_tags WHERE message_id = $1", sick)
+	m.script(`{"tagged":[{"line":1,"tags":["important"],"task":"","mine":false,"reminder":"","due":"","alert":"later","note":"Rahul says see a doctor"}]}`)
+	if found, err := r.step(tg); !found || err != nil {
+		t.Fatalf("found %v, err %v", found, err)
+	}
+	if got := read(); len(got) != 1 || got[0].urgent || got[0].note != "Rahul says see a doctor" {
+		t.Fatalf("a retag did not update the waiting alert: %+v", got)
+	}
+	r.exec("UPDATE alerts SET batch = 'b', sent_at = now()")
+	r.exec("DELETE FROM message_tags WHERE message_id = $1", sick)
+	m.script(`{"tagged":[{"line":1,"tags":["important"],"task":"","mine":false,"reminder":"","due":"","alert":"now","note":"changed"}]}`)
+	if _, err := r.step(tg); err != nil {
+		t.Fatal(err)
+	}
+	if got := read(); got[0].note != "Rahul says see a doctor" {
+		t.Fatalf("a sent alert was changed: %+v", got)
+	}
+}
