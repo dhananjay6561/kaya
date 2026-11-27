@@ -68,6 +68,15 @@ func TestTheClockConvertsAGivenTimeWithDaylightSaving(t *testing.T) {
 		!strings.Contains(got, "America/New_York: Sun 8 Mar 2026, 03:30 (UTC-04:00), 9h30m behind the owner") {
 		t.Fatalf("got %s, %v", got, err)
 	}
+	got, err = run(t, c, `{"zones":["UTC"],"at":"2026-11-01 01:30","from":"America/New_York"}`)
+	if err != nil || !strings.Contains(got, "happens twice there when the clocks go back, so it is taken the first time, UTC-04:00") ||
+		!strings.Contains(got, "UTC: Sun 1 Nov 2026, 05:30 (UTC+00:00)") {
+		t.Fatalf("got %s, %v", got, err)
+	}
+	got, err = run(t, c, `{"zones":["UTC"],"at":"2026-11-01 03:30","from":"America/New_York"}`)
+	if err != nil || strings.Contains(got, "twice") || !strings.Contains(got, "UTC: Sun 1 Nov 2026, 08:30") {
+		t.Fatalf("got %s, %v", got, err)
+	}
 	got, err = run(t, c, `{"zones":["UTC"],"at":"2026-11-27 18:00"}`)
 	if err != nil || !strings.Contains(got, "Converting 2026-11-27 18:00 in Asia/Kolkata.") || !strings.Contains(got, "UTC: Fri 27 Nov 2026, 12:30 (UTC+00:00), 5h30m behind") {
 		t.Fatalf("got %s, %v", got, err)
