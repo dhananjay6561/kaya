@@ -407,3 +407,30 @@ func TestInAGroupOnlyAReplyToItCountsAsAnswered(t *testing.T) {
 		t.Fatalf("a reply did not answer it: %v, sent %q", s, r.texts())
 	}
 }
+
+func TestRecentAlertsJoinTheConversationAsTheyWereSent(t *testing.T) {
+	r := newRig(t)
+	a := r.alerter(Options{})
+	r.alert(r.priyasChat, true, "Priya needs the rent money today")
+	r.step(a)
+	r.alert(r.office, true, "Standup moved to 11")
+	r.alert(r.priyasChat, true, "Priya asks about dinner")
+	r.step(a)
+	r.alert(r.office, true, "too old to show")
+	r.step(a)
+	r.exec("UPDATE alerts SET sent_at = now() - interval '13 hours' WHERE note = 'too old to show'")
+	got, err := Recent(bg, r.core, time.Now().Add(-12*time.Hour), 5)
+	if err != nil {
+		t.Fatal(err)
+	}
+	want := []string{
+		"*Heads up*\nFrom Priya: Priya needs the rent money today",
+		"*Heads up*\n• From Office Team: Standup moved to 11\n• From Priya: Priya asks about dinner",
+	}
+	if len(got) != 2 || got[0].Answer != want[0] || got[1].Answer != want[1] || got[0].Question != HeadsUp || got[1].At.Before(got[0].At) {
+		t.Fatalf("got %+v", got)
+	}
+	if only, _ := Recent(bg, r.core, time.Now().Add(-12*time.Hour), 1); len(only) != 1 || only[0].Answer != want[1] {
+		t.Fatalf("the limit did not keep the newest: %+v", only)
+	}
+}
