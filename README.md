@@ -69,8 +69,9 @@ contact, and it works with everything your WhatsApp account can see.
   downloaded only when asked for (`make media id=...`), with a size cap and an hourly cap.
 - **Events to the agent, sends through the gateway.** Core reads every gateway event in order from
   a Postgres queue, one transaction per event. To send, it queues a request; the gateway checks
-  that the request is allowed, sends it at most once, and reports the outcome. For now the only
-  chat Kaya may write to is your own (`make send text="hello"`).
+  that the request is allowed, sends it at most once, and reports the outcome. Kaya writes to
+  your own chat (`make send text="hello"`), and to anyone else only for an action you said yes to,
+  which the gateway checks for itself.
 - **A command channel in your own chat.** What you type in "Message yourself" is a command; every
   other message in every other chat is only data. Kaya tells its own replies from your messages, so
   it never answers itself, and it does not act on a command it only gets to minutes late.
@@ -150,6 +151,12 @@ contact, and it works with everything your WhatsApp account can see.
   `ALERTS_PER_HOUR` caps the messages (10 by default, reminders always go), and `/alerts off` and
   `/alerts on` switch them. Alerts from the last 12 hours are part of your conversation with Kaya,
   so a reply like "what did she want?" or "remind me later" knows which one you mean.
+- **Messages sent for you, only after your yes.** "Tell Rahul I'll be late" or "office group mein
+  bol do standup 11 baje" makes Kaya draft the message, find the contact or group by name, and show
+  you exactly what will be sent and to whom; it goes out only if you reply yes (or haan, ok, bhej
+  do) within 10 minutes, and no or nahi cancels it. Anything longer than a yes or no is just a new
+  message, so "yes but at 7" never sends. The gateway sends it only if your yes is in your own
+  chat, after Kaya asked, for that same chat, and only once; `SENDS_PER_HOUR` (20) caps them.
 - **Least-privilege database logins.** The gateway and core each have their own Postgres role.
   Core, the part that will talk to an LLM, can read chats but cannot see the WhatsApp session, its
   encryption keys, or the keys needed to fetch media.
@@ -167,7 +174,6 @@ In build order. Status for each stage is in the [roadmap](#project-status-and-ro
 
 - Confirm-before-act for anything that acts for you, a prompt-injection guard and usage tracking
 - Voice-note transcription, so spoken commands and voice notes become searchable
-- Sending messages to contacts and groups for you, only after you say yes
 - Web search with SearXNG, reading pages, and research answers with links
 - Gmail, Google Calendar and Google Drive
 - PPT and PDF decks made from a topic or a chat, uploaded to Drive, with the link sent back
@@ -492,6 +498,17 @@ erDiagram
         timestamptz sent_at
         text skipped "answered, deleted, stale, off"
     }
+    pending_actions {
+        uuid id PK
+        text kind "send_message"
+        text target_jid "the chat it writes to"
+        text summary "what DJ was asked"
+        jsonb payload
+        text state "pending, confirmed, declined, expired, superseded, done, failed"
+        timestamptz expires_at "10 minutes"
+        bigint decided_by "DJ's yes or no, no FK"
+        text result
+    }
     alerting {
         smallint id PK "always one row"
         boolean enabled "/alerts on, /alerts off"
@@ -534,7 +551,8 @@ learned from his exchanges; `fact_learning` is how far the learner has read them
 transaction as the facts each exchange gave. `message_tags` has a row for every new message tagging
 has read, `tasks` the tasks and reminders it found, and `tagging` where it started and what it spent
 today. `alerts` are heads-ups for DJ: a message tagging found needs him, or a reminder coming up;
-`alerting` is the `/alerts` switch. `pause_state` holds `/pause`. `gateway_events` and
+`alerting` is the `/alerts` switch. `pending_actions` holds what Kaya would do outside your own chat
+until you say yes or no. `pause_state` holds `/pause`. `gateway_events` and
 `send_requests` are the queues between the services; handled and finished rows are deleted after 7
 days.*
 
@@ -566,7 +584,7 @@ kaya/
 │                       llm (Groq, stub, o200k token counter), memory, chat, masking, text,
 │                       embeddings (Voyage, stub), search (index, search, excerpts), facts,
 │                       tagging (tags and tasks), summary, agent (tool registry and loop), tools,
-│                       alerts
+│                       alerts, actions (confirm-before-act)
 ├── gateway/            Go WhatsApp gateway (its own Go module)
 │   ├── cmd/gateway/    main package: serve, pair, media, healthcheck
 │   └── internal/       config, whatsapp, ingest, events, send, media, testdb
@@ -773,9 +791,9 @@ Status key: ✅ done · 🟨 in progress · ⬜ not started
 | 1. WhatsApp gateway | Contracts, pairing, live ingest, history sync, media, connection health, delivery to core and sending. Checked end to end against a real WhatsApp account. | ✅ |
 | 2. Talking to Kaya | Self-chat command channel and built-in commands `/help`, `/status`, `/pause`, `/resume`. Checked on a real account. | ✅ |
 | 3. Brain | Groq replies, lasting conversation memory, masking for cloud models, embeddings, search, answers from your chats, facts about you, tags and tasks, summaries (built) | 🟨 |
-| 4. Agent loop and safety | Tool calling (built), confirm-before-act, prompt-injection guard, usage tracking | 🟨 |
+| 4. Agent loop and safety | Tool calling, confirm-before-act and alerts (built), prompt-injection guard, usage tracking | 🟨 |
 | 5. Voice notes | Transcription, spoken commands | ⬜ |
-| 6. Sending as you | Messages to contacts and groups after confirmation, with rate limits | ⬜ |
+| 6. Sending as you | Messages to contacts and groups after confirmation, with rate limits (built); auto-reply in chosen chats | 🟨 |
 | 7. Web | Search, page reading, research answers with sources | ⬜ |
 | 8. Google | OAuth, Drive, Gmail, Calendar | ⬜ |
 | 9. Documents | PPT and PDF from a topic or chat, uploaded to Drive | ⬜ |
