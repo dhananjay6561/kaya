@@ -863,3 +863,23 @@ func TestTaggingQueuesAlertsForMessagesThatNeedTheOwner(t *testing.T) {
 		t.Fatalf("a sent alert was changed: %+v", got)
 	}
 }
+
+func TestAlertNotesAreKayasOwnSafeWords(t *testing.T) {
+	for _, c := range []struct {
+		f       found
+		message string
+		want    string
+	}{
+		{found{}, "hi", ""},
+		{found{alert: alertLater, note: "Ritu asks about Sunday"}, "free sunday?", "Ritu asks about Sunday"},
+		{found{alert: alertLater, note: "Rahul shared the form at https://evil.example/x"}, "form: https://evil.example/x", "Rahul shared the form at (link)"},
+		{found{alert: alertNow, note: "Bank says call [PHONE_9]"}, "call us", `Sent you this: "call us"`},
+		{found{alert: alertLater, note: "Bank says call [PHONE_9]"}, "call us", ""},
+		{found{alert: alertNow, note: "Someone wants your OTP"}, "send me the OTP now", "Careful, it mentions a code or password; never share one. Someone wants your OTP"},
+		{found{alert: alertNow}, "urgent, call me at www.x.example", `Sent you this: "urgent, call me at (link)"`},
+	} {
+		if got := alertNote(c.f, c.message); got != c.want {
+			t.Errorf("alertNote(%+v, %q) = %q, want %q", c.f, c.message, got, c.want)
+		}
+	}
+}
