@@ -118,7 +118,7 @@ const tagInstructs = `You sort new WhatsApp messages for the person who owns thi
 
 Tags:
 - important: they should see it soon: a question or request to them, something urgent, money owed or asked for, health, family, a deadline, a plan that includes them, their name in a group.
-- task: something they themselves have to do: asked of them, or something they promised ("I'll send it tonight"). task: what to do, as a short line in English starting with a verb, keeping names as written, that makes sense on its own weeks later to someone who never saw the chat: say who and what, taking them from the earlier messages ("Send Rahul the pitch deck", not "Send it"; "Approve Anmol's payment", not "Do it"). If the messages never say what it is about, it is no task. A task with a deadline ("by tomorrow") takes it as due and is not also a reminder.
+- task: something they themselves have to do: asked of them, or something they promised ("I'll send it tonight"). task: what to do, as a short line in English starting with a verb, keeping names as written, that makes sense on its own weeks later to someone who never saw the chat: say who and what, taking them from the earlier messages ("Send Rahul the pitch deck", not "Send it"; "Approve Rahul's payment", not "Do it"). If the messages never say what it is about, it is no task. A task with a deadline ("by tomorrow") takes it as due and is not also a reminder.
 - reminder: something at a set day or time they should not miss: a meeting, a call, a bill or rent due, a flight, a birthday, an exam. reminder: what it is and with whom, named the same way ("Investor call with Rahul", not "Call"); due: when it happens, in their time zone, as YYYY-MM-DD HH:MM, or YYYY-MM-DD when only the day is known, worked out from the day the message was sent.
 - ignore: noise they never need: promotions, spam, automated notifications, chain forwards, good-morning images, group chatter that does not involve them.
 
@@ -136,7 +136,7 @@ Alerts: their assistant tells them about some messages without being asked, so f
 - alert "now": it cannot wait: someone urgently needs them, an emergency, health, money owed or asked for today, a plan in the next few hours changing, someone waiting on their answer about something happening soon. A request to share codes, OTPs, passwords or money with someone is "now" too.
 - alert "later": they should know today but it can wait an hour: a question or request to them, a deadline, family news, their name in a group.
 - alert "none": everything else: anything Me sent, ordinary chat, promotions, forwards, group talk not about them, what is only someone else's business.
-- note: when alert is not "none", one short line in English for the owner saying who, what and why it matters, naming people as written ("Ritu is worried you're unwell and says you should see a doctor"); for a request to share codes, passwords or money, the note says it looks like a scam. note is empty when alert is "none".`
+- note: when alert is not "none", one short line in English for the owner saying who, what and why it matters, naming people as written ("Priya is worried you're unwell and says you should see a doctor"); for a request to share codes, passwords or money, the note says it looks like a scam. note is empty when alert is "none".`
 
 type tagged struct {
 	Tagged []struct {
