@@ -20,6 +20,7 @@ import (
 
 	"github.com/dhananjay6561/kaya/contracts"
 	"github.com/dhananjay6561/kaya/core/internal/agent"
+	"github.com/dhananjay6561/kaya/core/internal/alerts"
 	"github.com/dhananjay6561/kaya/core/internal/channel"
 	"github.com/dhananjay6561/kaya/core/internal/chat"
 	"github.com/dhananjay6561/kaya/core/internal/commands"
@@ -216,6 +217,16 @@ func run(cfg config.Config, logger *slog.Logger) error {
 	if err != nil {
 		return err
 	}
+	alertSwitch := alerts.NewSwitch(db)
+	var alerter *alerts.Alerter
+	if cfg.AlertsPerHour > 0 {
+		alerter, err = alerts.New(alerts.Options{
+			DB: db, Channel: ch, Pause: switches, Logger: logger, Zone: zone, PerHour: cfg.AlertsPerHour,
+		})
+		if err != nil {
+			return err
+		}
+	}
 	stopCommands := commands.Start(commands.Options{
 		Channel: ch,
 		Logger:  logger,
@@ -236,7 +247,8 @@ func run(cfg config.Config, logger *slog.Logger) error {
 					p, err := indexer.Progress(ctx)
 					return p.Indexed, p.Skipped, p.Total, err
 				},
-				Facts: factStore.Count,
+				Facts:  factStore.Count,
+				Alerts: alertsStatus(alerter, alertSwitch),
 				Tagging: func(ctx context.Context) (int, int, error) {
 					open, err := tasks.CountOpen(ctx)
 					if err != nil || tagger == nil {
@@ -256,6 +268,7 @@ func run(cfg config.Config, logger *slog.Logger) error {
 			return commands.ChatAnswer{Text: answer.Text, Remember: answer.Remember}, err
 		},
 		DatabaseAway: databaseAway,
+		Alerts:       alertsCommand(alerter, alertSwitch),
 	})
 	defer stopCommands()
 
@@ -282,6 +295,10 @@ func run(cfg config.Config, logger *slog.Logger) error {
 	if tagger != nil {
 		tagger.Start()
 		defer tagger.Stop()
+	}
+	if alerter != nil {
+		alerter.Start()
+		defer alerter.Stop()
 	}
 
 	ln, err := net.Listen("tcp", net.JoinHostPort(cfg.ListenHost, strconv.Itoa(cfg.Port)))
@@ -406,4 +423,27 @@ func healthcheck() error {
 	ctx, cancel := context.WithTimeout(context.Background(), 4*time.Second)
 	defer cancel()
 	return httpapi.Check(ctx, "http://"+net.JoinHostPort("127.0.0.1", port)+"/health")
+}
+
+// alertsCommand is the switch /alerts uses, or nil when ALERTS_PER_HOUR turned alerts off.
+func alertsCommand(alerter *alerts.Alerter, sw *alerts.Switch) commands.AlertSwitch {
+	if alerter == nil {
+		return nil
+	}
+	return sw
+}
+
+// alertsStatus reports alerts for /status, or nil to leave the line out when they are turned off.
+func alertsStatus(alerter *alerts.Alerter, sw *alerts.Switch) func(context.Context) (bool, int, error) {
+	if alerter == nil {
+		return nil
+	}
+	return func(ctx context.Context) (bool, int, error) {
+		on, err := sw.Enabled(ctx)
+		if err != nil {
+			return false, 0, err
+		}
+		waiting, err := sw.Waiting(ctx)
+		return on, waiting, err
+	}
 }
