@@ -159,7 +159,7 @@ func run(cfg config.Config, logger *slog.Logger) error {
 	if err != nil {
 		return err
 	}
-	tasks := tagging.NewTasks(db)
+	tasks := tagging.NewTasks(db, time.Now)
 	var tagger *tagging.Tagger
 	if cfg.TaggingTokensPerDay > 0 {
 		tagger, err = tagging.New(tagging.Options{

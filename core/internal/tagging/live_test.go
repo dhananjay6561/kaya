@@ -48,7 +48,7 @@ func TestLiveTagging(t *testing.T) {
 	}
 	got := strings.Join(r.tags(), "\n")
 	t.Logf("tags:\n%s", got)
-	open, err := NewTasks(r.core).Open(bg, 20)
+	open, err := NewTasks(r.core, nil).Open(bg, 20)
 	if err != nil {
 		t.Fatal(err)
 	}
