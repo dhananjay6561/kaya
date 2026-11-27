@@ -402,10 +402,13 @@ Folders appear when a phase needs them; empty placeholders are not committed.
   and 4 am, that "tomorrow" most likely means the day just begun. One scheduler in core, under its
   own advisory lock, sleeps until the soonest `next_at` (at most an hour) and wakes at once on
   `NOTIFY jobs`, which a trigger sends on every change; due jobs fire once per due time (a
-  `job_runs` row is the key, the send key is `job:<id>:<due>`), a plain reminder without any model
-  call and an ask job through the chat model; one more than two minutes late says it was due
-  earlier and Kaya was offline, a repeating one more than 12 hours late is passed over, and missed
-  times are skipped as the job moves to its next one. Paused, it waits. The last 5 fired messages
+  `job_runs` row, claimed only while the job is still active at that time, is the key; the send key
+  is `job:<id>:<due>`), a plain reminder without any model call and an ask job through a chat that
+  cannot draft actions, its answer kept before sending so a retry never asks the model again; one
+  more than two minutes late says when it was due, a repeating one more than 12 hours late is
+  passed over, missed times are skipped as the job moves on, and a one-off the gateway refused is
+  tried again five minutes later, up to six times. A reminder's text must share a word with what DJ
+  wrote, like a send's recipient, so a chat excerpt cannot set one. Paused, it waits. The last 5 fired messages
   of 12 hours join the conversation like alerts, so "10 min baad" works; `/jobs` and `/cancel`
   list and stop them. Answers that are mostly not words are never shown, and invisible format
   characters are dropped from every answer.
