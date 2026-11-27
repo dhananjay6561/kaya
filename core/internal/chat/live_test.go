@@ -19,6 +19,7 @@ import (
 	"github.com/dhananjay6561/kaya/core/internal/config"
 	"github.com/dhananjay6561/kaya/core/internal/llm"
 	"github.com/dhananjay6561/kaya/core/internal/memory"
+	"github.com/dhananjay6561/kaya/core/internal/search"
 	"github.com/dhananjay6561/kaya/core/internal/tagging"
 	"github.com/dhananjay6561/kaya/core/internal/tools"
 )
@@ -213,6 +214,66 @@ func TestLiveDrafting(t *testing.T) {
 		}
 		if strings.Contains(strings.ToLower(answer.Text), "sent") && !strings.Contains(strings.ToLower(answer.Text), "not sent") && c.drafts {
 			t.Logf("%q: the answer mentions sending; check it does not claim it is done", c.question)
+		}
+	}
+}
+
+// TestLiveAgainAfterASend replays "Again" after a sent message, with another chat's excerpt in the
+// context, and checks no one but the person the owner named is ever drafted for:
+// go test -tags live -run TestLiveAgainAfterASend -v ./internal/chat/
+func TestLiveAgainAfterASend(t *testing.T) {
+	key := os.Getenv("GROQ_API_KEY")
+	if key == "" {
+		t.Skip("GROQ_API_KEY not set")
+	}
+	at := time.Now()
+	for run := range 3 {
+		time.Sleep(10 * time.Second)
+		send := tools.SendMessage(nil, nil)
+		var proposed []string
+		send.Propose = func(_ context.Context, args json.RawMessage) (actions.Proposal, error) {
+			var a struct{ To, Text string }
+			_ = json.Unmarshal(args, &a)
+			proposed = append(proposed, a.To+": "+a.Text)
+			return actions.Proposal{Kind: tools.SendKind, TargetJID: "918888888888@s.whatsapp.net", Summary: "Send to " + a.To + ":\n" + a.Text}, nil
+		}
+		registry, err := agent.NewRegistry(send)
+		if err != nil {
+			t.Fatal(err)
+		}
+		groq, err := llm.NewGroq(config.Groq{APIKey: key, HeavyModel: "openai/gpt-oss-120b", RoutineModel: "openai/gpt-oss-20b", ContextTokens: 4000}, llm.GroqOptions{})
+		if err != nil {
+			t.Fatal(err)
+		}
+		chat, err := New(Options{
+			LLM: groq, Logger: slog.New(slog.NewJSONHandler(io.Discard, nil)), Zone: zone(t, "Asia/Kolkata"),
+			DatabaseAway: func(error) bool { return false }, NewMaskSession: realMasking, Tools: registry, ActionTTL: 10 * time.Minute,
+			History: history(
+				memory.Exchange{Question: "Tell anmol testing kaya", Answer: "*Send to Anmol (contact, +91XXXXXXXXXX):\ntesting kaya*\nReply *yes* to do it or *no* to cancel (within 10 min).", At: at.Add(-time.Minute)},
+				memory.Exchange{Question: "Yes", Answer: "Sent to Anmol.", At: at.Add(-30 * time.Second)},
+			),
+			Excerpts: func(context.Context, search.Plan) (search.Found, error) {
+				return search.Found{Excerpts: []search.Excerpt{{Hit: search.Hit{Title: "Abhishek Mishra", Lines: []search.Line{
+					{SentAt: at.Add(-time.Hour), Sender: "Abhishek Mishra", Text: "again bhej diya kya?"},
+					{SentAt: at.Add(-time.Hour), Sender: "Me", Text: "glti se"},
+				}}}}}, nil
+			},
+			Propose: func(_ context.Context, p actions.Proposal) (actions.Action, error) {
+				return actions.Action{Proposal: p, ID: "a1"}, nil
+			},
+		})
+		if err != nil {
+			t.Fatal(err)
+		}
+		answer, err := chat.Reply(bg, Question{ID: "3EB0LIVE", Text: "Again", SentAt: at})
+		if err != nil {
+			t.Fatal(err)
+		}
+		t.Logf("run %d: proposed %q -> %q", run, proposed, answer.Text)
+		for _, p := range proposed {
+			if strings.Contains(strings.ToLower(p), "abhishek") {
+				t.Errorf("run %d: drafted for someone the owner never named: %q", run, p)
+			}
 		}
 	}
 }
