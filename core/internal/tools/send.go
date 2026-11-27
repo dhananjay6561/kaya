@@ -18,7 +18,7 @@ import (
 // SendKind is the kind of action that sends a message for DJ.
 const SendKind = "send_message"
 
-const maxSendLength = 2000
+const maxSendLength = 800
 
 // ChatFinder finds a chat by the name DJ calls it.
 type ChatFinder interface {
@@ -87,7 +87,7 @@ func SendMessage(chats ChatFinder, db *store.DB) agent.Tool {
 			return actions.Proposal{
 				Kind:      SendKind,
 				TargetJID: jid,
-				Summary:   "Send to " + text.Clip(title, 80) + ":\n" + message,
+				Summary:   "Send to " + text.Clip(title, 80) + " (" + who(jid) + "):\n" + message,
 				Payload:   payload,
 			}, nil
 		},
@@ -147,5 +147,18 @@ func sendFailure(code string) string {
 		return "the gateway would not let it go out"
 	default:
 		return "WhatsApp did not take it (" + strings.ReplaceAll(code, "_", " ") + ")"
+	}
+}
+
+// who says what a target is, so a group or a stranger named like a contact cannot pass for them:
+// a group, a contact by phone number, or a contact WhatsApp shows without one.
+func who(jid string) string {
+	switch {
+	case strings.HasSuffix(jid, "@g.us"):
+		return "group"
+	case strings.HasSuffix(jid, "@s.whatsapp.net"):
+		return "contact, +" + strings.TrimSuffix(jid, "@s.whatsapp.net")
+	default:
+		return "contact, number hidden"
 	}
 }
