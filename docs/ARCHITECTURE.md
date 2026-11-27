@@ -33,6 +33,8 @@ kaya/
 │       ├── llm/            the Provider interface, Groq, the stub; o200k/ counts gpt-oss tokens
 │       ├── memory/         the conversation (exchanges) and the context package
 │       ├── chat/           system prompt, replies, WhatsApp formatting
+│       ├── agent/          tool calling: the registry of tools and the loop that runs their calls
+│       ├── tools/          the tools the chat model can call (world_clock, open_tasks)
 │       ├── embeddings/     the embeddings Provider interface, Voyage, the stub
 │       ├── search/         the index (chunks and the indexer that keeps them embedded) and search:
 │       │                   meaning and words fused, filters, recall of older exchanges
@@ -307,6 +309,21 @@ Folders appear when a phase needs them; empty placeholders are not committed.
   `search.Prepare` and fitted into at most 3,000 tokens round by round, each chat's newest line
   first, so every chat is heard from; they go to the heavy model with the name DJ goes by, so a request to him reads as his; the answer has placeholders
   put back, is formatted for WhatsApp and clipped, and says how many older messages did not fit.
+- **Tools.** The chat model is offered tools with every question (`agent.Registry`: a name, a
+  description and a JSON Schema of the arguments each; a tool that acts outward is refused until
+  confirm-before-act exists). `agent.Run` asks the model, runs the calls it makes and asks again
+  with the results until it answers without one: at most 3 rounds of calls and 4 calls a round, then
+  any further call is answered "not run" for one last round, and a model still calling after that
+  gets a canned reply that is not remembered. Calls are run in order, each with a 10-second timeout.
+  Arguments are checked against the tool's schema while still masked, so an error names only what
+  the model wrote, then have placeholders put back before the tool runs; every result and error is
+  cut to 500 tokens and masked with the question's mask session. A tool's own `agent.Problem` is
+  told to the model; any other failure is told only as a failure and logged; a database outage
+  fails the question like any other read; a call Groq could not read (`tool_use_failed`) is asked
+  again once. The tools' schemas are counted against the context budget, so the first request stays
+  within it; results can take later rounds past it. Only the answer joins the conversation, not the
+  calls. Today's tools only read: `world_clock` (the time in IANA zones, now or at a given time, and
+  how far each is from DJ's zone) and `open_tasks` (what `/tasks` shows, task text marked as data).
 - **History sync.** Each history chunk WhatsApp announces becomes a row in `history_jobs`, stored
   in the transaction that acknowledges the announcement. A single worker downloads the chunk,
   stores it in batches of at most 200 messages (a savepoint per message, so one bad message
