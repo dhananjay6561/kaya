@@ -38,6 +38,7 @@ kaya/
 │       ├── alerts/         heads-ups in DJ's own chat: the alerter and the /alerts switch
 │       ├── actions/        confirm-before-act: pending actions, DJ's yes or no, running them
 │       ├── jobs/           reminders and scheduled jobs: the schedule maths, the store, the scheduler
+│       ├── voice/          voice notes: the Groq speech client and the transcribing worker
 │       ├── embeddings/     the embeddings Provider interface, Voyage, the stub
 │       ├── search/         the index (chunks and the indexer that keeps them embedded) and search:
 │       │                   meaning and words fused, filters, recall of older exchanges
@@ -191,7 +192,8 @@ Folders appear when a phase needs them; empty placeholders are not committed.
   `tasks` and `tagging` (tags on new messages, the tasks they gave, and tagging's state),
   `alerts` and `alerting` (heads-ups for DJ and the `/alerts` switch), `pending_actions` (what
   Kaya would do elsewhere, waiting for DJ's yes; the gateway may only read it), `jobs` and
-  `job_runs` (reminders and scheduled jobs, and each time one fired), `pause_state`, and
+  `job_runs` (reminders and scheduled jobs, and each time one fired), `transcripts` and
+  `transcribing` (what voice notes said, and where transcribing started), `pause_state`, and
   the search index, `chunks` and `message_chunks`; later tasks, jobs, pending actions and usage. Core's tables point at messages by id or WhatsApp
   id, never by foreign key, because the chat tables belong to the gateway.
 - **Media.** A media message gets a `media` row (what the file is, and whether it is `remote`,
@@ -423,6 +425,19 @@ Folders appear when a phase needs them; empty placeholders are not committed.
   of 12 hours join the conversation like alerts, so "10 min baad" works; DJ lists and stops them by
   asking, through the same tools. Answers that are mostly not words are never shown, and invisible format
   characters are dropped from every answer.
+- **Voice notes.** One worker in core, under its own advisory lock, every 3 seconds while not
+  paused, takes new live voice notes stored after `transcribing.started_after` that have no
+  transcript, DJ's own commands first: for one whose file is still `remote` it adds a
+  `media_requests` row (core's only write to the gateway's media tables, a column grant), so the
+  gateway downloads it under its usual caps; once `stored`, core reads the file by its sha256
+  through a read-only mount of the gateway's media folder (`MEDIA_DIR`), sends it to Groq's
+  Whisper with a Hinglish hint so Hindi comes back in Latin letters, and keeps the text in
+  `transcripts`. A file that expired, failed, never arrived within 10 minutes, is over 25 MB or was
+  refused by the service gets a failed transcript; a busy service is retried with backoff. The
+  inbox takes a voice note DJ sends his own chat as a command, waits up to two minutes for its
+  transcript (the worker wakes it), then hands the transcript on as the command, or a note that it
+  could not be heard. Search, tagging and summaries share one rule for a readable message,
+  `search.Readable`, under which a voice note with a transcript counts and reads "(voice note) …".
 - **History sync.** Each history chunk WhatsApp announces becomes a row in `history_jobs`, stored
   in the transaction that acknowledges the announcement. A single worker downloads the chunk,
   stores it in batches of at most 200 messages (a savepoint per message, so one bad message
