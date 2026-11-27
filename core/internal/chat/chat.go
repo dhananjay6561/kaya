@@ -9,6 +9,7 @@ import (
 	"time"
 	"unicode/utf8"
 
+	"github.com/dhananjay6561/kaya/core/internal/actions"
 	"github.com/dhananjay6561/kaya/core/internal/agent"
 	"github.com/dhananjay6561/kaya/core/internal/llm"
 	"github.com/dhananjay6561/kaya/core/internal/memory"
@@ -68,7 +69,11 @@ type Options struct {
 	NewMaskSession func() MaskSession
 	// Tools are offered to the model with every question; nil means none. A tool error that
 	// DatabaseAway recognises fails the question like a History error does.
-	Tools          *agent.Registry
+	Tools *agent.Registry
+	// Propose stores an action an outward tool proposes, which waits ActionTTL for DJ's yes; nil
+	// refuses outward tools.
+	Propose        func(ctx context.Context, p actions.Proposal) (actions.Action, error)
+	ActionTTL      time.Duration
 	Now            func() time.Time
 	MaxReplyLength int
 }
@@ -144,6 +149,7 @@ func (c *Chat) Reply(ctx context.Context, q Question) (Answer, error) {
 		}
 		return in
 	}
+	var proposed *actions.Action
 	ask := func(history, recalled []memory.Exchange, effort llm.Effort) (llm.Completion, error) {
 		built := memory.Build(input(history, recalled))
 		started := time.Now()
@@ -151,6 +157,9 @@ func (c *Chat) Reply(ctx context.Context, q Question) (Answer, error) {
 			Tier: llm.Heavy, Effort: effort, MaxTokens: maxAnswerTokens, Messages: built.Messages,
 		}, privacy)
 		completion := res.Completion
+		if res.Proposed != nil {
+			proposed = res.Proposed
+		}
 		if err != nil {
 			return completion, err
 		}
@@ -255,9 +264,13 @@ func (c *Chat) Reply(ctx context.Context, q Question) (Answer, error) {
 	}
 	if errors.Is(err, agent.ErrTooManyRounds) {
 		o.Logger.Warn("the model kept calling tools; giving up on the question")
-		return Answer{Text: goingInCircles}, nil
+		return c.withProposal(Answer{Text: goingInCircles}, proposed), nil
 	}
 	if err != nil {
+		if proposed != nil && ctx.Err() == nil && (o.DatabaseAway == nil || !o.DatabaseAway(err)) {
+			o.Logger.Warn("the model failed after proposing an action; asking the owner anyway", "action", proposed.ID)
+			return c.withProposal(Answer{Text: "I drafted this but could not finish my answer."}, proposed), nil
+		}
 		return Answer{}, err
 	}
 
@@ -272,16 +285,16 @@ func (c *Chat) Reply(ctx context.Context, q Question) (Answer, error) {
 	ranOut := completion.FinishReason == llm.FinishLength
 	if answer == "" {
 		if ranOut {
-			return Answer{Text: "I ran out of room before I could answer. Try a narrower question."}, nil
+			return c.withProposal(Answer{Text: "I ran out of room before I could answer. Try a narrower question."}, proposed), nil
 		}
-		return Answer{Text: "I had no answer to that. Try asking another way."}, nil
+		return c.withProposal(Answer{Text: "I had no answer to that. Try asking another way."}, proposed), nil
 	}
 	cut := utf8.RuneCountInString(answer) > o.MaxReplyLength
 	answer = ClipTo(answer, o.MaxReplyLength)
 	if ranOut || cut {
 		answer += cutShort
 	}
-	return Answer{Text: answer, Remember: true}, nil
+	return c.withProposal(Answer{Text: answer, Remember: true}, proposed), nil
 }
 
 // excerpts renders the passages Excerpts finds, masked for a cloud model with the question's mask
@@ -381,7 +394,19 @@ func (c *Chat) complete(ctx context.Context, r llm.Request, privacy MaskSession)
 		hide = privacy
 	}
 	return agent.Run(ctx, agent.Options{
-		LLM: c.o.LLM, Tools: c.o.Tools, Logger: c.o.Logger, Privacy: hide, Budget: c.o.LLM.ContextTokens(),
+		LLM: c.o.LLM, Tools: c.o.Tools, Logger: c.o.Logger, Privacy: hide, Budget: c.o.LLM.ContextTokens(), Propose: c.o.Propose,
 		Fatal: func(err error) bool { return c.o.DatabaseAway != nil && c.o.DatabaseAway(err) },
 	}, r)
+}
+
+// withProposal puts the exact question for DJ under an answer that proposed an action, whatever
+// the model wrote, so he never says yes to something he did not see; the answer is then always
+// remembered, so his yes or no makes sense in the conversation.
+func (c *Chat) withProposal(a Answer, proposed *actions.Action) Answer {
+	if proposed == nil {
+		return a
+	}
+	a.Text = strings.TrimSpace(a.Text) + "\n\n" + actions.ConfirmLine(*proposed, c.o.ActionTTL)
+	a.Remember = true
+	return a
 }
