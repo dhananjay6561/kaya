@@ -10,7 +10,6 @@ import (
 	"time"
 
 	"github.com/dhananjay6561/kaya/core/internal/llm"
-	"github.com/dhananjay6561/kaya/core/internal/memory"
 	"github.com/dhananjay6561/kaya/kit/logging"
 )
 
@@ -32,8 +31,9 @@ type Options struct {
 	// Fatal says whether a tool's error must fail the whole question, such as the database being
 	// away; any other error is reported to the model.
 	Fatal func(err error) bool
-	// MaxRounds is how many replies with tool calls are run; the model then has one more to
-	// answer. Zero means 3.
+	// MaxRounds is how many replies with tool calls are run. Calls in the reply after those are
+	// answered "not run", and a model that calls again after that fails the run, so there are at
+	// most MaxRounds+2 requests. Zero means 3.
 	MaxRounds int
 	// MaxCalls is how many calls of one reply are run. Zero means 4.
 	MaxCalls int
@@ -41,6 +41,10 @@ type Options struct {
 	ToolTimeout time.Duration
 	// ResultTokens is the most one result may take; a longer one is shortened. Zero means 500.
 	ResultTokens int
+	// Budget is the most tokens a request may carry, the tools' schemas included: results share
+	// what the request leaves, and a call with too little room is not run (its short note may go a
+	// few tokens past). Zero means no limit beyond ResultTokens.
+	Budget int
 }
 
 // Outcomes of a call.
@@ -60,7 +64,7 @@ type Call struct {
 }
 
 // Result is the model's answer once it stopped calling tools, with what the calls and every
-// round cost.
+// round cost. Rounds counts the replies with calls, the one answered "not run" included.
 type Result struct {
 	Completion llm.Completion
 	Calls      []Call
@@ -73,7 +77,10 @@ var ErrTooManyRounds = errors.New("the model kept calling tools after it was tol
 
 const (
 	limitReached = "Not run: no more tools can be used for this message. Answer with what you have."
+	noRoom       = "Not run: there is no room left for more tool results. Answer with what you have."
 	nothing      = "(nothing)"
+	// minResult is the least room worth running a tool for.
+	minResult = 40
 )
 
 func (o *Options) defaults() error {
@@ -110,6 +117,7 @@ func Run(ctx context.Context, o Options, r llm.Request) (Result, error) {
 	}
 	r.Tools = o.Tools.Specs()
 	r.Messages = append([]llm.Message(nil), r.Messages...)
+	specs := o.Tools.Tokens(o.LLM.CountTokens)
 	var res Result
 	retried := false
 	for round := 0; ; round++ {
@@ -138,14 +146,17 @@ func Run(ctx context.Context, o Options, r llm.Request) (Result, error) {
 		for i, call := range c.ToolCalls {
 			var content string
 			var done Call
+			limit := o.room(r.Messages, specs, len(c.ToolCalls)-i)
 			switch {
 			case round == o.MaxRounds:
 				content, done = limitReached, Call{Tool: call.Name, Outcome: NotRun}
 			case i >= o.MaxCalls:
 				content = fmt.Sprintf("Not run: at most %d tools can be called at once.", o.MaxCalls)
 				done = Call{Tool: call.Name, Outcome: NotRun}
+			case limit < minResult:
+				content, done = noRoom, Call{Tool: call.Name, Outcome: NotRun}
 			default:
-				if content, done, err = o.run(ctx, call); err != nil {
+				if content, done, err = o.run(ctx, call, limit); err != nil {
 					return res, err
 				}
 			}
@@ -158,17 +169,17 @@ func Run(ctx context.Context, o Options, r llm.Request) (Result, error) {
 
 // run runs one call and returns what the model is told. It fails only when ctx ends or the tool's
 // error is fatal.
-func (o *Options) run(ctx context.Context, call llm.ToolCall) (string, Call, error) {
+func (o *Options) run(ctx context.Context, call llm.ToolCall, limit int) (string, Call, error) {
 	done := Call{Tool: call.Name}
 	tool, ok := o.Tools.tools[call.Name]
 	if !ok {
 		done.Outcome = Unknown
-		return o.out("Error: there is no tool named "+quoted(call.Name)+". The tools are "+strings.Join(o.Tools.Names(), ", ")+".", call), done, nil
+		return o.out("Error: there is no tool named "+quoted(call.Name)+". The tools are "+strings.Join(o.Tools.Names(), ", ")+".", call, limit), done, nil
 	}
 	args, problem := o.Tools.check(call.Name, call.Arguments)
 	if problem != "" {
 		done.Outcome = BadArguments
-		return o.out("Error: "+problem+".", call), done, nil
+		return o.out("Error: "+problem+".", call, limit), done, nil
 	}
 	raw, err := json.Marshal(o.restore(args))
 	if err != nil {
@@ -193,7 +204,7 @@ func (o *Options) run(ctx context.Context, call llm.ToolCall) (string, Call, err
 		o.Logger.Warn("a tool failed", "tool", call.Name, logging.Err(err))
 		done.Outcome, text = Failed, "Error: the tool failed."
 	}
-	return o.out(text, call), done, nil
+	return o.out(text, call, limit), done, nil
 }
 
 func (o *Options) call(ctx context.Context, tool Tool, args json.RawMessage) (text string, err error) {
@@ -207,16 +218,59 @@ func (o *Options) call(ctx context.Context, tool Tool, args json.RawMessage) (te
 	return tool.Run(ctx, args)
 }
 
-// out shortens a result to its share of the context and masks it for a cloud model.
-func (o *Options) out(text string, call llm.ToolCall) string {
+// room is how many tokens the next result may take: its share of what the request leaves, the
+// calls still to answer counted, and never more than ResultTokens.
+func (o *Options) room(messages []llm.Message, specs, calls int) int {
+	if o.Budget == 0 {
+		return o.ResultTokens
+	}
+	used := specs
+	for _, m := range messages {
+		used += o.LLM.CountTokens(m.Content)
+		for _, c := range m.ToolCalls {
+			used += o.LLM.CountTokens(c.Name + c.Arguments)
+		}
+	}
+	return min(o.ResultTokens, (o.Budget-used)/max(calls, 1))
+}
+
+// out masks a result for a cloud model, then fits it to limit tokens, so a cut never splits a
+// private detail. Results are masked as if a code were mentioned, since a task or a message in
+// one may hold a bare code.
+func (o *Options) out(text string, call llm.ToolCall, limit int) string {
 	if strings.TrimSpace(text) == "" {
 		return nothing
 	}
-	text = memory.Shorten(text, o.ResultTokens, o.LLM.CountTokens)
 	if o.Privacy != nil {
-		text = o.Privacy.Mask(text, call.Arguments)
+		text = o.Privacy.Mask(text, call.Arguments+"\notp")
 	}
-	return text
+	return fit(text, limit, o.LLM.CountTokens)
+}
+
+// fit keeps whole lines from the top while they fit limit tokens and says how many were left out;
+// when even the first does not fit, it is cut short, never inside a [PLACEHOLDER].
+func fit(text string, limit int, count func(string) int) string {
+	if count(text) <= limit {
+		return text
+	}
+	lines := strings.Split(text, "\n")
+	for keep := len(lines) - 1; keep > 0; keep-- {
+		out := strings.Join(lines[:keep], "\n") + fmt.Sprintf("\n(%d more lines cut to fit.)", len(lines)-keep)
+		if count(out) <= limit {
+			return out
+		}
+	}
+	first := []rune(lines[0])
+	for n := len(first); n > 0; n = n * 4 / 5 {
+		head := string(first[:n])
+		if open := strings.LastIndexByte(head, '['); open > strings.LastIndexByte(head, ']') {
+			head = head[:open]
+		}
+		if out := strings.TrimRight(head, " ") + " … (cut to fit.)"; count(out) <= limit {
+			return out
+		}
+	}
+	return "(too long to show.)"
 }
 
 // restore puts private details back into every string of the arguments the model wrote.
