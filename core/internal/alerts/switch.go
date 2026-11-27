@@ -26,7 +26,7 @@ func (s *Switch) Set(ctx context.Context, on bool) (bool, error) {
 	if err != nil || changed == 0 || on {
 		return err == nil && changed > 0, err
 	}
-	_, err = s.db.Exec(ctx, "UPDATE alerts SET skipped = 'off' WHERE sent_at IS NULL AND batch IS NULL AND skipped IS NULL")
+	_, err = s.db.Exec(ctx, "UPDATE alerts SET skipped = 'off' WHERE sent_at IS NULL AND skipped IS NULL")
 	return true, err
 }
 
