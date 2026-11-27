@@ -78,7 +78,7 @@ contact, and it works with everything your WhatsApp account can see.
   `/pause` stops every answer until `/resume`. The pause is kept in the database, so it holds
   across restarts, and while paused Kaya still answers its slash commands. `/facts`, `/remember`
   and `/forget` show and change what Kaya knows about you; `/tasks` and `/done` show and close
-  the tasks found in your chats; `/summary` sums up today or one chat.
+  the tasks found in your chats; `/summary` sums up today or one chat; `/alerts` switches alerts.
 - **Answers from Groq, with lasting memory.** Anything else you type in your own chat is answered by
   Groq's `openai/gpt-oss-120b`, in your language and style, with today's date in your time zone.
   Kaya builds the context itself: facts about you, your conversation with it (kept for good) and
@@ -141,6 +141,13 @@ contact, and it works with everything your WhatsApp account can see.
   are checked against each tool's schema, results are masked before the model reads them, a few
   rounds is the limit, and for now every tool only reads; anything that acts for you will wait for
   your "yes".
+- **Alerts.** Kaya keeps reading your chats and messages you in your own chat when something needs
+  you: someone waiting on your answer, money, health, family, a plan changing, a deadline, or a
+  message asking for an OTP or money that looks like a scam. Urgent ones come at once; the rest are
+  gathered into one message within 45 minutes. Reminders get a heads-up 30 minutes before their
+  time. Nothing is sent once you have replied in that chat or the message was deleted, there are no
+  quiet hours, `ALERTS_PER_HOUR` caps the messages (10 by default), and `/alerts off` and
+  `/alerts on` switch them.
 - **Least-privilege database logins.** The gateway and core each have their own Postgres role.
   Core, the part that will talk to an LLM, can read chats but cannot see the WhatsApp session, its
   encryption keys, or the keys needed to fetch media.
@@ -398,6 +405,8 @@ erDiagram
     exchanges ||..o| fact_learning : "read up to"
     messages ||..o| message_tags : "is tagged in, no FK"
     messages ||..o{ tasks : "gave, no FK"
+    messages ||..o| alerts : "needs DJ, no FK"
+    tasks ||..o| alerts : "comes up in, no FK"
 
     commands {
         bigint id PK
@@ -470,6 +479,21 @@ erDiagram
         date usage_day
         int usage_tokens "spent today"
     }
+    alerts {
+        bigint id PK
+        bigint message_id UK "or task_id"
+        bigint task_id UK "a reminder coming up"
+        bigint chat_id
+        boolean urgent "sent at once"
+        text note "one line for DJ"
+        text batch "the message it goes out in"
+        timestamptz sent_at
+        text skipped "answered, deleted, stale, off"
+    }
+    alerting {
+        smallint id PK "always one row"
+        boolean enabled "/alerts on, /alerts off"
+    }
     pause_state {
         boolean only_row PK "always one row"
         timestamptz paused_at "null while running"
@@ -507,7 +531,8 @@ question and answer, kept for good. `facts` is what Kaya knows about DJ, told wi
 learned from his exchanges; `fact_learning` is how far the learner has read them, moved in the same
 transaction as the facts each exchange gave. `message_tags` has a row for every new message tagging
 has read, `tasks` the tasks and reminders it found, and `tagging` where it started and what it spent
-today. `pause_state` holds `/pause`. `gateway_events` and
+today. `alerts` are heads-ups for DJ: a message tagging found needs him, or a reminder coming up;
+`alerting` is the `/alerts` switch. `pause_state` holds `/pause`. `gateway_events` and
 `send_requests` are the queues between the services; handled and finished rows are deleted after 7
 days.*
 
@@ -538,7 +563,8 @@ kaya/
 │   └── internal/       config, gateway (events), channel (inbox, sends), commands, pause, status,
 │                       llm (Groq, stub, o200k token counter), memory, chat, masking, text,
 │                       embeddings (Voyage, stub), search (index, search, excerpts), facts,
-│                       tagging (tags and tasks), summary, agent (tool registry and loop), tools
+│                       tagging (tags and tasks), summary, agent (tool registry and loop), tools,
+│                       alerts
 ├── gateway/            Go WhatsApp gateway (its own Go module)
 │   ├── cmd/gateway/    main package: serve, pair, media, healthcheck
 │   └── internal/       config, whatsapp, ingest, events, send, media, testdb
