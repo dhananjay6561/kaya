@@ -547,6 +547,7 @@ func TestSendsTheTypeScriptCoresTexts(t *testing.T) {
 		llm.TooLong:       "That is too long for the AI service. Try a shorter message.",
 		llm.Misconfigured: "The AI service does not know a model I am set to use. Check GROQ_MODEL_HEAVY and GROQ_MODEL_ROUTINE.",
 		llm.Rejected:      "The AI service turned this message down. Try asking another way.",
+		llm.BadToolCall:   "I fumbled one of my tools answering that. Try asking again.",
 		llm.Timeout:       "The AI service is not answering right now. Try again in a bit.",
 	} {
 		if got := failureNotice(&llm.Error{Provider: "groq", Code: code}); got != want {
