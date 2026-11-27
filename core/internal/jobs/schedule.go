@@ -114,8 +114,9 @@ func Next(due time.Time, clock string, r Repeat, zone *time.Location) (time.Time
 	return next, nil
 }
 
-// weekStart is the Sunday that starts d's week.
-func weekStart(d time.Time) time.Time { return d.AddDate(0, 0, -int(d.Weekday())) }
+// weekStart is the Monday that starts d's week, so a Saturday and the Sunday after it are one
+// weekend in the same week.
+func weekStart(d time.Time) time.Time { return d.AddDate(0, 0, -(int(d.Weekday())+6)%7) }
 
 // Describe says when a job fires and how it repeats, the way DJ reads it.
 func Describe(at time.Time, r Repeat, zone *time.Location, now time.Time) string {
@@ -152,7 +153,11 @@ func Describe(at time.Time, r Repeat, zone *time.Location, now time.Time) string
 		out += ", then " + unit("month", "months")
 	}
 	if !r.Until.IsZero() && r.Kind != Once {
-		out += " until " + r.Until.Format("2 Jan")
+		layout := "2 Jan"
+		if r.Until.Year() != now.In(zone).Year() {
+			layout = "2 Jan 2006"
+		}
+		out += " until " + r.Until.Format(layout)
 	}
 	return out
 }
