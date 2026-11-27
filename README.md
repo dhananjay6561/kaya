@@ -154,9 +154,11 @@ contact, and it works with everything your WhatsApp account can see.
 - **Messages sent for you, only after your yes.** "Tell Rahul I'll be late" or "office group mein
   bol do standup 11 baje" makes Kaya draft the message, find the contact or group by name, and put
   exactly what will be sent and to whom (a group, or a contact with their number) at the top of her
-  reply; it goes out only if you reply yes (or haan, ok, bhej do) within 10 minutes, after that
-  question and before anything else from Kaya, and no or nahi cancels it. Anything longer than a yes
-  or no is just a new message, so "yes but at 7" never sends. The gateway sends it only if your yes
+  reply; it goes out only if you say yes, however you put it ("Yess", "haan bhej de yaar", 👍),
+  within 10 minutes, after that question and before anything else from Kaya. A no in any words
+  cancels it, a change ("haan but say 7 pm") gets a new draft, and anything else is just a new
+  message, while the draft keeps waiting. A small model reads only your reply and the draft, never
+  anyone else's messages, and when it can't tell, nothing is sent. The gateway sends it only if your yes
   is in your own chat, after Kaya asked, for that same chat and that same text, and only once;
   `SENDS_PER_HOUR` (20) caps them.
 - **Least-privilege database logins.** The gateway and core each have their own Postgres role.

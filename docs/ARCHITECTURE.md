@@ -372,9 +372,14 @@ Folders appear when a phase needs them; empty placeholders are not committed.
   the model under it, whatever the model wrote or if it failed. Only once that answer is sent,
   unchanged, does the draft become `pending` with `shown_at` (WhatsApp's time) and the asking
   message's id, superseding any older one; a draft never shown can never be decided. Before a plain
-  message goes to the model, `actions.Runner` reads it as a decision only when the whole message is
-  one of a few plain yes or no words in English, Hinglish or Hindi, sent after `shown_at` with no
-  other message from Kaya in between; then it decides the waiting action, runs a confirmed one
+  message goes to the model, `actions.Runner` checks in SQL whether it could answer the waiting
+  action (sent after `shown_at`, no other message from Kaya in between); only then does a judge
+  read it: the routine model (the heavy one if it fails or is rate-limited, two tries each) answers
+  one word, yes, no, change or other, given only the masked summary DJ saw and his reply, never
+  anyone else's text, so whatever he types in any language counts and nothing in other chats can
+  steer it. Anything but yes or no goes on to the chat model (a change gets redrafted there); a
+  judge that cannot answer does nothing and asks him to reply again. Then it decides the waiting
+  action, runs a confirmed one
   through its kind's executor and records `done` or `failed` with the result. The same message
   replayed, however late, gets the same answer and never runs the action twice; a yes after the
   last question expired is told so. An outward tool's grounded arguments (`send_message`'s `to`)
