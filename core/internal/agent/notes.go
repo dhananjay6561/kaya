@@ -37,3 +37,10 @@ func (n *notes) all() []string {
 	defer n.mu.Unlock()
 	return slices.Clone(n.lines)
 }
+
+// CollectNotes returns ctx collecting notes, and a function that reads them, for running a tool
+// outside the loop, as tests do.
+func CollectNotes(ctx context.Context) (context.Context, func() []string) {
+	ctx, n := withNotes(ctx)
+	return ctx, n.all
+}
