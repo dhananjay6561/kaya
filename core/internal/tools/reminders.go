@@ -50,6 +50,7 @@ func SetReminder(book JobBook, zone *time.Location, now func() time.Time) agent.
 			"required": ["text"],
 			"additionalProperties": false
 		}`),
+		Grounded: []string{"text"},
 		Run: func(ctx context.Context, raw json.RawMessage) (string, error) {
 			var args struct {
 				Text      string   `json:"text"`
