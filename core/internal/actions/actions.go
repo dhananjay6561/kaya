@@ -39,6 +39,7 @@ type Action struct {
 
 // States of an action.
 const (
+	Draft      = "draft"
 	Pending    = "pending"
 	Confirmed  = "confirmed"
 	Declined   = "declined"
@@ -74,27 +75,37 @@ func scan(row pgx.Row) (Action, error) {
 	return a, err
 }
 
-// Propose stores p as the one action waiting for DJ; any other still waiting is superseded, so a
-// yes only ever answers the newest question.
+// Propose stores p as a draft: nothing can decide it until Shown says the message asking DJ
+// reached his chat, so a yes never answers a question he did not see.
 func (s *Store) Propose(ctx context.Context, p Proposal) (Action, error) {
-	var a Action
 	now := s.now()
+	return scan(s.db.QueryRow(ctx, `INSERT INTO pending_actions (kind, target_jid, summary, payload, created_at, expires_at)
+		VALUES ($1, $2, $3, $4, $5, $6) RETURNING `+columns, p.Kind, p.TargetJID, p.Summary, p.Payload, now, now.Add(s.ttl)))
+}
+
+// Shown makes the draft id the one action waiting for DJ, once the message asking him, waID, was
+// sent at at; any other still waiting is superseded, so a yes only ever answers the newest question.
+// False means the draft was no longer one.
+func (s *Store) Shown(ctx context.Context, id, waID string, at time.Time) (bool, error) {
+	var shown bool
 	err := s.db.InTx(ctx, func(tx pgx.Tx) error {
-		if _, err := tx.Exec(ctx, "UPDATE pending_actions SET state = 'superseded' WHERE state = 'pending'"); err != nil {
+		if _, err := tx.Exec(ctx, "UPDATE pending_actions SET state = 'superseded' WHERE state = 'pending' AND id <> $1::uuid", id); err != nil {
 			return err
 		}
-		var err error
-		a, err = scan(tx.QueryRow(ctx, `INSERT INTO pending_actions (kind, target_jid, summary, payload, created_at, expires_at)
-			VALUES ($1, $2, $3, $4, $5, $6) RETURNING `+columns, p.Kind, p.TargetJID, p.Summary, p.Payload, now, now.Add(s.ttl)))
+		tag, err := tx.Exec(ctx, `UPDATE pending_actions SET state = 'pending', shown_at = $3, shown_wa_id = $2,
+			expires_at = least(greatest(expires_at, $4::timestamptz), created_at + interval '1 hour')
+			WHERE id = $1::uuid AND state = 'draft'`, id, waID, at, s.now().Add(s.ttl))
+		shown = tag.RowsAffected() == 1
 		return err
 	})
-	return a, err
+	return shown, err
 }
 
 // Open is the action waiting for DJ's answer, or nil; one past its time is marked expired first.
 func (s *Store) Open(ctx context.Context) (*Action, error) {
 	now := s.now()
-	if _, err := s.db.Exec(ctx, "UPDATE pending_actions SET state = 'expired' WHERE state = 'pending' AND expires_at <= $1", now); err != nil {
+	if _, err := s.db.Exec(ctx, `UPDATE pending_actions SET state = 'expired'
+		WHERE state = 'pending' AND expires_at <= $1 OR state = 'draft' AND created_at < $2`, now, now.Add(-time.Hour)); err != nil {
 		return nil, err
 	}
 	a, err := scan(s.db.QueryRow(ctx, `SELECT `+columns+` FROM pending_actions WHERE state = 'pending' ORDER BY created_at DESC LIMIT 1`))
@@ -116,15 +127,21 @@ func (s *Store) DecidedBy(ctx context.Context, messageID int64) (*Action, string
 	return &a, result, err
 }
 
-// Decide records DJ's answer to the waiting action a, given by his message; false means it was no
-// longer waiting.
+// Decide records DJ's answer to the waiting action a, given by his message; false means it does
+// not answer it: the action was no longer waiting, or his message came before the question or
+// after another message from Kaya, which it more likely answers.
 func (s *Store) Decide(ctx context.Context, a Action, messageID int64, yes bool) (bool, error) {
 	state := Declined
 	if yes {
 		state = Confirmed
 	}
-	n, err := s.db.Exec(ctx, `UPDATE pending_actions SET state = $2, decided_by = $3, decided_at = $4
-		WHERE id = $1::uuid AND state = 'pending' AND expires_at > $4`, a.ID, state, messageID, s.now())
+	n, err := s.db.Exec(ctx, `UPDATE pending_actions pa SET state = $2, decided_by = $3, decided_at = now()
+		FROM messages y
+		WHERE pa.id = $1::uuid AND pa.state = 'pending' AND pa.expires_at > $4 AND y.id = $3 AND y.sent_at > pa.shown_at
+		  AND NOT EXISTS (
+			SELECT 1 FROM messages k JOIN send_requests r ON r.wa_id = k.wa_id
+			WHERE k.chat_id = y.chat_id AND r.state = 'sent' AND k.wa_id <> pa.shown_wa_id
+			  AND k.sent_at > pa.shown_at AND k.sent_at < y.sent_at)`, a.ID, state, messageID, s.now())
 	return n == 1, err
 }
 
@@ -139,27 +156,28 @@ func (s *Store) Finish(ctx context.Context, a Action, ok bool, result string) er
 	return err
 }
 
-// RecentlyLapsed says whether an action expired or was superseded in the last hour, so a late yes
-// can be told so.
+// RecentlyLapsed says whether the last action DJ was asked about expired in the last hour without
+// an answer, so a late yes can be told so.
 func (s *Store) RecentlyLapsed(ctx context.Context) (bool, error) {
 	var lapsed bool
-	err := s.db.QueryRow(ctx, `SELECT EXISTS (SELECT 1 FROM pending_actions
-		WHERE state IN ('expired', 'superseded') AND expires_at > $1)`, s.now().Add(-time.Hour)).Scan(&lapsed)
+	err := s.db.QueryRow(ctx, `SELECT coalesce((SELECT state = 'expired' AND expires_at > $1 FROM pending_actions
+		WHERE shown_at IS NOT NULL ORDER BY shown_at DESC LIMIT 1), false)`, s.now().Add(-time.Hour)).Scan(&lapsed)
 	return lapsed, err
 }
 
-// CountDone is how many actions of kind ran since.
+// CountDone is how many actions of kind DJ confirmed since, run or not, so one that may have gone
+// out counts too.
 func (s *Store) CountDone(ctx context.Context, kind string, since time.Time) (int, error) {
 	var n int
-	err := s.db.QueryRow(ctx, `SELECT count(*) FROM pending_actions WHERE kind = $1 AND state IN ('confirmed', 'done') AND decided_at > $2`,
+	err := s.db.QueryRow(ctx, `SELECT count(*) FROM pending_actions WHERE kind = $1 AND state IN ('confirmed', 'done', 'failed') AND decided_at > $2`,
 		kind, since).Scan(&n)
 	return n, err
 }
 
 var (
 	yesWords = []string{
-		"yes", "y", "yeah", "yea", "yep", "yup", "ok", "okay", "k", "sure", "send", "send it", "do it", "go", "go ahead",
-		"confirm", "confirmed", "haan", "han", "ha", "haa", "haanji", "hanji", "haan ji", "ji", "bhej", "bhej do", "bhejo",
+		"yes", "y", "yeah", "yep", "yup", "ok", "okay", "sure", "send it", "do it", "go ahead",
+		"confirm", "confirmed", "haan", "han", "ha", "haa", "haanji", "hanji", "haan ji", "bhej", "bhej do", "bhejo",
 		"kar do", "karo", "theek hai", "thik hai", "chalega", "हाँ", "हां", "हा", "भेज दो", "👍", "✅",
 	}
 	noWords = []string{
@@ -201,6 +219,27 @@ type Runner struct {
 	MessageID func(ctx context.Context, waID string) (int64, error)
 }
 
+// Replay answers a message that already decided an action, as it was answered then, running a
+// confirmed one that never finished (at most once, by its key); false for any other message.
+func (r *Runner) Replay(ctx context.Context, waID string) (string, bool, error) {
+	messageID, err := r.MessageID(ctx, waID)
+	if err != nil || messageID == 0 {
+		return "", false, err
+	}
+	decided, result, err := r.Store.DecidedBy(ctx, messageID)
+	if err != nil || decided == nil {
+		return "", false, err
+	}
+	switch decided.State {
+	case Confirmed:
+		return r.run(ctx, *decided)
+	case Declined:
+		return "Okay, I won't.", true, nil
+	default:
+		return result, true, nil
+	}
+}
+
 // Handle answers DJ's message when it decides an action, and reports false when it does not, so it
 // goes on to the chat model. A message seen before gets the answer it got then; a yes runs the
 // action at most once.
@@ -209,23 +248,12 @@ func (r *Runner) Handle(ctx context.Context, waID, message string) (string, bool
 	if !yes && !no {
 		return "", false, nil
 	}
+	if answer, replayed, err := r.Replay(ctx, waID); err != nil || replayed {
+		return answer, replayed, err
+	}
 	messageID, err := r.MessageID(ctx, waID)
 	if err != nil || messageID == 0 {
 		return "", false, err
-	}
-	decided, result, err := r.Store.DecidedBy(ctx, messageID)
-	if err != nil {
-		return "", false, err
-	}
-	if decided != nil {
-		switch decided.State {
-		case Confirmed:
-			return r.run(ctx, *decided)
-		case Declined:
-			return "Okay, I won't.", true, nil
-		default:
-			return result, true, nil
-		}
 	}
 	open, err := r.Store.Open(ctx)
 	if err != nil {
@@ -271,8 +299,8 @@ func (r *Runner) run(ctx context.Context, a Action) (string, bool, error) {
 	return result, true, r.Store.Finish(ctx, a, true, result)
 }
 
-// ConfirmLine is what Kaya adds under her answer when she proposes an action, so DJ always sees
-// exactly what a yes will do.
+// ConfirmLine is what Kaya puts at the top of her answer when she proposes an action, so DJ always
+// sees exactly what a yes will do before anything the model wrote.
 func ConfirmLine(a Action, ttl time.Duration) string {
 	return fmt.Sprintf("*%s*\nReply *yes* to do it or *no* to cancel (within %d min).", a.Summary, int(ttl.Minutes()))
 }
