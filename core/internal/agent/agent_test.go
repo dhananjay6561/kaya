@@ -70,13 +70,15 @@ var quiet = slog.New(slog.NewTextHandler(io.Discard, nil))
 var zoneParams = json.RawMessage(`{"type":"object","properties":{"zone":{"type":"string"}},"required":["zone"],"additionalProperties":false}`)
 
 func echoTool(ran *[]string) Tool {
-	return Tool{Name: "echo", Description: "Says the zone back.", Parameters: zoneParams,
+	return Tool{
+		Name: "echo", Description: "Says the zone back.", Parameters: zoneParams,
 		Run: func(_ context.Context, args json.RawMessage) (string, error) {
 			var a struct{ Zone string }
 			_ = json.Unmarshal(args, &a)
 			*ran = append(*ran, a.Zone)
 			return "it is noon in " + a.Zone, nil
-		}}
+		},
+	}
 }
 
 func registry(t *testing.T, tools ...Tool) *Registry {
@@ -144,18 +146,28 @@ func TestAnAnswerWithoutCallsIsReturnedAsItIs(t *testing.T) {
 func TestTheModelIsToldWhatWentWrongWithACall(t *testing.T) {
 	tools := []Tool{
 		echoTool(new([]string)),
-		{Name: "picky", Description: "Fails with a reason.", Parameters: json.RawMessage(`{"type":"object"}`),
+		{
+			Name: "picky", Description: "Fails with a reason.", Parameters: json.RawMessage(`{"type":"object"}`),
 			Run: func(context.Context, json.RawMessage) (string, error) {
 				return "", Problemf("unknown zone %q", "Mars/Base")
-			}},
-		{Name: "broken", Description: "Fails inside.", Parameters: json.RawMessage(`{"type":"object"}`),
-			Run: func(context.Context, json.RawMessage) (string, error) { return "", errors.New("pq: secret internals") }},
-		{Name: "slow", Description: "Never ends.", Parameters: json.RawMessage(`{"type":"object"}`),
-			Run: func(ctx context.Context, _ json.RawMessage) (string, error) { <-ctx.Done(); return "", ctx.Err() }},
-		{Name: "panics", Description: "Panics.", Parameters: json.RawMessage(`{"type":"object"}`),
-			Run: func(context.Context, json.RawMessage) (string, error) { panic("boom") }},
-		{Name: "empty", Description: "Says nothing.", Parameters: json.RawMessage(`{"type":"object"}`),
-			Run: func(context.Context, json.RawMessage) (string, error) { return " ", nil }},
+			},
+		},
+		{
+			Name: "broken", Description: "Fails inside.", Parameters: json.RawMessage(`{"type":"object"}`),
+			Run: func(context.Context, json.RawMessage) (string, error) { return "", errors.New("pq: secret internals") },
+		},
+		{
+			Name: "slow", Description: "Never ends.", Parameters: json.RawMessage(`{"type":"object"}`),
+			Run: func(ctx context.Context, _ json.RawMessage) (string, error) { <-ctx.Done(); return "", ctx.Err() },
+		},
+		{
+			Name: "panics", Description: "Panics.", Parameters: json.RawMessage(`{"type":"object"}`),
+			Run: func(context.Context, json.RawMessage) (string, error) { panic("boom") },
+		},
+		{
+			Name: "empty", Description: "Says nothing.", Parameters: json.RawMessage(`{"type":"object"}`),
+			Run: func(context.Context, json.RawMessage) (string, error) { return " ", nil },
+		},
 	}
 	cases := []struct {
 		call    llm.ToolCall
@@ -187,8 +199,10 @@ func TestTheModelIsToldWhatWentWrongWithACall(t *testing.T) {
 
 func TestAFatalToolErrorOrTheCallerGivingUpStopsTheRun(t *testing.T) {
 	away := errors.New("database away")
-	tool := Tool{Name: "reads", Description: "Reads the database.", Parameters: json.RawMessage(`{"type":"object"}`),
-		Run: func(context.Context, json.RawMessage) (string, error) { return "", away }}
+	tool := Tool{
+		Name: "reads", Description: "Reads the database.", Parameters: json.RawMessage(`{"type":"object"}`),
+		Run: func(context.Context, json.RawMessage) (string, error) { return "", away },
+	}
 	m := &model{locality: llm.Local, steps: []step{calls(call("a", "reads", `{}`)), answer("unused")}}
 	_, err := Run(bg, Options{LLM: m, Tools: registry(t, tool), Logger: quiet, Fatal: func(err error) bool { return errors.Is(err, away) }}, question)
 	if !errors.Is(err, away) || len(m.requests) != 1 {
@@ -265,18 +279,21 @@ type privacy struct{}
 func (privacy) Mask(text, _ string) string {
 	return strings.ReplaceAll(text, "+91 98765 43210", "[PHONE_1]")
 }
+
 func (privacy) Restore(text string) string {
 	return strings.ReplaceAll(text, "[PHONE_1]", "+91 98765 43210")
 }
 
 func TestACloudModelNeverSeesTheRealDetailsButTheToolDoes(t *testing.T) {
 	var got string
-	lookup := Tool{Name: "lookup", Description: "Looks a number up.",
+	lookup := Tool{
+		Name: "lookup", Description: "Looks a number up.",
 		Parameters: json.RawMessage(`{"type":"object","properties":{"numbers":{"type":"array","items":{"type":"string"}}}}`),
 		Run: func(_ context.Context, args json.RawMessage) (string, error) {
 			got = string(args)
 			return "+91 98765 43210 is Rahul. " + strings.Repeat("filler ", 2000), nil
-		}}
+		},
+	}
 	m := &model{locality: llm.Cloud, steps: []step{calls(call("a", "lookup", `{"numbers":["[PHONE_1]"]}`)), answer("ok")}}
 	if _, err := Run(bg, Options{LLM: m, Tools: registry(t, lookup), Logger: quiet}, question); err == nil {
 		t.Fatal("a cloud model was given results without masking")
