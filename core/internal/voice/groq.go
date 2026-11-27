@@ -14,6 +14,7 @@ import (
 	"os"
 	"strings"
 	"time"
+	"unicode"
 )
 
 // Transcript is what a voice note said.
@@ -110,9 +111,37 @@ func (g *Groq) Transcribe(ctx context.Context, path string) (Transcript, error) 
 		Text     string  `json:"text"`
 		Language string  `json:"language"`
 		Duration float64 `json:"duration"`
+		Segments []struct {
+			Text         string  `json:"text"`
+			NoSpeechProb float64 `json:"no_speech_prob"`
+			AvgLogprob   float64 `json:"avg_logprob"`
+		} `json:"segments"`
 	}
 	if err := json.Unmarshal(raw, &out); err != nil {
 		return Transcript{}, errors.Join(&Error{Code: "bad_response", Retry: true}, err)
 	}
-	return Transcript{Text: strings.TrimSpace(out.Text), Language: out.Language, Duration: out.Duration, Model: g.model}, nil
+	said := strings.TrimSpace(out.Text)
+	if out.Segments != nil {
+		var kept []string
+		for _, s := range out.Segments {
+			if s.NoSpeechProb > 0.6 && s.AvgLogprob < -0.7 {
+				continue
+			}
+			kept = append(kept, strings.TrimSpace(s.Text))
+		}
+		said = strings.TrimSpace(strings.Join(kept, " "))
+	}
+	if said == "" || echoesHint(said) {
+		return Transcript{}, &Error{Code: "no_speech"}
+	}
+	return Transcript{Text: said, Language: out.Language, Duration: out.Duration, Model: g.model}, nil
+}
+
+// echoesHint is a transcript that only repeats the hint, which Whisper gives back for silence.
+func echoesHint(said string) bool {
+	norm := func(s string) string {
+		return strings.Join(strings.FieldsFunc(strings.ToLower(s), func(r rune) bool { return !unicode.IsLetter(r) && !unicode.IsNumber(r) }), " ")
+	}
+	s := norm(said)
+	return s != "" && strings.Contains(norm(hint), s)
 }
