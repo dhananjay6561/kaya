@@ -401,7 +401,10 @@ func decodeAnswer(raw []byte) (Completion, bool) {
 	if first.FinishReason != nil && slices.Contains(finishReasons, *first.FinishReason) {
 		c.FinishReason = *first.FinishReason
 	}
-	if (c.FinishReason == FinishToolCalls) != (len(c.ToolCalls) > 0) {
+	switch {
+	case len(c.ToolCalls) > 0:
+		c.FinishReason = FinishToolCalls
+	case c.FinishReason == FinishToolCalls:
 		return Completion{}, false
 	}
 	return c, true
