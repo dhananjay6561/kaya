@@ -102,8 +102,13 @@ func chatJID(ctx context.Context, db *store.DB, chat int64) (string, error) {
 	return jid, err
 }
 
+// Sender sends a message through the gateway.
+type Sender interface {
+	Send(ctx context.Context, m channel.OutgoingMessage, o channel.SendOptions) (channel.SentMessage, error)
+}
+
 // SendExecutor sends a confirmed message, at most perHour in any hour, and says how it went.
-func SendExecutor(ch channel.Channel, store *actions.Store, perHour int, now func() time.Time) actions.Executor {
+func SendExecutor(ch Sender, store *actions.Store, perHour int, now func() time.Time) actions.Executor {
 	return func(ctx context.Context, a actions.Action) (string, error) {
 		var p sendPayload
 		if err := json.Unmarshal(a.Payload, &p); err != nil {
