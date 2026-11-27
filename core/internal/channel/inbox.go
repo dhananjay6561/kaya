@@ -90,7 +90,7 @@ func NewInbox(o InboxOptions) *Inbox {
 // chat, from the linked account, and it is not something the gateway sent. It reports whether a
 // command was added.
 func (in *Inbox) Record(ctx context.Context, tx pgx.Tx, m contracts.MessageStored) (bool, error) {
-	typedByDJ := m.FromMe && m.Kind == "text" && m.Source == "live" && m.Change == "new"
+	typedByDJ := m.FromMe && (m.Kind == "text" || m.Kind == "voice") && m.Source == "live" && m.Change == "new"
 	if !typedByDJ {
 		return false, nil
 	}
@@ -103,7 +103,7 @@ func (in *Inbox) Record(ctx context.Context, tx pgx.Tx, m contracts.MessageStore
 		JOIN contacts own ON own.id = m.sender_id
 		JOIN connection_state linked ON linked.own_jid IN (own.pn, own.lid)
 		WHERE m.id = $1
-		  AND m.from_me AND m.kind = 'text' AND m.source = 'live' AND m.deleted_at IS NULL
+		  AND m.from_me AND m.kind IN ('text', 'voice') AND m.source = 'live' AND m.deleted_at IS NULL
 		  AND NOT m.forwarded
 		  AND m.sent_at > now() - interval '1 day'
 		  AND c.kind = 'direct' AND c.contact_id = m.sender_id
@@ -342,8 +342,9 @@ func (in *Inbox) step(ctx context.Context, lock *lockHolder, deliver Deliver, re
 		return true, in.finish(db, row, "interrupted", "")
 	}
 
-	var body *string
-	err = in.o.DB.QueryRow(db, "SELECT body FROM messages WHERE id = $1 AND deleted_at IS NULL", row.messageID).Scan(&body)
+	var body, kind, heard, spoken *string
+	err = in.o.DB.QueryRow(db, `SELECT m.body, m.kind, t.state, t.text FROM messages m
+		LEFT JOIN transcripts t ON t.message_id = m.id WHERE m.id = $1 AND m.deleted_at IS NULL`, row.messageID).Scan(&body, &kind, &heard, &spoken)
 	if err != nil && !errors.Is(err, pgx.ErrNoRows) {
 		in.giveBackAttempt(row.id)
 		return false, err
@@ -351,6 +352,17 @@ func (in *Inbox) step(ctx context.Context, lock *lockHolder, deliver Deliver, re
 	words := ""
 	if body != nil {
 		words = text.Trim(*body)
+	}
+	if kind != nil && *kind == "voice" {
+		switch {
+		case heard != nil && *heard == "done" && spoken != nil && text.Trim(*spoken) != "":
+			words = text.Trim(*spoken)
+		case heard == nil && time.Since(row.createdAt) < voiceWait:
+			in.giveBackAttempt(row.id)
+			return false, nil
+		default:
+			words = cannotHear
+		}
 	}
 	if words == "" {
 		return true, in.finish(db, row, "message_gone", "")
@@ -507,3 +519,10 @@ func (in *Inbox) giveBackAttempt(id int64) {
 	_, _ = in.o.DB.Exec(ctx,
 		"UPDATE commands SET attempts = attempts - 1 WHERE id = $1 AND state = 'pending' AND attempts > 0", id)
 }
+
+// voiceWait is how long a voice note DJ sent waits for its transcript before Kaya says she could
+// not hear it; cannotHear is what she is given then, so she can ask him to type it.
+const (
+	voiceWait  = 2 * time.Minute
+	cannotHear = "(They sent you a voice note, but it could not be turned into text. Tell them you couldn't hear it and ask them to type it or send it again.)"
+)

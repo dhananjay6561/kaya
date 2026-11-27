@@ -41,6 +41,7 @@ import (
 	"github.com/dhananjay6561/kaya/core/internal/summary"
 	"github.com/dhananjay6561/kaya/core/internal/tagging"
 	"github.com/dhananjay6561/kaya/core/internal/tools"
+	"github.com/dhananjay6561/kaya/core/internal/voice"
 	"github.com/dhananjay6561/kaya/kit/envfile"
 	"github.com/dhananjay6561/kaya/kit/httpapi"
 	"github.com/dhananjay6561/kaya/kit/logging"
@@ -273,6 +274,20 @@ func run(cfg config.Config, logger *slog.Logger) error {
 	if err != nil {
 		return err
 	}
+	var transcriber *voice.Worker
+	if cfg.LLM.Provider == "groq" {
+		var heard func()
+		if waker, ok := ch.(interface{ Wake() }); ok {
+			heard = waker.Wake
+		}
+		transcriber, err = voice.NewWorker(voice.Options{
+			DB: db, Transcriber: voice.NewGroq(cfg.LLM.Groq.APIKey, cfg.TranscribeModel, ""), Pause: switches,
+			Logger: logger, MediaDir: cfg.MediaDir, Heard: heard,
+		})
+		if err != nil {
+			return err
+		}
+	}
 	stopCommands := commands.Start(commands.Options{
 		Channel: ch,
 		Logger:  logger,
@@ -361,6 +376,10 @@ func run(cfg config.Config, logger *slog.Logger) error {
 	}
 	scheduler.Start()
 	defer scheduler.Stop()
+	if transcriber != nil {
+		transcriber.Start()
+		defer transcriber.Stop()
+	}
 
 	ln, err := net.Listen("tcp", net.JoinHostPort(cfg.ListenHost, strconv.Itoa(cfg.Port)))
 	if err != nil {

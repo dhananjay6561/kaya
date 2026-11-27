@@ -160,6 +160,14 @@ func (g *Gateway) Check(ctx context.Context) error {
 	return nil
 }
 
+// Wake makes the inbox look for commands now, as when a voice note DJ sent has just been
+// transcribed.
+func (g *Gateway) Wake() {
+	if g.inbox != nil {
+		g.inbox.Wake()
+	}
+}
+
 // OnMessage adds a handler for DJ's commands and returns a function that removes it.
 func (g *Gateway) OnMessage(h Handler) func() {
 	g.mu.Lock()
