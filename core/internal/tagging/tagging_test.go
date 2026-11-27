@@ -653,3 +653,19 @@ func TestRemindersDropOffWhenTheyAreOverAndLateTasksSaySo(t *testing.T) {
 		t.Fatalf("count %d, %v", n, err)
 	}
 }
+
+func TestAReminderThatRestatesItsTaskBecomesItsDeadline(t *testing.T) {
+	due := time.Date(2026, 11, 27, 0, 0, 0, 0, kolkata)
+	got := kinds(found{tags: []string{KindTask, KindReminder}, task: "Review Rahul's resume and send feedback", reminder: "Review Rahul's resume", due: &due})
+	if len(got) != 1 || got[0].kind != KindTask || got[0].due != &due {
+		t.Fatalf("got %+v", got)
+	}
+	got = kinds(found{tags: []string{KindTask}, task: "Send the deck", due: &due})
+	if len(got) != 1 || got[0].due != &due {
+		t.Fatalf("a task's own deadline was dropped: %+v", got)
+	}
+	got = kinds(found{tags: []string{KindTask, KindReminder}, task: "Revise for the exam", reminder: "Exam", due: &due})
+	if len(got) != 2 || got[0].kind != KindReminder || got[1].due != nil {
+		t.Fatalf("an event and its task were merged: %+v", got)
+	}
+}
