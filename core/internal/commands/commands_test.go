@@ -74,6 +74,7 @@ type rigOptions struct {
 	tasks   TaskBook
 	summary func(context.Context, string) (string, error)
 	alerts  AlertSwitch
+	decide  func(context.Context, channel.IncomingMessage) (string, bool, error)
 }
 
 // errAway is the rig's database outage; every other error is a handler's own.
@@ -92,7 +93,7 @@ func newRig(t *testing.T, o rigOptions) *rig {
 			return ChatAnswer{Text: "You said: " + Clip(m.Text), Remember: true}, nil
 		}
 	}
-	r.stop = Start(Options{Channel: r.ch, Logger: quiet, Pause: r.pause, Status: o.status, Chat: o.chat, Now: o.now, DatabaseAway: isAway, Facts: o.facts, Tasks: o.tasks, Zone: kolkata, Summary: o.summary, Alerts: o.alerts})
+	r.stop = Start(Options{Channel: r.ch, Logger: quiet, Pause: r.pause, Status: o.status, Chat: o.chat, Now: o.now, DatabaseAway: isAway, Facts: o.facts, Tasks: o.tasks, Zone: kolkata, Summary: o.summary, Alerts: o.alerts, Decide: o.decide})
 	if err := r.ch.Start(bg); err != nil {
 		t.Fatal(err)
 	}
@@ -885,4 +886,25 @@ func TestAlertsAreSwitchedOnAndOff(t *testing.T) {
 	same(t, r.answers("/alerts maybe", now), []string{alertsUsage})
 	none := newRig(t, rigOptions{})
 	same(t, none.answers("/alerts", now), []string{"Alerts are not set up here."})
+}
+
+func TestAYesOrNoForAWaitingActionNeverReachesTheModel(t *testing.T) {
+	var asked []string
+	r := newRig(t, rigOptions{
+		chat: func(_ context.Context, m channel.IncomingMessage) (ChatAnswer, error) {
+			asked = append(asked, m.Text)
+			return ChatAnswer{Text: "model: " + m.Text, Remember: true}, nil
+		},
+		decide: func(_ context.Context, m channel.IncomingMessage) (string, bool, error) {
+			if m.Text == "yes" {
+				return "Sent to Rahul.", true, nil
+			}
+			return "", false, nil
+		},
+	})
+	same(t, r.answers("yes", now), []string{"Sent to Rahul."})
+	same(t, r.answers("what's up", now), []string{"model: what's up"})
+	if !slices.Equal(asked, []string{"what's up"}) {
+		t.Fatalf("the model was asked %q", asked)
+	}
 }

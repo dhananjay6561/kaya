@@ -36,6 +36,9 @@ type Options struct {
 	Summary func(ctx context.Context, chat string) (string, error)
 	// Alerts switches alerts for /alerts; nil answers it with a notice.
 	Alerts AlertSwitch
+	// Decide answers a plain message that decides the action waiting for DJ's yes, reporting false
+	// for any other message, which then goes to Chat; nil means no actions.
+	Decide func(ctx context.Context, m channel.IncomingMessage) (string, bool, error)
 	// Zone is DJ's time zone, for the dates replies show; nil means UTC.
 	Zone *time.Location
 	Chat func(ctx context.Context, m channel.IncomingMessage) (ChatAnswer, error)
@@ -223,9 +226,16 @@ func (h *handler) produce(ctx context.Context, m channel.IncomingMessage, slash 
 	o := h.o
 	var answer ChatAnswer
 	var err error
-	if slash != nil {
+	decided := false
+	if slash == nil && o.Decide != nil {
+		answer.Text, decided, err = o.Decide(ctx, m)
+		answer.Remember = decided
+	}
+	switch {
+	case err != nil || decided:
+	case slash != nil:
 		answer.Text, err = answerSlash(ctx, slash, m, o)
-	} else {
+	default:
 		answer, err = o.Chat(ctx, m)
 	}
 	if err == nil {
