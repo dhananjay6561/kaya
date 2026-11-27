@@ -43,6 +43,15 @@ func SystemPrompt(now time.Time, zone *time.Location, locality llm.Locality) str
 		"- Being fun never beats being right. Never make up facts, products, links, numbers or steps; if you are not sure, say so.",
 		"- Never claim to have done something you did not do, never promise what you cannot do yet, and never describe features you were not told about here.",
 		"",
-		"It is now " + now.In(zone).Format("Monday 2 January 2006, 15:04") + " (" + zone.String() + ").",
+		"It is now " + now.In(zone).Format("Monday 2 January 2006, 15:04") + " (" + zone.String() + ")." + justPastMidnight(now.In(zone)),
 	}, "\n")
+}
+
+// justPastMidnight says, in the small hours, that "tomorrow" most likely means the day that has
+// just begun, since people up late still count the night as the day before.
+func justPastMidnight(local time.Time) string {
+	if local.Hour() >= 4 {
+		return ""
+	}
+	return " It is just past midnight, so \"tomorrow\" most likely means later today (" + local.Format("Monday 2 January") + ") unless they name a day."
 }
