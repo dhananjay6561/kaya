@@ -141,8 +141,6 @@ var (
 		"〈", "‹", "〉", "›", "⟨", "‹", "⟩", "›", "˂", "‹", "˃", "›", "❬", "‹", "❭", "›", "❮", "‹", "❯", "›", "ᐸ", "‹", "ᐳ", "›")
 )
 
-// escaped turns every angle bracket and its look-alikes in an excerpt into ‹ and ›, so no message
-// can pass for a tag.
 // Escaped turns every look-alike of an angle bracket in text from someone else into a harmless one,
 // so nothing inside data tags can close them.
 func Escaped(excerpt string) string {
