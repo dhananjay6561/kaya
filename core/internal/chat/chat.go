@@ -291,7 +291,7 @@ func (c *Chat) Reply(ctx context.Context, q Question) (Answer, error) {
 		reply = privacy.Restore(reply)
 	}
 	answer := strings.Map(func(r rune) rune {
-		if unicode.Is(unicode.Cf, r) && r != 0x200d {
+		if unicode.Is(unicode.Cf, r) && r != 0x200c && r != 0x200d && (r < 0xe0020 || r > 0xe007f) {
 			return -1
 		}
 		return r
@@ -460,19 +460,18 @@ func (c *Chat) withProposal(a Answer, proposed *actions.Action) Answer {
 }
 
 // garbled is an answer that is mostly not words, such as dots and odd spaces, which a model
-// sometimes writes instead of an answer.
+// sometimes writes instead of an answer. Letters, digits, the marks of scripts like Devanagari and
+// symbols such as emoji count as words; so few of them among the punctuation is garbled.
 func garbled(s string) bool {
-	letters, others := 0, 0
+	words, others := 0, 0
 	for _, r := range s {
 		switch {
-		case unicode.IsLetter(r) || unicode.IsNumber(r):
-			letters++
+		case unicode.IsLetter(r) || unicode.IsNumber(r) || unicode.In(r, unicode.Mn, unicode.Mc, unicode.Me, unicode.So, unicode.Sk, unicode.Sm) || r == 0x200d:
+			words++
 		case unicode.IsSpace(r) || r == 0xa0 || r == 0x202f:
-		case unicode.Is(unicode.So, r) || r == 0x200d || unicode.Is(unicode.Sk, r):
-			letters++
 		default:
 			others++
 		}
 	}
-	return letters+others >= 8 && letters < others
+	return words+others >= 8 && words*3 < others
 }
