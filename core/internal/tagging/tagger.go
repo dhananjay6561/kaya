@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"errors"
 	"log/slog"
+	"regexp"
 	"slices"
 	"strconv"
 	"strings"
@@ -586,11 +587,9 @@ func (t *Tagger) read(batch []search.ChatLine, out tagged, privacy MaskSession) 
 			return text.Clip(s, maxTitleLength)
 		}
 		if r.Alert == alertNow || r.Alert == alertLater && f.alert != alertNow {
-			if note := title(r.Note); note != "" {
-				f.alert = r.Alert
-				if f.note == "" || r.Alert == alertNow {
-					f.note = text.Clip(note, maxNoteLength)
-				}
+			f.alert = r.Alert
+			if note := title(r.Note); note != "" && (f.note == "" || r.Alert == alertNow) {
+				f.note = note
 			}
 		}
 		if !r.Mine {
@@ -694,16 +693,19 @@ func (t *Tagger) save(ctx context.Context, batch []search.ChatLine, out tagged, 
 				for _, name := range f.tags {
 					counts[name]++
 				}
-				if f.alert != "" {
+				if note := alertNote(f, l.Text); note != "" {
 					queued, err := tx.Exec(ctx, `INSERT INTO alerts (message_id, chat_id, urgent, note)
 						SELECT $1, $2, $3, $4 FROM messages m WHERE m.id = $1 AND NOT m.from_me
 						ON CONFLICT (message_id) DO UPDATE SET urgent = excluded.urgent, note = excluded.note
 						WHERE alerts.sent_at IS NULL AND alerts.batch IS NULL AND alerts.skipped IS NULL`,
-						l.MessageID, l.ChatID, f.alert == alertNow, f.note)
+						l.MessageID, l.ChatID, f.alert == alertNow, note)
 					if err != nil {
 						return err
 					}
 					alerted += int(queued.RowsAffected())
+				} else if _, err := tx.Exec(ctx, `UPDATE alerts SET skipped = 'retagged'
+					WHERE message_id = $1 AND sent_at IS NULL AND batch IS NULL AND skipped IS NULL`, l.MessageID); err != nil {
+					return err
 				}
 				for _, k := range kinds(f) {
 					added, err := keep(ctx, tx, l, k)
@@ -775,4 +777,33 @@ func keep(ctx context.Context, tx pgx.Tx, l search.ChatLine, k newTask) (bool, e
 		_, err := tx.Exec(ctx, "UPDATE tasks SET due_at = $2, due_has_time = $3 WHERE id = $1", id, k.due, k.timed)
 		return false, err
 	}
+}
+
+var (
+	asksForSecrets = regexp.MustCompile(`(?i)\b(otp|one[- ]time password|password|passcode|pin|cvv|verification code|login code)\b`)
+	links          = regexp.MustCompile(`(?i)\b(https?://|www\.)\S+`)
+	placeholder    = regexp.MustCompile(`\[[A-Z_]+_[0-9]+\]`)
+)
+
+// alertNote is the line an alert gives DJ, or "" for no alert. Links are taken out, since a note is
+// Kaya speaking; a placeholder the model made up drops the note; a message that mentions a code or
+// password gets a warning whatever the model wrote; an urgent message with no note quotes itself.
+func alertNote(f found, message string) string {
+	if f.alert == "" {
+		return ""
+	}
+	note := strings.TrimSpace(links.ReplaceAllString(f.note, "(link)"))
+	if placeholder.MatchString(note) {
+		note = ""
+	}
+	if note == "" && f.alert == alertNow {
+		note = "Sent you this: \"" + text.Clip(strings.Join(strings.Fields(links.ReplaceAllString(message, "(link)")), " "), 160) + "\""
+	}
+	if note == "" {
+		return ""
+	}
+	if asksForSecrets.MatchString(message) {
+		note = "Careful, it mentions a code or password; never share one. " + note
+	}
+	return text.Clip(note, maxNoteLength)
 }
