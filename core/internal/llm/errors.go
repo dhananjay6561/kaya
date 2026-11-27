@@ -16,6 +16,9 @@ const (
 	Misconfigured = "misconfigured"
 	Rejected      = "rejected"
 	BadResponse   = "bad_response"
+	// BadToolCall is a tool call the provider could not read from the model, or one to a tool it
+	// was not offered.
+	BadToolCall = "bad_tool_call"
 )
 
 // Error says why a model could not answer. It never carries the prompt, the answer or the
