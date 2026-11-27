@@ -197,7 +197,7 @@ type Runner struct {
 	Store     *Store
 	Executors map[string]Executor
 	Logger    *slog.Logger
-	// MessageID finds the messages.id of DJ's message by its WhatsApp id.
+	// MessageID finds the messages.id of DJ's message by its WhatsApp id, 0 when it is not stored.
 	MessageID func(ctx context.Context, waID string) (int64, error)
 }
 
@@ -210,7 +210,7 @@ func (r *Runner) Handle(ctx context.Context, waID, message string) (string, bool
 		return "", false, nil
 	}
 	messageID, err := r.MessageID(ctx, waID)
-	if err != nil {
+	if err != nil || messageID == 0 {
 		return "", false, err
 	}
 	decided, result, err := r.Store.DecidedBy(ctx, messageID)
