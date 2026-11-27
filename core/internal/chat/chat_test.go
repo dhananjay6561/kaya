@@ -275,8 +275,8 @@ func TestReplyCarriesTheRecentConversationAskedForTheQuestionBeingAnswered(t *te
 }
 
 func TestReplyFitsTheConversationToTheModelsBudget(t *testing.T) {
-	stub := llm.NewStub(llm.StubOptions{Reply: func(llm.Request) string { return "ok" }, ContextTokens: 1100})
-	long := strings.Repeat("x", 2000)
+	stub := llm.NewStub(llm.StubOptions{Reply: func(llm.Request) string { return "ok" }, ContextTokens: 1600})
+	long := strings.Repeat("x", 4000)
 	reply(t, newChat(t, Options{LLM: stub, History: history(
 		memory.Exchange{Question: long, Answer: long, At: now},
 		memory.Exchange{Question: "short", Answer: "reply", At: now},
