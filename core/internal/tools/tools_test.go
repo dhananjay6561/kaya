@@ -14,9 +14,9 @@ import (
 
 var bg = context.Background()
 
-func zone(t *testing.T, name string) *time.Location {
+func kolkata(t *testing.T) *time.Location {
 	t.Helper()
-	loc, err := time.LoadLocation(name)
+	loc, err := time.LoadLocation("Asia/Kolkata")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -33,7 +33,7 @@ func run(t *testing.T, tool agent.Tool, args string) (string, error) {
 
 func TestTheClockTellsTheTimeElsewhereNextToTheOwners(t *testing.T) {
 	now := time.Date(2026, 11, 27, 7, 0, 0, 0, time.UTC)
-	c := Clock(zone(t, "Asia/Kolkata"), func() time.Time { return now })
+	c := Clock(kolkata(t), func() time.Time { return now })
 	got, err := run(t, c, `{"zones":["America/New_York","Asia/Tokyo","Asia/Kolkata","Mars/Base","Local"]}`)
 	if err != nil {
 		t.Fatal(err)
@@ -52,7 +52,7 @@ func TestTheClockTellsTheTimeElsewhereNextToTheOwners(t *testing.T) {
 }
 
 func TestTheClockConvertsAGivenTimeWithDaylightSaving(t *testing.T) {
-	c := Clock(zone(t, "Asia/Kolkata"), time.Now)
+	c := Clock(kolkata(t), time.Now)
 	got, err := run(t, c, `{"zones":["Asia/Kolkata"],"at":"2026-07-01 21:00","from":"America/Los_Angeles"}`)
 	if err != nil {
 		t.Fatal(err)
@@ -75,7 +75,7 @@ func TestTheClockConvertsAGivenTimeWithDaylightSaving(t *testing.T) {
 }
 
 func TestTheClockSaysWhatItCouldNotRead(t *testing.T) {
-	c := Clock(zone(t, "Asia/Kolkata"), time.Now)
+	c := Clock(kolkata(t), time.Now)
 	var problem *agent.Problem
 	if _, err := run(t, c, `{"zones":["UTC"],"at":"2026-11-27 18:00","from":"Nowhere/City"}`); !errors.As(err, &problem) || !strings.Contains(problem.Message, "Nowhere/City") {
 		t.Fatalf("err = %v", err)
@@ -97,7 +97,7 @@ func (b book) Open(_ context.Context, limit int) ([]tagging.Task, error) {
 func (b book) CountOpen(context.Context) (int, error) { return b.total, b.err }
 
 func TestOpenTasksListsWhatTasksShows(t *testing.T) {
-	ist := zone(t, "Asia/Kolkata")
+	ist := kolkata(t)
 	now := time.Date(2026, 11, 27, 7, 0, 0, 0, time.UTC)
 	due := time.Date(2026, 11, 28, 10, 30, 0, 0, ist)
 	tasks := []tagging.Task{
