@@ -144,7 +144,7 @@ func TestGroqAsksTheTierAndReturnsTextModelReasonAndUsage(t *testing.T) {
 		t.Fatal(err)
 	}
 	want := Completion{Text: "Hello there!", Model: "openai/gpt-oss-20b", FinishReason: FinishStop, Usage: Usage{83, 19}}
-	if got != want {
+	if !reflect.DeepEqual(got, want) {
 		t.Fatalf("got %+v, want %+v", got, want)
 	}
 	c := f.call(0)
@@ -574,5 +574,83 @@ func TestGroqAsksForJSONThatFollowsTheSchema(t *testing.T) {
 		"response_format":{"type":"json_schema","json_schema":{"name":"plan","strict":true,"schema":{"type":"object"}}}}`
 	if !sameJSON(t, body, []byte(want)) {
 		t.Fatalf("body = %s", body)
+	}
+}
+
+var clockTool = ToolSpec{Name: "clock", Description: "The time.", Parameters: json.RawMessage(`{"type":"object","properties":{}}`)}
+
+func TestGroqOffersToolsAndSendsBackCallsAndResults(t *testing.T) {
+	g := newFake(t).llm(GroqOptions{})
+	body, err := g.body(Request{
+		Tier: Heavy, Tools: []ToolSpec{clockTool},
+		Messages: []Message{
+			{Role: User, Content: "time?"},
+			{Role: Assistant, ToolCalls: []ToolCall{{ID: "fc_1", Name: "clock", Arguments: `{}`}}},
+			{Role: ToolRole, ToolCallID: "fc_1", Content: "12:00"},
+		},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	want := `{"model":"openai/gpt-oss-120b","messages":[
+		{"role":"user","content":"time?"},
+		{"role":"assistant","content":"","tool_calls":[{"id":"fc_1","type":"function","function":{"name":"clock","arguments":"{}"}}]},
+		{"role":"tool","content":"12:00","tool_call_id":"fc_1"}],
+		"max_completion_tokens":8192,"reasoning_effort":"medium","include_reasoning":false,
+		"tools":[{"type":"function","function":{"name":"clock","description":"The time.","parameters":{"type":"object","properties":{}}}}]}`
+	if !sameJSON(t, body, []byte(want)) {
+		t.Fatalf("body = %s", body)
+	}
+}
+
+func toolAnswer(calls, finish string) http.HandlerFunc {
+	return raw(200, `{"model":"openai/gpt-oss-120b","choices":[{"message":{"role":"assistant","tool_calls":`+calls+
+		`},"finish_reason":`+finish+`}],"usage":{"prompt_tokens":150,"completion_tokens":74}}`)
+}
+
+func TestGroqReadsTheToolsTheModelCalls(t *testing.T) {
+	f := newFake(t, toolAnswer(`[{"id":"fc_a","type":"function","function":{"name":"clock","arguments":"{\"zone\":\"Asia/Tokyo\"}"}}]`, `"tool_calls"`))
+	got, err := f.llm(GroqOptions{}).Complete(bg, Request{Tier: Heavy, Tools: []ToolSpec{clockTool}, Messages: ask.Messages})
+	if err != nil {
+		t.Fatal(err)
+	}
+	want := []ToolCall{{ID: "fc_a", Name: "clock", Arguments: `{"zone":"Asia/Tokyo"}`}}
+	if got.Text != "" || got.FinishReason != FinishToolCalls || !reflect.DeepEqual(got.ToolCalls, want) {
+		t.Fatalf("got %+v", got)
+	}
+}
+
+func TestGroqCallsAToolCallItCannotReadABadResponse(t *testing.T) {
+	for name, reply := range map[string]http.HandlerFunc{
+		"no id":                  toolAnswer(`[{"type":"function","function":{"name":"clock","arguments":"{}"}}]`, `"tool_calls"`),
+		"no name":                toolAnswer(`[{"id":"fc_a","type":"function","function":{"arguments":"{}"}}]`, `"tool_calls"`),
+		"null call":              toolAnswer(`[null]`, `"tool_calls"`),
+		"calls but stopped":      toolAnswer(`[{"id":"fc_a","type":"function","function":{"name":"clock","arguments":"{}"}}]`, `"stop"`),
+		"tool_calls but no call": toolAnswer(`[]`, `"tool_calls"`),
+	} {
+		f := newFake(t, reply)
+		_, err := f.llm(GroqOptions{}).Complete(bg, ask)
+		if e := llmError(t, err); e.Code != BadResponse {
+			t.Fatalf("%s: code = %s", name, e.Code)
+		}
+	}
+}
+
+func TestGroqNamesAToolCallTheModelGotWrongAndDoesNotRetryIt(t *testing.T) {
+	f := newFake(t, failure(400, "tool_use_failed"), ok("unused"))
+	_, err := f.llm(GroqOptions{}).Complete(bg, ask)
+	if e := llmError(t, err); e.Code != BadToolCall || f.count() != 1 {
+		t.Fatalf("code = %s after %d calls", e.Code, f.count())
+	}
+}
+
+func TestARequestCannotFollowASchemaAndOfferTools(t *testing.T) {
+	r := Request{Tier: Routine, Messages: ask.Messages, Tools: []ToolSpec{clockTool}, Schema: &Schema{Name: "x", Schema: json.RawMessage(`{}`)}}
+	f := newFake(t)
+	if _, err := f.llm(GroqOptions{}).Complete(bg, r); !errors.Is(err, errSchemaWithTools) || f.count() != 0 {
+		t.Fatalf("groq: %v after %d calls", err, f.count())
+	}
+	if _, err := NewStub(StubOptions{}).Complete(bg, r); !errors.Is(err, errSchemaWithTools) {
+		t.Fatalf("stub: %v", err)
 	}
 }
