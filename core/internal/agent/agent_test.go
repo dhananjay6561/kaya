@@ -428,7 +428,8 @@ func TestResultsShareTheRoomTheBudgetLeaves(t *testing.T) {
 }
 
 func sendTool() Tool {
-	return Tool{Name: "send_message", Description: "Sends a message for them.", Outward: true,
+	return Tool{
+		Name: "send_message", Description: "Sends a message for them.", Outward: true,
 		Parameters: json.RawMessage(`{"type":"object","properties":{"to":{"type":"string"},"text":{"type":"string"}},"required":["to","text"]}`),
 		Propose: func(_ context.Context, args json.RawMessage) (actions.Proposal, error) {
 			var a struct{ To, Text string }
@@ -436,9 +437,12 @@ func sendTool() Tool {
 			if a.To == "nobody" {
 				return actions.Proposal{}, Problemf("no contact matches %q", a.To)
 			}
-			return actions.Proposal{Kind: "send_message", TargetJID: "918888888888@s.whatsapp.net",
-				Summary: "Send " + a.To + ": " + a.Text, Payload: args}, nil
-		}}
+			return actions.Proposal{
+				Kind: "send_message", TargetJID: "918888888888@s.whatsapp.net",
+				Summary: "Send " + a.To + ": " + a.Text, Payload: args,
+			}, nil
+		},
+	}
 }
 
 func TestAnOutwardToolOnlyProposesOneActionAQuestion(t *testing.T) {
