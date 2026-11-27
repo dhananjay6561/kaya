@@ -580,15 +580,15 @@ func TestMasksNamesCodesAcrossMessagesAndDetailsAtTheCut(t *testing.T) {
 
 func TestANewTaskThatRepeatsAnOpenOneIsNotAddedAndTheModelSeesTheList(t *testing.T) {
 	r := newRig(t)
-	first := r.say(msg{body: "hourly reminder: Asad (Drizz) today at 3 pm"})
+	first := r.say(msg{body: "hourly reminder: Arjun (Acme) today at 3 pm"})
 	due := time.Date(2026, 11, 26, 15, 0, 0, 0, kolkata)
-	r.exec(`INSERT INTO tasks (message_id, chat_id, kind, title, due_at, due_has_time) VALUES ($1, $2, 'reminder', 'Asad (Drizz) today at 3 pm', $3, true)`, first, r.direct, due)
+	r.exec(`INSERT INTO tasks (message_id, chat_id, kind, title, due_at, due_has_time) VALUES ($1, $2, 'reminder', 'Arjun (Acme) today at 3 pm', $3, true)`, first, r.direct, due)
 	r.exec(`INSERT INTO tasks (message_id, chat_id, kind, title) VALUES ($1, $2, 'task', 'Send Rahul the deck')`, first, r.direct)
 	r.exec(`INSERT INTO message_tags (message_id, tags) VALUES ($1, '{reminder}')`, first)
-	r.say(msg{body: "hourly reminder: Asad (drizz) today 3pm"})
+	r.say(msg{body: "hourly reminder: Arjun (acme) today 3pm"})
 	r.say(msg{body: "send the deck to rahul and the invoice too"})
 	m := (&model{locality: llm.Local}).script(`{"tagged":[
-		{"line":1,"tags":["reminder"],"task":"","mine":true,"reminder":"Asad (drizz) today 3pm","due":"2026-11-26 15:00"},
+		{"line":1,"tags":["reminder"],"task":"","mine":true,"reminder":"Arjun (acme) today 3pm","due":"2026-11-26 15:00"},
 		{"line":2,"tags":["task"],"task":"Send the deck to Rahul","mine":true,"reminder":"","due":""},
 		{"line":2,"tags":["task"],"task":"","reminder":"","due":""}]}`)
 	tg := r.tagger(m, Options{})
@@ -600,7 +600,7 @@ func TestANewTaskThatRepeatsAnOpenOneIsNotAddedAndTheModelSeesTheList(t *testing
 		t.Fatalf("open %+v, %v", open, err)
 	}
 	user := m.requests()[0].Messages[1].Content
-	if !strings.HasPrefix(user, "Already on their list:\n- Asad (Drizz) today at 3 pm (was at Thu 26 Nov 15:00)\n- Send Rahul the deck\n\nChat: Rahul\n") {
+	if !strings.HasPrefix(user, "Already on their list:\n- Arjun (Acme) today at 3 pm (was at Thu 26 Nov 15:00)\n- Send Rahul the deck\n\nChat: Rahul\n") {
 		t.Fatalf("request = %q", user)
 	}
 	system := m.requests()[0].Messages[0].Content
@@ -871,7 +871,7 @@ func TestAlertNotesAreKayasOwnSafeWords(t *testing.T) {
 		want    string
 	}{
 		{found{}, "hi", ""},
-		{found{alert: alertLater, note: "Ritu asks about Sunday"}, "free sunday?", "Ritu asks about Sunday"},
+		{found{alert: alertLater, note: "Priya asks about Sunday"}, "free sunday?", "Priya asks about Sunday"},
 		{found{alert: alertLater, note: "Rahul shared the form at https://evil.example/x"}, "form: https://evil.example/x", "Rahul shared the form at (link)"},
 		{found{alert: alertNow, note: "Bank says call [PHONE_9]"}, "call us", `Sent you this: "call us"`},
 		{found{alert: alertLater, note: "Bank says call [PHONE_9]"}, "call us", ""},
