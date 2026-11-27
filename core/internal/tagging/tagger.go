@@ -115,7 +115,7 @@ const tagInstructs = `You sort new WhatsApp messages for the person who owns thi
 
 Tags:
 - important: they should see it soon: a question or request to them, something urgent, money owed or asked for, health, family, a deadline, a plan that includes them, their name in a group.
-- task: something they themselves have to do: asked of them, or something they promised ("I'll send it tonight"). task: what to do, as a short line in English starting with a verb, keeping names as written, that makes sense on its own weeks later to someone who never saw the chat: say who and what, taking them from the earlier messages ("Send Rahul the pitch deck", not "Send it"; "Approve Anmol's payment", not "Do it"). If the messages never say what it is about, it is no task.
+- task: something they themselves have to do: asked of them, or something they promised ("I'll send it tonight"). task: what to do, as a short line in English starting with a verb, keeping names as written, that makes sense on its own weeks later to someone who never saw the chat: say who and what, taking them from the earlier messages ("Send Rahul the pitch deck", not "Send it"; "Approve Anmol's payment", not "Do it"). If the messages never say what it is about, it is no task. A task with a deadline ("by tomorrow") takes it as due and is not also a reminder.
 - reminder: something at a set day or time they should not miss: a meeting, a call, a bill or rent due, a flight, a birthday, an exam. reminder: what it is and with whom, named the same way ("Investor call with Rahul", not "Call"); due: when it happens, in their time zone, as YYYY-MM-DD HH:MM, or YYYY-MM-DD when only the day is known, worked out from the day the message was sent.
 - ignore: noise they never need: promotions, spam, automated notifications, chain forwards, good-morning images, group chatter that does not involve them.
 
@@ -590,21 +590,48 @@ type newTask struct {
 }
 
 // kinds is the tasks one message gives: a task with its title, and a reminder with its title and
-// day. A reminder without a day is kept as a task, and a tag with no title gives nothing.
+// day. A reminder without a day is kept as a task, a reminder that only restates the task becomes
+// the task's deadline, a task with a day and no reminder keeps it as its deadline, and a tag with
+// no title gives nothing.
 func kinds(f found) []newTask {
 	var out []newTask
-	task := f.task
+	task := newTask{kind: KindTask, title: f.task}
+	isTask := slices.Contains(f.tags, KindTask)
 	if slices.Contains(f.tags, KindReminder) && f.reminder != "" {
-		if f.due != nil {
+		switch {
+		case f.due != nil && task.title != "" && restates(f.reminder, task.title):
+			task.due, task.timed = f.due, f.timed
+		case f.due != nil:
 			out = append(out, newTask{kind: KindReminder, title: f.reminder, due: f.due, timed: f.timed})
-		} else if task == "" {
-			task = f.reminder
+		case task.title == "":
+			task.title = f.reminder
 		}
+	} else if isTask && f.due != nil {
+		task.due, task.timed = f.due, f.timed
 	}
-	if task != "" && (slices.Contains(f.tags, KindTask) || slices.Contains(f.tags, KindReminder)) {
-		out = append(out, newTask{kind: KindTask, title: task})
+	if task.title != "" && (isTask || slices.Contains(f.tags, KindReminder)) {
+		out = append(out, task)
 	}
 	return out
+}
+
+// restates says whether a reminder names the same action as the task, starting with the same word
+// and with most of its words in the task's title, as when "Review Rahul's resume" is the deadline of
+// "Review Rahul's resume and send feedback"; an event such as "Exam" next to "Revise for the exam"
+// is not.
+func restates(reminder, task string) bool {
+	words := strings.Fields(strings.ToLower(reminder))
+	in := strings.Fields(strings.ToLower(task))
+	if len(words) == 0 || len(in) == 0 || words[0] != in[0] {
+		return false
+	}
+	shared := 0
+	for _, w := range words {
+		if slices.Contains(in, w) {
+			shared++
+		}
+	}
+	return shared*3 >= len(words)*2
 }
 
 // save writes the tags of every message in the batch, the tasks found and the tokens spent, in one
