@@ -32,6 +32,7 @@ func OpenTasks(book TaskReader, zone *time.Location, now func() time.Time) agent
 			"anything too vague to act on left out, and the chat an item came from only when it helps. Leave out the numbers " +
 			"unless they ask how to close one, which is /done and its number.",
 		Parameters: json.RawMessage(`{"type": "object", "properties": {}, "additionalProperties": false}`),
+		Untrusted:  true,
 		Run: func(ctx context.Context, _ json.RawMessage) (string, error) {
 			open, err := book.Open(ctx, maxTasks)
 			if err != nil {
