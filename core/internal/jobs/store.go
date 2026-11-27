@@ -58,9 +58,9 @@ func (s *Store) query(ctx context.Context, sql string, args ...any) ([]Job, erro
 // Create schedules j to fire first at j.NextAt. A job just like an active one, same text, same
 // time and same repeat, is not made twice: the active one is returned, with false.
 func (s *Store) Create(ctx context.Context, j Job, createdBy int64) (Job, bool, error) {
-	days := make([]int16, len(j.Repeat.Days))
+	days := make([]int, len(j.Repeat.Days))
 	for i, d := range j.Repeat.Days {
-		days[i] = int16(d)
+		days[i] = int(d)
 	}
 	var until, monthDay any
 	if !j.Repeat.Until.IsZero() {
@@ -83,7 +83,7 @@ func (s *Store) Create(ctx context.Context, j Job, createdBy int64) (Job, bool, 
 		return Job{}, false, err
 	}
 	made, err := s.query(ctx, `INSERT INTO jobs (text, ask, repeat, every, weekdays, month_day, local_time, until, next_at, created_by)
-		VALUES ($1, $2, $3, $4, $5, $6, $7, $8::date, $9, $10) RETURNING `+jobColumns,
+		VALUES ($1, $2, $3, $4, $5::smallint[], $6, $7, $8::date, $9, $10) RETURNING `+jobColumns,
 		strings.TrimSpace(j.Text), j.Ask, j.Repeat.Kind, max(j.Repeat.Every, 1), days, monthDay, j.Clock, until, j.NextAt, by)
 	if err != nil {
 		return Job{}, false, err

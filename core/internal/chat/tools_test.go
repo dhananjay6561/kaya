@@ -202,11 +202,13 @@ func TestTheOwnersWordsAreHisRecentQuestionsNeverAnAlert(t *testing.T) {
 }
 
 func TestAToolsNoteShowsUnderTheAnswerAsWritten(t *testing.T) {
-	r, err := agent.NewRegistry(agent.Tool{Name: "set_reminder", Description: "Sets a reminder.", Parameters: json.RawMessage(`{"type":"object"}`),
+	r, err := agent.NewRegistry(agent.Tool{
+		Name: "set_reminder", Description: "Sets a reminder.", Parameters: json.RawMessage(`{"type":"object"}`),
 		Run: func(ctx context.Context, _ json.RawMessage) (string, error) {
 			agent.AddNote(ctx, "⏰ Sat 28 Nov, 18:00: Call Shaurya")
 			return "set", nil
-		}})
+		},
+	})
 	if err != nil {
 		t.Fatal(err)
 	}
