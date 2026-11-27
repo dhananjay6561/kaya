@@ -170,6 +170,13 @@ contact, and it works with everything your WhatsApp account can see.
   cancel kar do" stops one. If Kaya was off when one was due, it still comes, saying so. The
   scheduler sleeps until the next one is due and wakes when you set one, so it costs nothing while
   waiting, and a plain reminder needs no model call when it fires.
+- **Voice notes.** Send Kaya a voice note and it is a command like any message you type: "kal 6
+  baje yaad dilana" spoken works the same as typed. Everyone else's new voice notes are
+  transcribed in the background, so they can be searched, tagged and summed up like text. Groq's
+  Whisper (`whisper-large-v3-turbo`) does it in about a second, steered to write Hindi in Latin
+  letters the way your chats are written. The audio goes to Groq as it is, since audio cannot be
+  masked; the text it gives back is masked like any message before a model sees it. Older voice
+  notes from before this was switched on are left alone.
 - **Least-privilege database logins.** The gateway and core each have their own Postgres role.
   Core, the part that will talk to an LLM, can read chats but cannot see the WhatsApp session, its
   encryption keys, or the keys needed to fetch media.
@@ -186,7 +193,6 @@ contact, and it works with everything your WhatsApp account can see.
 In build order. Status for each stage is in the [roadmap](#project-status-and-roadmap).
 
 - Confirm-before-act for anything that acts for you, a prompt-injection guard and usage tracking
-- Voice-note transcription, so spoken commands and voice notes become searchable
 - Web search with SearXNG, reading pages, and research answers with links
 - Gmail, Google Calendar and Google Drive
 - PPT and PDF decks made from a topic or a chat, uploaded to Drive, with the link sent back
@@ -539,6 +545,13 @@ erDiagram
         timestamptz sent_at
         text text "what was sent"
     }
+    transcripts {
+        bigint message_id PK "the voice note, no FK"
+        text state "done or failed"
+        text text "what was said"
+        text language
+        numeric duration_s
+    }
     alerting {
         smallint id PK "always one row"
         boolean enabled "/alerts on, /alerts off"
@@ -615,7 +628,8 @@ kaya/
 │                       llm (Groq, stub, o200k token counter), memory, chat, masking, text,
 │                       embeddings (Voyage, stub), search (index, search, excerpts), facts,
 │                       tagging (tags and tasks), summary, agent (tool registry and loop), tools,
-│                       alerts, actions (confirm-before-act), jobs (reminders, scheduler)
+│                       alerts, actions (confirm-before-act), jobs (reminders, scheduler),
+│                       voice (transcription)
 ├── gateway/            Go WhatsApp gateway (its own Go module)
 │   ├── cmd/gateway/    main package: serve, pair, media, healthcheck
 │   └── internal/       config, whatsapp, ingest, events, send, media, testdb
@@ -823,7 +837,7 @@ Status key: ✅ done · 🟨 in progress · ⬜ not started
 | 2. Talking to Kaya | Self-chat command channel and built-in commands `/help`, `/status`, `/pause`, `/resume`. Checked on a real account. | ✅ |
 | 3. Brain | Groq replies, lasting conversation memory, masking for cloud models, embeddings, search, answers from your chats, facts about you, tags and tasks, summaries (built) | 🟨 |
 | 4. Agent loop and safety | Tool calling, confirm-before-act and alerts (built), prompt-injection guard, usage tracking | 🟨 |
-| 5. Voice notes | Transcription, spoken commands | ⬜ |
+| 5. Voice notes | Transcription, spoken commands (built) | 🟨 |
 | 6. Sending as you | Messages to contacts and groups after confirmation, with rate limits (built); auto-reply in chosen chats | 🟨 |
 | 7. Web | Search, page reading, research answers with sources | ⬜ |
 | 8. Google | OAuth, Drive, Gmail, Calendar | ⬜ |
