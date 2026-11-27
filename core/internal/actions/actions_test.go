@@ -16,24 +16,6 @@ import (
 
 var bg = context.Background()
 
-func TestDecisionTakesOnlyAPlainYesOrNo(t *testing.T) {
-	for _, m := range []string{"yes", "Yes!", " haan ", "Haan ji", "ok.", "bhej do", "हाँ", "👍", "send it", "Theek hai"} {
-		if yes, no := Decision(m); !yes || no {
-			t.Errorf("%q is not a yes", m)
-		}
-	}
-	for _, m := range []string{"no", "No.", "nahi", "mat bhejo", "cancel", "नहीं", "don't"} {
-		if yes, no := Decision(m); yes || !no {
-			t.Errorf("%q is not a no", m)
-		}
-	}
-	for _, m := range []string{"yes but at 7", "ok change it to tomorrow", "send it to priya instead", "haan aur usko bol", "", "yess", "what?", "k", "go", "ji", "send"} {
-		if yes, no := Decision(m); yes || no {
-			t.Errorf("%q was taken as a decision", m)
-		}
-	}
-}
-
 type rig struct {
 	t           *testing.T
 	core, admin *store.DB
@@ -43,6 +25,8 @@ type rig struct {
 	now         time.Time
 	ran         []string
 	fail        bool
+	judged      []string
+	judgeErr    error
 }
 
 func newRig(t *testing.T) *rig {
@@ -111,6 +95,22 @@ func (r *rig) runner() *Runner {
 			}
 			return "Sent to Rahul.", nil
 		}},
+		Judge: func(_ context.Context, asked, reply string) (string, error) {
+			r.judged = append(r.judged, reply)
+			if r.judgeErr != nil {
+				return "", r.judgeErr
+			}
+			lower := strings.ToLower(reply)
+			switch {
+			case strings.Contains(lower, " but "):
+				return Change, nil
+			case strings.HasPrefix(lower, "yes"), strings.HasPrefix(lower, "haan"), strings.HasPrefix(lower, "ok"):
+				return Yes, nil
+			case strings.HasPrefix(lower, "no"), strings.HasPrefix(lower, "nahi"):
+				return No, nil
+			}
+			return Other, nil
+		},
 		MessageID: func(ctx context.Context, waID string) (int64, error) {
 			var id int64
 			err := r.core.QueryRow(ctx, "SELECT id FROM messages WHERE wa_id = $1", waID).Scan(&id)
@@ -133,8 +133,8 @@ func (r *rig) handle(run *Runner, body string) (string, bool) {
 func TestAYesRunsTheActionOnceAndANoDropsIt(t *testing.T) {
 	r := newRig(t)
 	run := r.runner()
-	if _, handled := r.handle(run, "yes"); handled {
-		t.Fatal("a yes with nothing waiting was taken as a decision")
+	if _, handled := r.handle(run, "yes"); handled || len(r.judged) != 0 {
+		t.Fatal("a yes with nothing waiting was read or taken as a decision")
 	}
 	first := r.ask(run)
 	if _, handled := r.handle(run, "yes but say 8 pm"); handled {
@@ -237,5 +237,26 @@ func TestOnlyAYesToAQuestionDJSawDecidesIt(t *testing.T) {
 	}
 	if ok, _ := run.Store.Shown(bg, b.ID, "3EB0OTHER", r.clock()); ok {
 		t.Fatal("a decided action was shown again")
+	}
+}
+
+func TestAReplyIsReadOnlyWhenItCouldAnswerAndAFailedReadDoesNothing(t *testing.T) {
+	r := newRig(t)
+	run := r.runner()
+	if _, handled := r.handle(run, "what's the weather"); handled || len(r.judged) != 0 {
+		t.Fatal("a message with nothing waiting was sent to the judge")
+	}
+	a := r.ask(run)
+	if _, handled := r.handle(run, "btw what time is it"); handled || len(r.judged) != 1 {
+		t.Fatalf("an unrelated reply was taken: judged %v", r.judged)
+	}
+	r.judgeErr = errors.New("groq away")
+	answer, handled := r.handle(run, "haan bhej de")
+	if !handled || !strings.Contains(answer, "did nothing") || len(r.ran) != 0 {
+		t.Fatalf("answer %q, ran %v", answer, r.ran)
+	}
+	r.judgeErr = nil
+	if answer, handled := r.handle(run, "Yess"); !handled || answer != "Sent to Rahul." || len(r.ran) != 1 || r.ran[0] != a.ID {
+		t.Fatalf("answer %q %v, ran %v", answer, handled, r.ran)
 	}
 }

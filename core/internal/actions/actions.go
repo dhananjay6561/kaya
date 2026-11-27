@@ -8,9 +8,7 @@ import (
 	"errors"
 	"fmt"
 	"log/slog"
-	"strings"
 	"time"
-	"unicode"
 
 	"github.com/jackc/pgx/v5"
 
@@ -127,9 +125,26 @@ func (s *Store) DecidedBy(ctx context.Context, messageID int64) (*Action, string
 	return &a, result, err
 }
 
+// answers is true when DJ's message y can answer action pa: it came after Kaya asked him, with no
+// other message from Kaya in between, which it would more likely answer.
+const answers = `y.sent_at > pa.shown_at AND NOT EXISTS (
+	SELECT 1 FROM messages k JOIN send_requests r ON r.wa_id = k.wa_id
+	WHERE k.chat_id = y.chat_id AND r.state = 'sent' AND k.wa_id <> pa.shown_wa_id
+	  AND k.sent_at > pa.shown_at AND k.sent_at < y.sent_at)`
+
+// Answers says whether DJ's message could answer the waiting action a, before anything is spent
+// reading it.
+func (s *Store) Answers(ctx context.Context, a Action, messageID int64) (bool, error) {
+	var ok bool
+	err := s.db.QueryRow(ctx, `SELECT EXISTS (SELECT 1 FROM pending_actions pa, messages y
+		WHERE pa.id = $1::uuid AND pa.state = 'pending' AND pa.expires_at > $3 AND y.id = $2 AND `+answers+`)`,
+		a.ID, messageID, s.now()).Scan(&ok)
+	return ok, err
+}
+
 // Decide records DJ's answer to the waiting action a, given by his message; false means it does
 // not answer it: the action was no longer waiting, or his message came before the question or
-// after another message from Kaya, which it more likely answers.
+// after another message from Kaya.
 func (s *Store) Decide(ctx context.Context, a Action, messageID int64, yes bool) (bool, error) {
 	state := Declined
 	if yes {
@@ -137,12 +152,21 @@ func (s *Store) Decide(ctx context.Context, a Action, messageID int64, yes bool)
 	}
 	n, err := s.db.Exec(ctx, `UPDATE pending_actions pa SET state = $2, decided_by = $3, decided_at = now()
 		FROM messages y
-		WHERE pa.id = $1::uuid AND pa.state = 'pending' AND pa.expires_at > $4 AND y.id = $3 AND y.sent_at > pa.shown_at
-		  AND NOT EXISTS (
-			SELECT 1 FROM messages k JOIN send_requests r ON r.wa_id = k.wa_id
-			WHERE k.chat_id = y.chat_id AND r.state = 'sent' AND k.wa_id <> pa.shown_wa_id
-			  AND k.sent_at > pa.shown_at AND k.sent_at < y.sent_at)`, a.ID, state, messageID, s.now())
+		WHERE pa.id = $1::uuid AND pa.state = 'pending' AND pa.expires_at > $4 AND y.id = $3 AND `+answers,
+		a.ID, state, messageID, s.now())
 	return n == 1, err
+}
+
+// Lapsed is the last action DJ was asked about when it expired in the last hour unanswered and his
+// message could have answered it, so a late yes can be told so; nil otherwise.
+func (s *Store) Lapsed(ctx context.Context, messageID int64) (*Action, error) {
+	a, err := scan(s.db.QueryRow(ctx, `SELECT pa.id::text, pa.kind, pa.target_jid, pa.summary, pa.payload, pa.state, pa.created_at, pa.expires_at FROM (
+			SELECT * FROM pending_actions WHERE shown_at IS NOT NULL ORDER BY shown_at DESC LIMIT 1) pa, messages y
+		WHERE pa.state = 'expired' AND pa.expires_at > $2 AND y.id = $1 AND `+answers, messageID, s.now().Add(-time.Hour)))
+	if errors.Is(err, pgx.ErrNoRows) {
+		return nil, nil
+	}
+	return &a, err
 }
 
 // Finish records how a confirmed action went.
@@ -156,15 +180,6 @@ func (s *Store) Finish(ctx context.Context, a Action, ok bool, result string) er
 	return err
 }
 
-// RecentlyLapsed says whether the last action DJ was asked about expired in the last hour without
-// an answer, so a late yes can be told so.
-func (s *Store) RecentlyLapsed(ctx context.Context) (bool, error) {
-	var lapsed bool
-	err := s.db.QueryRow(ctx, `SELECT coalesce((SELECT state = 'expired' AND expires_at > $1 FROM pending_actions
-		WHERE shown_at IS NOT NULL ORDER BY shown_at DESC LIMIT 1), false)`, s.now().Add(-time.Hour)).Scan(&lapsed)
-	return lapsed, err
-}
-
 // CountDone is how many actions of kind DJ confirmed since, run or not, so one that may have gone
 // out counts too.
 func (s *Store) CountDone(ctx context.Context, kind string, since time.Time) (int, error) {
@@ -172,39 +187,6 @@ func (s *Store) CountDone(ctx context.Context, kind string, since time.Time) (in
 	err := s.db.QueryRow(ctx, `SELECT count(*) FROM pending_actions WHERE kind = $1 AND state IN ('confirmed', 'done', 'failed') AND decided_at > $2`,
 		kind, since).Scan(&n)
 	return n, err
-}
-
-var (
-	yesWords = []string{
-		"yes", "y", "yeah", "yep", "yup", "ok", "okay", "sure", "send it", "do it", "go ahead",
-		"confirm", "confirmed", "haan", "han", "ha", "haa", "haanji", "hanji", "haan ji", "bhej", "bhej do", "bhejo",
-		"kar do", "karo", "theek hai", "thik hai", "chalega", "हाँ", "हां", "हा", "भेज दो", "👍", "✅",
-	}
-	noWords = []string{
-		"no", "n", "nope", "nah", "cancel", "stop", "dont", "don't", "do not", "nahi", "nahin", "nai", "na", "mat",
-		"mat bhejo", "mat bhej", "rehne do", "rehnde", "ruk", "ruko", "नहीं", "नही", "मत", "👎", "❌",
-	}
-)
-
-// Decision reads a reply to a confirmation: yes or no only when the whole message is one of a few
-// plain words, in English, Hinglish or Hindi; anything longer is not a decision, so "yes but at 7"
-// never confirms.
-func Decision(message string) (yes, no bool) {
-	cleaned := strings.ToLower(strings.TrimFunc(message, func(r rune) bool {
-		return unicode.IsSpace(r) || unicode.IsPunct(r) && r != '\''
-	}))
-	cleaned = strings.Join(strings.Fields(cleaned), " ")
-	for _, w := range yesWords {
-		if cleaned == w {
-			return true, false
-		}
-	}
-	for _, w := range noWords {
-		if cleaned == w {
-			return false, true
-		}
-	}
-	return false, false
 }
 
 // Executor runs a confirmed action and says what happened, in words for DJ.
@@ -215,6 +197,8 @@ type Runner struct {
 	Store     *Store
 	Executors map[string]Executor
 	Logger    *slog.Logger
+	// Judge reads what DJ's reply means for the action he was asked about.
+	Judge Judge
 	// MessageID finds the messages.id of DJ's message by its WhatsApp id, 0 when it is not stored.
 	MessageID func(ctx context.Context, waID string) (int64, error)
 }
@@ -240,14 +224,12 @@ func (r *Runner) Replay(ctx context.Context, waID string) (string, bool, error) 
 	}
 }
 
-// Handle answers DJ's message when it decides an action, and reports false when it does not, so it
-// goes on to the chat model. A message seen before gets the answer it got then; a yes runs the
-// action at most once.
+// Handle answers DJ's message when it decides the action he was asked about, and reports false
+// when it does not, so it goes on to the chat model. The Judge reads it only when it could answer
+// that action, so ordinary messages cost nothing; a message seen before gets the answer it got
+// then, and a yes runs the action at most once. When the Judge cannot read it, nothing is done and
+// DJ is asked to reply again.
 func (r *Runner) Handle(ctx context.Context, waID, message string) (string, bool, error) {
-	yes, no := Decision(message)
-	if !yes && !no {
-		return "", false, nil
-	}
 	if answer, replayed, err := r.Replay(ctx, waID); err != nil || replayed {
 		return answer, replayed, err
 	}
@@ -260,22 +242,44 @@ func (r *Runner) Handle(ctx context.Context, waID, message string) (string, bool
 		return "", false, err
 	}
 	if open == nil {
-		lapsed, err := r.Store.RecentlyLapsed(ctx)
-		if err != nil || !lapsed || no {
-			return "", false, err
-		}
-		return "That one waited too long, so I did nothing. Ask me again if you still want it.", true, nil
+		return r.late(ctx, messageID, message)
 	}
-	ok, err := r.Store.Decide(ctx, *open, messageID, yes)
+	if ok, err := r.Store.Answers(ctx, *open, messageID); err != nil || !ok {
+		return "", false, err
+	}
+	meaning, err := r.Judge(ctx, open.Summary, message)
+	switch {
+	case err != nil && ctx.Err() != nil:
+		return "", false, context.Cause(ctx)
+	case err != nil:
+		r.Logger.Warn("could not read a reply to an action; nothing was done", "action", open.ID, logging.Err(err))
+		return "I couldn't make out whether that was a yes, so I did nothing. Reply again in a moment.", true, nil
+	case meaning != Yes && meaning != No:
+		r.Logger.Info("a reply to an action was not a yes or no", "action", open.ID, "meaning", meaning)
+		return "", false, nil
+	}
+	ok, err := r.Store.Decide(ctx, *open, messageID, meaning == Yes)
 	if err != nil || !ok {
 		return "", false, err
 	}
-	if no {
+	if meaning == No {
 		r.Logger.Info("an action was declined", "action", open.ID, "kind", open.Kind)
 		return "Okay, I won't.", true, nil
 	}
 	r.Logger.Info("an action was confirmed", "action", open.ID, "kind", open.Kind)
 	return r.run(ctx, *open)
+}
+
+// late tells DJ a yes came after the action he was asked about expired; anything else goes on.
+func (r *Runner) late(ctx context.Context, messageID int64, message string) (string, bool, error) {
+	lapsed, err := r.Store.Lapsed(ctx, messageID)
+	if err != nil || lapsed == nil {
+		return "", false, err
+	}
+	if meaning, err := r.Judge(ctx, lapsed.Summary, message); err != nil || meaning != Yes {
+		return "", false, nil
+	}
+	return "That one waited too long, so I did nothing. Ask me again if you still want it.", true, nil
 }
 
 func (r *Runner) run(ctx context.Context, a Action) (string, bool, error) {
