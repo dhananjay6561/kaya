@@ -608,3 +608,101 @@ func TestFinishedRequestsAreDeletedAfterAWhile(t *testing.T) {
 		t.Fatalf("want only the unfinished request left, got %q %v", left, err)
 	}
 }
+
+// action stores a pending action for target, decided by a message as set by how, and returns its id.
+type decision struct {
+	state      string
+	fromMe     bool
+	inOwnChat  bool
+	before     bool
+	decidedAgo time.Duration
+}
+
+func (h *harness) action(target string, d decision) string {
+	h.t.Helper()
+	ctx := context.Background()
+	var me, friend, chat int64
+	err := h.admin.Query(ctx, "SELECT contact_id_for($1, $2)", []any{ownLID, ownPN}, &me)
+	if err == nil {
+		err = h.admin.Query(ctx, "SELECT contact_id_for(NULL, $1)", []any{"918888888888@s.whatsapp.net"}, &friend)
+	}
+	who := friend
+	if d.inOwnChat {
+		who = me
+	}
+	if err == nil {
+		err = h.admin.Query(ctx, `INSERT INTO chats (kind, contact_id) VALUES ('direct', $1)
+			ON CONFLICT (contact_id) WHERE kind = 'direct' DO UPDATE SET kind = 'direct' RETURNING id`, []any{who}, &chat)
+	}
+	if err != nil {
+		h.t.Fatal(err)
+	}
+	proposed := time.Now().Add(-d.decidedAgo - time.Minute)
+	said := proposed.Add(time.Second)
+	if d.before {
+		said = proposed.Add(-time.Second)
+	}
+	sender := me
+	if !d.fromMe {
+		sender = friend
+	}
+	var msg int64
+	if err := h.admin.Query(ctx, `INSERT INTO messages (chat_id, wa_id, sender_id, from_me, sent_at, kind, body, source)
+		VALUES ($1, $2, $3, $4, $5, 'text', 'yes', 'live') RETURNING id`,
+		[]any{chat, "3EB0YES" + contracts.NewID()[:8], sender, d.fromMe, said}, &msg); err != nil {
+		h.t.Fatal(err)
+	}
+	var id string
+	decidedBy, decidedAt := any(msg), any(time.Now().Add(-d.decidedAgo))
+	if d.state == "pending" {
+		decidedBy, decidedAt = nil, nil
+	}
+	if err := h.admin.Query(ctx, `INSERT INTO pending_actions (kind, target_jid, summary, payload, state, created_at, expires_at, decided_by, decided_at)
+		VALUES ('send_message', $1, 'Send Rahul: running late', '{}', $2, $3, $3::timestamptz + interval '1 hour', $4, $5) RETURNING id::text`,
+		[]any{target, d.state, proposed, decidedBy, decidedAt}, &id); err != nil {
+		h.t.Fatal(err)
+	}
+	return id
+}
+
+func confirmedBy(action string) option {
+	return func(r map[string]any) {
+		r["authorization"] = map[string]any{"kind": "confirmed", "action_id": action}
+	}
+}
+
+func TestAConfirmedActionSendsToItsOwnChatOnlyOnce(t *testing.T) {
+	h := newHarness(t)
+	friend := "918888888888@s.whatsapp.net"
+	yes := decision{state: "confirmed", fromMe: true, inOwnChat: true}
+	good := h.action(friend, yes)
+	first := h.queue("running late", to(friend), confirmedBy(good))
+	again := h.queue("running late again", to(friend), confirmedBy(good))
+	elsewhere := h.queue("to a group instead", to("120363000000000000@g.us"), confirmedBy(good))
+	refused := map[string]string{
+		"not yet confirmed": h.queue("x", to(friend), confirmedBy(h.action(friend, decision{state: "pending", fromMe: true, inOwnChat: true}))),
+		"declined":          h.queue("x", to(friend), confirmedBy(h.action(friend, decision{state: "declined", fromMe: true, inOwnChat: true}))),
+		"yes from them":     h.queue("x", to(friend), confirmedBy(h.action(friend, decision{state: "confirmed", fromMe: false, inOwnChat: true}))),
+		"yes in their chat": h.queue("x", to(friend), confirmedBy(h.action(friend, decision{state: "confirmed", fromMe: true}))),
+		"yes before asked":  h.queue("x", to(friend), confirmedBy(h.action(friend, decision{state: "confirmed", fromMe: true, inOwnChat: true, before: true}))),
+		"yes long ago":      h.queue("x", to(friend), confirmedBy(h.action(friend, decision{state: "confirmed", fromMe: true, inOwnChat: true, decidedAgo: 20 * time.Minute}))),
+		"unknown action":    h.queue("x", to(friend), confirmed()),
+	}
+	h.drain(h.cli)
+	if state, _, _ := h.row(first); state != StateSent {
+		t.Fatalf("the confirmed send was %s", state)
+	}
+	for name, id := range map[string]string{"a second send": again, "another chat": elsewhere} {
+		if state, _, code := h.row(id); state != StateFailed || code != CodeNotAuthorized {
+			t.Errorf("%s: %s %s", name, state, code)
+		}
+	}
+	for name, id := range refused {
+		if state, _, code := h.row(id); state != StateFailed || code != CodeNotAuthorized {
+			t.Errorf("%s: %s %s", name, state, code)
+		}
+	}
+	if got := h.cli.texts(); !slices.Equal(got, []string{"running late"}) {
+		t.Fatalf("sent %q", got)
+	}
+}
