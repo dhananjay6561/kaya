@@ -190,7 +190,12 @@ func run(cfg config.Config, logger *slog.Logger) error {
 		Logger: logger,
 		Zone:   zone,
 		History: func(ctx context.Context, _ chat.Question) ([]memory.Exchange, error) {
-			return memory.ReadConversation(ctx, db, 0)
+			past, err := memory.ReadConversation(ctx, db, 0)
+			if err != nil {
+				return nil, err
+			}
+			sent, err := alerts.Recent(ctx, db, time.Now().Add(-12*time.Hour), 5)
+			return memory.Interleave(past, sent), err
 		},
 		Recall: func(ctx context.Context, query string, exclude []int64, before time.Time) ([]memory.Exchange, error) {
 			ctx, cancel := context.WithTimeout(ctx, 5*time.Second)
