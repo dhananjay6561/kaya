@@ -11,9 +11,12 @@ import (
 	"testing"
 	"time"
 
+	"github.com/jackc/pgx/v5"
+
 	"github.com/dhananjay6561/kaya/core/internal/llm"
 	"github.com/dhananjay6561/kaya/core/internal/masking"
 	"github.com/dhananjay6561/kaya/core/internal/pause"
+	"github.com/dhananjay6561/kaya/core/internal/search"
 	"github.com/dhananjay6561/kaya/kit/store"
 	"github.com/dhananjay6561/kaya/kit/testdb"
 )
@@ -200,7 +203,7 @@ func TestTagsABatchAndKeepsItsTasksAndReminders(t *testing.T) {
 	r.say(msg{body: "50% off on shoes!!"})
 	m := (&model{locality: llm.Local}).script(`{"tagged":[
 		{"line":2,"tags":["important","task","task"],"task":"Send Rahul the deck","mine":true,"reminder":"","due":""},
-		{"line":3,"tags":["reminder"],"task":"","reminder":"Call with Priya","due":"2026-11-27 17:00"},
+		{"line":3,"tags":["reminder"],"task":"","mine":true,"reminder":"Call with Priya","due":"2026-11-27 17:00"},
 		{"line":4,"tags":["ignore"],"task":"","reminder":"","due":""},
 		{"line":9,"tags":["important"],"task":"","reminder":"","due":""}]}`)
 	tg := r.tagger(m, Options{})
@@ -305,7 +308,7 @@ func TestAMessageCanGiveATaskAndAReminderAndAReminderWithoutADayIsATask(t *testi
 	r.say(msg{body: "dentist sometime"})
 	r.say(msg{body: "exam on 3 dec"})
 	m := (&model{locality: llm.Local}).script(`{"tagged":[
-		{"line":1,"tags":["reminder"],"task":"","reminder":"Book the dentist","due":"soon"},
+		{"line":1,"tags":["reminder"],"task":"","mine":true,"reminder":"Book the dentist","due":"soon"},
 		{"line":2,"tags":["reminder","task"],"task":"Revise for the exam","mine":true,"reminder":"Exam","due":"2026-12-03"}]}`)
 	if _, err := r.step(r.tagger(m, Options{})); err != nil {
 		t.Fatal(err)
@@ -432,8 +435,8 @@ func TestPassesOverOldMessagesAndRetagsEditedOnes(t *testing.T) {
 	old := r.say(msg{body: "from last week", sentAt: time.Now().Add(-7 * 24 * time.Hour)})
 	edited := r.say(msg{body: "call at 4 tomorrow"})
 	m := (&model{locality: llm.Local}).script(
-		`{"tagged":[{"line":1,"tags":["reminder"],"task":"","reminder":"Call","due":"2026-11-27 16:00"}]}`,
-		`{"tagged":[{"line":1,"tags":["reminder"],"task":"","reminder":"Call","due":"2026-11-27 17:00"}]}`)
+		`{"tagged":[{"line":1,"tags":["reminder"],"task":"","mine":true,"reminder":"Call","due":"2026-11-27 16:00"}]}`,
+		`{"tagged":[{"line":1,"tags":["reminder"],"task":"","mine":true,"reminder":"Call","due":"2026-11-27 17:00"}]}`)
 	tg := r.tagger(m, Options{})
 	if _, err := r.step(tg); err != nil {
 		t.Fatal(err)
@@ -460,8 +463,8 @@ func TestDropsADueDayBeforeTheMessageOrAfterAYear(t *testing.T) {
 	r.say(msg{body: "a"})
 	r.say(msg{body: "b"})
 	m := (&model{locality: llm.Local}).script(`{"tagged":[
-		{"line":1,"tags":["reminder"],"task":"","reminder":"Past","due":"2025-11-27 10:00"},
-		{"line":2,"tags":["reminder"],"task":"","reminder":"Far","due":"2031-01-01"}]}`)
+		{"line":1,"tags":["reminder"],"task":"","mine":true,"reminder":"Past","due":"2025-11-27 10:00"},
+		{"line":2,"tags":["reminder"],"task":"","mine":true,"reminder":"Far","due":"2031-01-01"}]}`)
 	if _, err := r.step(r.tagger(m, Options{})); err != nil {
 		t.Fatal(err)
 	}
@@ -585,7 +588,7 @@ func TestANewTaskThatRepeatsAnOpenOneIsNotAddedAndTheModelSeesTheList(t *testing
 	r.say(msg{body: "hourly reminder: Asad (drizz) today 3pm"})
 	r.say(msg{body: "send the deck to rahul and the invoice too"})
 	m := (&model{locality: llm.Local}).script(`{"tagged":[
-		{"line":1,"tags":["reminder"],"task":"","reminder":"Asad (drizz) today 3pm","due":"2026-11-26 15:00"},
+		{"line":1,"tags":["reminder"],"task":"","mine":true,"reminder":"Asad (drizz) today 3pm","due":"2026-11-26 15:00"},
 		{"line":2,"tags":["task"],"task":"Send the deck to Rahul","mine":true,"reminder":"","due":""},
 		{"line":2,"tags":["task"],"task":"","reminder":"","due":""}]}`)
 	tg := r.tagger(m, Options{})
@@ -656,15 +659,15 @@ func TestRemindersDropOffWhenTheyAreOverAndLateTasksSaySo(t *testing.T) {
 
 func TestAReminderThatRestatesItsTaskBecomesItsDeadline(t *testing.T) {
 	due := time.Date(2026, 11, 27, 0, 0, 0, 0, kolkata)
-	got := kinds(found{tags: []string{KindTask, KindReminder}, task: "Review Rahul's resume and send feedback", reminder: "Review Rahul's resume", due: &due})
+	got := kinds(found{tags: []string{KindTask, KindReminder}, task: "Review Rahul's resume and send feedback", reminder: "Review Rahul's resume", reminderDue: &due})
 	if len(got) != 1 || got[0].kind != KindTask || got[0].due != &due {
 		t.Fatalf("got %+v", got)
 	}
-	got = kinds(found{tags: []string{KindTask}, task: "Send the deck", due: &due})
+	got = kinds(found{tags: []string{KindTask}, task: "Send the deck", taskDue: &due})
 	if len(got) != 1 || got[0].due != &due {
 		t.Fatalf("a task's own deadline was dropped: %+v", got)
 	}
-	got = kinds(found{tags: []string{KindTask, KindReminder}, task: "Revise for the exam", reminder: "Exam", due: &due})
+	got = kinds(found{tags: []string{KindTask, KindReminder}, task: "Revise for the exam", reminder: "Exam", reminderDue: &due})
 	if len(got) != 2 || got[0].kind != KindReminder || got[1].due != nil {
 		t.Fatalf("an event and its task were merged: %+v", got)
 	}
@@ -685,7 +688,111 @@ func TestATaskThatIsSomeoneElsesJobIsNotKept(t *testing.T) {
 		t.Fatalf("open %+v, %v", open, err)
 	}
 	same(t, r.tags(), []string{"Approve the payment yaar: task", "can you send me the deck?: task"})
-	if system := m.requests()[0].Messages[0].Content; !strings.Contains(system, "mine says whose job it is") {
+	if system := m.requests()[0].Messages[0].Content; !strings.Contains(system, "mine says whether its task or reminder is the owner's") {
 		t.Fatal("the prompt does not ask whose job a task is")
+	}
+}
+
+func TestKeepStoresNewTasksSkipsRepeatsAndMovesRescheduledOnes(t *testing.T) {
+	r := newRig(t)
+	at := func(day, hour int) *time.Time {
+		d := time.Date(2026, 11, day, hour, 0, 0, 0, kolkata)
+		return &d
+	}
+	keepOne := func(k newTask) bool {
+		t.Helper()
+		id := r.say(msg{body: k.title})
+		var added bool
+		err := r.core.InTx(bg, func(tx pgx.Tx) error {
+			var err error
+			added, err = keep(bg, tx, search.ChatLine{Line: search.Line{MessageID: id, ChatID: r.direct}}, k)
+			return err
+		})
+		if err != nil {
+			t.Fatal(err)
+		}
+		return added
+	}
+	open := func() []string {
+		t.Helper()
+		got, err := NewTasks(r.core, func() time.Time { return today }).Open(bg, 20)
+		if err != nil {
+			t.Fatal(err)
+		}
+		var out []string
+		for _, o := range got {
+			line := o.Kind + " " + o.Title
+			if o.Due != nil {
+				line += " @" + o.Due.In(kolkata).Format("2 15:04")
+			}
+			out = append(out, line)
+		}
+		return out
+	}
+	if !keepOne(newTask{kind: KindReminder, title: "Investor call with Priya", due: at(27, 17), timed: true}) {
+		t.Fatal("a new reminder was not kept")
+	}
+	if keepOne(newTask{kind: KindReminder, title: "Call with Priya", due: at(27, 17), timed: true}) {
+		t.Fatal("a repeat inside a longer title was kept")
+	}
+	if keepOne(newTask{kind: KindReminder, title: "Call with Priya", due: at(27, 18), timed: true}) {
+		t.Fatal("a new time was kept as a second reminder")
+	}
+	if keepOne(newTask{kind: KindTask, title: "investor call with priya"}) {
+		t.Fatal("a repeat without a day was kept as a task")
+	}
+	keepOne(newTask{kind: KindTask, title: "Send Rahul the deck"})
+	keepOne(newTask{kind: KindTask, title: "Send Rahul the deck by tomorrow", due: at(28, 0)})
+	keepOne(newTask{kind: KindTask, title: "Send Rahul the invoice"})
+	keepOne(newTask{kind: KindTask, title: "Prepare for the investor call with Priya"})
+	same(t, open(), []string{
+		"reminder Investor call with Priya @27 18:00",
+		"task Send Rahul the deck @28 00:00",
+		"task Prepare for the investor call with Priya",
+		"task Send Rahul the invoice",
+	})
+
+	r.exec("UPDATE messages SET deleted_at = now() WHERE body = 'Send Rahul the invoice'")
+	if !keepOne(newTask{kind: KindTask, title: "Send Rahul the invoice"}) {
+		t.Fatal("a task was taken for a repeat of one whose message was deleted")
+	}
+}
+
+func TestEachRowsDueGoesToWhatItNamesAndOnlyTheOwnersAreKept(t *testing.T) {
+	r := newRig(t)
+	r.say(msg{body: "send the deck tonight, and the call is friday 4pm"})
+	r.say(msg{fromMe: true, body: "Rahul, call the client at 4pm"})
+	m := (&model{locality: llm.Local}).script(`{"tagged":[
+		{"line":1,"tags":["task"],"task":"Send Rahul the deck","mine":true,"reminder":"","due":"2026-11-26 21:00"},
+		{"line":1,"tags":["reminder"],"task":"","mine":true,"reminder":"Call with Rahul","due":"2026-11-27 16:00"},
+		{"line":2,"tags":["reminder"],"task":"","mine":false,"reminder":"Call with the client","due":"2026-11-26 16:00"}]}`)
+	if found, err := r.step(r.tagger(m, Options{})); !found || err != nil {
+		t.Fatalf("found %v, err %v", found, err)
+	}
+	open, err := NewTasks(r.core, func() time.Time { return today }).Open(bg, 10)
+	if err != nil || len(open) != 2 {
+		t.Fatalf("open %+v, %v", open, err)
+	}
+	if open[0].Title != "Send Rahul the deck" || !open[0].Due.Equal(time.Date(2026, 11, 26, 21, 0, 0, 0, kolkata)) ||
+		open[1].Title != "Call with Rahul" || !open[1].Due.Equal(time.Date(2026, 11, 27, 16, 0, 0, 0, kolkata)) {
+		t.Fatalf("open %+v", open)
+	}
+}
+
+func TestTheModelSeesOnlyThisChatsOpenItems(t *testing.T) {
+	r := newRig(t)
+	other := r.say(msg{chat: r.group, body: "standup"})
+	r.exec(`INSERT INTO tasks (message_id, chat_id, kind, title) VALUES ($1, $2, 'task', 'Office secret task')`, other, r.group)
+	mine := r.say(msg{body: "deck"})
+	r.exec(`INSERT INTO tasks (message_id, chat_id, kind, title) VALUES ($1, $2, 'task', 'Send Rahul the deck')`, mine, r.direct)
+	r.exec(`INSERT INTO message_tags (message_id, tags) VALUES ($1, '{task}'), ($2, '{task}')`, other, mine)
+	r.say(msg{body: "hi"})
+	m := (&model{locality: llm.Local}).script(`{"tagged":[]}`)
+	if found, err := r.step(r.tagger(m, Options{})); !found || err != nil {
+		t.Fatalf("found %v, err %v", found, err)
+	}
+	user := m.requests()[0].Messages[1].Content
+	if !strings.Contains(user, "- Send Rahul the deck\n") || strings.Contains(user, "Office secret task") {
+		t.Fatalf("request = %q", user)
 	}
 }
