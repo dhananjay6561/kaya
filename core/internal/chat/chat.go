@@ -76,7 +76,8 @@ type Options struct {
 // Chat answers DJ's plain messages.
 type Chat struct {
 	o Options
-	// toolTokens is what offering the tools adds to every request.
+	// toolTokens is what offering the tools adds to every request, and the room kept for their
+	// results.
 	toolTokens int
 }
 
@@ -106,7 +107,7 @@ func New(o Options) (*Chat, error) {
 	}
 	c := &Chat{o: o}
 	if o.Tools != nil {
-		c.toolTokens = o.Tools.Tokens(o.LLM.CountTokens)
+		c.toolTokens = o.Tools.Tokens(o.LLM.CountTokens) + o.LLM.ContextTokens()/8
 	}
 	return c, nil
 }
@@ -162,7 +163,7 @@ func (c *Chat) Reply(ctx context.Context, q Question) (Answer, error) {
 			"finish_reason", completion.FinishReason,
 			"input_tokens", res.Usage.InputTokens,
 			"output_tokens", res.Usage.OutputTokens,
-			"counted_tokens", built.Tokens+c.toolTokens,
+			"counted_tokens", built.Tokens,
 			"tool_rounds", res.Rounds,
 			"tool_calls", calls,
 			"exchanges", built.Exchanges,
@@ -380,7 +381,7 @@ func (c *Chat) complete(ctx context.Context, r llm.Request, privacy MaskSession)
 		hide = privacy
 	}
 	return agent.Run(ctx, agent.Options{
-		LLM: c.o.LLM, Tools: c.o.Tools, Logger: c.o.Logger, Privacy: hide,
+		LLM: c.o.LLM, Tools: c.o.Tools, Logger: c.o.Logger, Privacy: hide, Budget: c.o.LLM.ContextTokens(),
 		Fatal: func(err error) bool { return c.o.DatabaseAway != nil && c.o.DatabaseAway(err) },
 	}, r)
 }
