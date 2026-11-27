@@ -74,8 +74,10 @@ func (s *Store) Create(ctx context.Context, j Job, createdBy int64) (Job, bool, 
 		by = createdBy
 	}
 	same, err := s.query(ctx, `SELECT `+jobColumns+` FROM jobs
-		WHERE state = 'active' AND lower(text) = lower($1) AND next_at = $2 AND repeat = $3 AND ask = $4`,
-		strings.TrimSpace(j.Text), j.NextAt, j.Repeat.Kind, j.Ask)
+		WHERE state = 'active' AND lower(text) = lower($1) AND abs(extract(epoch FROM next_at - $2::timestamptz)) < 60
+		  AND repeat = $3 AND ask = $4 AND every = $5 AND weekdays = $6::smallint[]
+		  AND month_day IS NOT DISTINCT FROM $7::smallint AND until IS NOT DISTINCT FROM $8::date`,
+		strings.TrimSpace(j.Text), j.NextAt, j.Repeat.Kind, j.Ask, max(j.Repeat.Every, 1), days, monthDay, until)
 	if err != nil || len(same) > 0 {
 		if len(same) > 0 {
 			return same[0], false, nil

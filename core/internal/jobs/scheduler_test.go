@@ -127,7 +127,7 @@ func TestARepeatingJobMovesOnAndALateOneSaysSo(t *testing.T) {
 	r.create(Job{Text: "Stand up and stretch", Repeat: Repeat{Kind: Daily}, NextAt: due})
 	r.step(s)
 	got := r.phone.texts()
-	if len(got) != 1 || !strings.HasPrefix(got[0], "*Reminder:* Stand up and stretch\n(It was due at ") || !strings.HasSuffix(got[0], "I was offline then.)") {
+	if len(got) != 1 || !strings.HasPrefix(got[0], "*Reminder:* Stand up and stretch\n(It was due at ") || !strings.HasSuffix(got[0], ".)") {
 		t.Fatalf("sent %q", got)
 	}
 	left, _ := NewStore(r.db).List(bg)
@@ -218,5 +218,65 @@ func TestFiredJobsJoinTheConversation(t *testing.T) {
 	got, err := Recent(bg, r.db, time.Now().Add(-time.Hour), 5)
 	if err != nil || len(got) != 1 || got[0].Answer != "*Reminder:* Call Shaurya" || !got[0].Unasked || got[0].Question != FiredHeadsUp {
 		t.Fatalf("got %+v, %v", got, err)
+	}
+}
+
+func TestAnAskJobIsAskedOnceEvenWhenItsSendIsRetried(t *testing.T) {
+	r := newRig(t)
+	s := r.scheduler()
+	r.create(Job{Text: "send me my open tasks", Ask: true, Repeat: Repeat{Kind: Daily}, NextAt: r.now})
+	r.phone.errs = []error{errors.New("gateway away")}
+	if _, err := s.Step(bg); err == nil {
+		t.Fatal("a failed send was not reported")
+	}
+	r.step(s)
+	if len(r.asked) != 1 || len(r.phone.texts()) != 1 {
+		t.Fatalf("asked %d times, sent %q", len(r.asked), r.phone.texts())
+	}
+}
+
+func TestACancelWinsOverAStepThatAlreadyReadTheJob(t *testing.T) {
+	r := newRig(t)
+	s := r.scheduler()
+	j := r.create(Job{Text: "Pay rent", Repeat: Repeat{Kind: Once}, NextAt: r.now})
+	if _, err := NewStore(r.db).Cancel(bg, []int64{j.ID}); err != nil {
+		t.Fatal(err)
+	}
+	if err := s.fire(bg, j); err != nil {
+		t.Fatal(err)
+	}
+	if len(r.phone.texts()) != 0 {
+		t.Fatalf("a cancelled job fired: %q", r.phone.texts())
+	}
+}
+
+func TestAReminderTheGatewayRefusedIsTriedAgain(t *testing.T) {
+	r := newRig(t)
+	s := r.scheduler()
+	r.create(Job{Text: "Call Shaurya", Repeat: Repeat{Kind: Once}, NextAt: r.now})
+	r.phone.errs = []error{&channel.SendFailedError{Code: "expired"}}
+	r.step(s)
+	left, _ := NewStore(r.db).List(bg)
+	if len(left) != 1 || !left[0].NextAt.Equal(r.now.Add(5*time.Minute)) {
+		t.Fatalf("not retried: %+v", left)
+	}
+	r.now = r.now.Add(5 * time.Minute)
+	r.step(s)
+	if got := r.phone.texts(); len(got) != 1 || got[0] != "*Reminder:* Call Shaurya\n(It was due at "+r.now.Add(-5*time.Minute).In(r.zone).Format("15:04")+".)" {
+		t.Fatalf("sent %q", got)
+	}
+}
+
+func TestAJobWithinAMinuteOfTheSameOneIsTheSame(t *testing.T) {
+	r := newRig(t)
+	st := NewStore(r.db)
+	first := r.create(Job{Text: "Chai", Repeat: Repeat{Kind: Once}, NextAt: r.now.Add(20 * time.Minute)})
+	again, made, err := st.Create(bg, Job{Text: "chai", Repeat: Repeat{Kind: Once}, NextAt: r.now.Add(20*time.Minute + 20*time.Second), Clock: first.Clock}, 0)
+	if err != nil || made || again.ID != first.ID {
+		t.Fatalf("%v %+v %v", made, again, err)
+	}
+	other, made, err := st.Create(bg, Job{Text: "Chai", Repeat: Repeat{Kind: Daily, Every: 2}, NextAt: first.NextAt, Clock: first.Clock}, 0)
+	if err != nil || !made || other.ID == first.ID {
+		t.Fatalf("a different repeat was taken for the same job: %v %+v %v", made, other, err)
 	}
 }
