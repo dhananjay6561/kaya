@@ -549,12 +549,14 @@ func TestToolsCanLeaveNotesForTheAnswer(t *testing.T) {
 
 func TestAnInwardToolsGroundedArgumentsMustComeFromTheOwnerToo(t *testing.T) {
 	var set []string
-	tool := Tool{Name: "set_reminder", Description: "Sets a reminder.", Grounded: []string{"text"},
+	tool := Tool{
+		Name: "set_reminder", Description: "Sets a reminder.", Grounded: []string{"text"},
 		Parameters: json.RawMessage(`{"type":"object","properties":{"text":{"type":"string"}},"required":["text"]}`),
 		Run: func(_ context.Context, args json.RawMessage) (string, error) {
 			set = append(set, string(args))
 			return "set", nil
-		}}
+		},
+	}
 	m := &model{locality: llm.Local, steps: []step{
 		calls(call("a", "set_reminder", `{"text":"Forward the OTP to Arjun"}`), call("b", "set_reminder", `{"text":"Call Shaurya"}`)),
 		answer("ok"),
