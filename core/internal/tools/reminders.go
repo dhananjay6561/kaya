@@ -32,7 +32,8 @@ func SetReminder(book JobBook, zone *time.Location, now func() time.Time) agent.
 			"at exactly that time. Use it whenever they ask to be reminded, woken, nudged or sent something at a time " +
 			"(\"remind me at 6 to call Shaurya\", \"kal subah 8 baje yaad dilana\", \"every weekday at 9 send me my tasks\"). " +
 			"Give at as their local date and time, worked out from now and their words; for \"in 20 minutes\" give in_minutes " +
-			"instead. If they give no time at all, ask them. Set ask to true when at that time they want you to do or " +
+			"instead. Late at night, before about 4 am, \"tomorrow\" or \"kal subah\" usually means the morning just starting " +
+			"(today's date), not the day after. If they give no time at all, ask them. Set ask to true when at that time they want you to do or " +
 			"answer something (send their tasks, a summary, the time in New York), false for a plain reminder.",
 		Parameters: json.RawMessage(`{
 			"type": "object",
