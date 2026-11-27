@@ -11,7 +11,10 @@ import (
 	"github.com/dhananjay6561/kaya/core/internal/agent"
 )
 
-const clockLayout = "Mon 2 Jan 2006, 15:04"
+const (
+	clockLayout = "Mon 2 Jan 2006, 15:04"
+	wallLayout  = "2006-01-02 15:04"
+)
 
 // Clock tells the time in any time zone, now or at a given time, next to DJ's own, so the model
 // never works out time zones or daylight saving in its head.
@@ -76,21 +79,13 @@ func clock(zones []string, at, from string, own *time.Location, now time.Time) (
 				return "", agent.Problemf("%q is not a time zone I know; use an IANA name such as Europe/Paris", from)
 			}
 		}
-		wall, err := time.ParseInLocation("2006-01-02 15:04", at, src)
+		wall, err := time.ParseInLocation(wallLayout, at, src)
 		if err != nil {
 			return "", agent.Problemf("%q is not a date and time; write it as YYYY-MM-DD HH:MM", at)
 		}
-		if wall.Format("2006-01-02 15:04") != at {
-			_, before := wall.Add(-24 * time.Hour).Zone()
-			asUTC, _ := time.Parse("2006-01-02 15:04", at)
-			wall = asUTC.Add(-time.Duration(before) * time.Second).In(src)
-		}
-		instant = wall
-		line := "Converting " + at + " in " + src.String()
-		if wall.Format("2006-01-02 15:04") != at {
-			line += " (that time is skipped there when the clocks go forward, so it is taken as " + wall.Format("15:04") + ")"
-		}
-		lines = append(lines, line+".")
+		var note string
+		instant, note = resolve(at, wall, src)
+		lines = append(lines, "Converting "+at+" in "+src.String()+note+".")
 	}
 	lines = append(lines, "The owner's zone, "+own.String()+": "+stamp(instant, own))
 	for _, name := range zones {
@@ -132,5 +127,32 @@ func span(d time.Duration) string {
 		return fmt.Sprintf("%dm", m)
 	default:
 		return fmt.Sprintf("%dh%02dm", h, m)
+	}
+}
+
+// resolve finds the instant a wall time in loc stands for, reading it with the offsets in force a
+// day before and a day after: a time the clocks skip moves forward by the gap, and a time they
+// repeat is taken the first time it happens.
+func resolve(at string, wall time.Time, loc *time.Location) (time.Time, string) {
+	asUTC, _ := time.Parse(wallLayout, at)
+	_, before := wall.Add(-24 * time.Hour).Zone()
+	_, after := wall.Add(24 * time.Hour).Zone()
+	first := asUTC.Add(-time.Duration(before) * time.Second)
+	second := asUTC.Add(-time.Duration(after) * time.Second)
+	firstFits := first.In(loc).Format(wallLayout) == at
+	secondFits := second.In(loc).Format(wallLayout) == at
+	switch {
+	case firstFits && secondFits && !first.Equal(second):
+		early := first
+		if second.Before(first) {
+			early = second
+		}
+		return early, " (that time happens twice there when the clocks go back, so it is taken the first time, UTC" + early.In(loc).Format("-07:00") + ")"
+	case firstFits:
+		return first, ""
+	case secondFits:
+		return second, ""
+	default:
+		return first.In(loc), " (that time is skipped there when the clocks go forward, so it is taken as " + first.In(loc).Format("15:04") + ")"
 	}
 }
