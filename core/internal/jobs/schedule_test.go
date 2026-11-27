@@ -37,6 +37,8 @@ func TestNextWalksEachRepeat(t *testing.T) {
 			Repeat{Kind: Weekly, Every: 2, Days: []time.Weekday{time.Saturday}},
 			[]time.Time{at(2026, 12, 12, 10, 0), at(2026, 12, 26, 10, 0)},
 		},
+		{"every 2 weeks on sat and sun", at(2026, 11, 28, 10, 0), Repeat{Kind: Weekly, Every: 2, Days: []time.Weekday{time.Saturday, time.Sunday}},
+			[]time.Time{at(2026, 11, 29, 10, 0), at(2026, 12, 12, 10, 0), at(2026, 12, 13, 10, 0)}},
 		{"monthly on the 31st", at(2027, 1, 31, 9, 0), Repeat{Kind: Monthly, MonthDay: 31}, []time.Time{at(2027, 2, 28, 9, 0), at(2027, 3, 31, 9, 0)}},
 		{"hourly", at(2026, 11, 28, 23, 15), Repeat{Kind: Hourly}, []time.Time{at(2026, 11, 29, 0, 15), at(2026, 11, 29, 1, 15)}},
 	}
