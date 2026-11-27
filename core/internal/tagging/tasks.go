@@ -120,7 +120,8 @@ func Describe(t Task, zone *time.Location, now time.Time) string {
 	return line + " (" + t.Chat + ", " + t.SentAt.In(zone).Format("2 Jan") + ")"
 }
 
-// dueText says when a task is due, or that it is overdue; it is empty for a task with no due date.
+// dueText says when a task is due, that it is overdue, or that a reminder's time has just passed;
+// it is empty for a task with no due date.
 func dueText(t Task, zone *time.Location, now time.Time) string {
 	if t.Due == nil {
 		return ""
@@ -136,7 +137,10 @@ func dueText(t Task, zone *time.Location, now time.Time) string {
 	if !t.DueHasTime {
 		deadline = deadline.AddDate(0, 0, 1)
 	}
-	if now.After(deadline) {
+	switch {
+	case t.Kind == KindReminder && now.After(*t.Due) && t.DueHasTime:
+		return "was at " + t.Due.In(zone).Format(layout)
+	case now.After(deadline):
 		return "overdue: was due " + t.Due.In(zone).Format(layout)
 	}
 	return "due " + t.Due.In(zone).Format(layout)
