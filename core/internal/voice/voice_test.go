@@ -3,6 +3,7 @@ package voice
 import (
 	"context"
 	"errors"
+	"fmt"
 	"io"
 	"log/slog"
 	"net/http"
@@ -28,7 +29,7 @@ func TestGroqSendsTheFileWithAHinglishHintAndReadsWhatWasSaid(t *testing.T) {
 			http.Error(w, "wrong", 400)
 			return
 		}
-		if err := r.ParseMultipartForm(1 << 20); err != nil {
+		if err := r.ParseMultipartForm(1 << 20); err != nil { //nolint:gosec // a test server
 			http.Error(w, err.Error(), 400)
 			return
 		}
@@ -126,7 +127,7 @@ func (r *rig) voice(state string) int64 {
 	r.seq++
 	var id int64
 	r.one(&id, `INSERT INTO messages (chat_id, wa_id, sender_id, from_me, sent_at, kind, source)
-		VALUES ($1, $2, $3, false, now(), 'voice', 'live') RETURNING id`, r.chat, "3EB0V"+string(rune('A'+r.seq)), r.rahul)
+		VALUES ($1, $2, $3, false, now(), 'voice', 'live') RETURNING id`, r.chat, fmt.Sprintf("3EB0V%d", r.seq), r.rahul)
 	r.exec(`INSERT INTO media (message_id, mime_type, size_bytes) VALUES ($1, 'audio/ogg; codecs=opus', 4000)`, id)
 	if state != "remote" {
 		r.exec(`UPDATE media SET state = $2 WHERE message_id = $1`, id, state)
@@ -149,8 +150,10 @@ func (r *rig) arrive(id int64) {
 
 func (r *rig) worker() *Worker {
 	r.t.Helper()
-	w, err := NewWorker(Options{DB: r.core, Transcriber: r.speech, Pause: &pause.Memory{}, Logger: slog.New(slog.NewTextHandler(io.Discard, nil)),
-		MediaDir: r.media, Heard: func() { r.woken++ }, Now: func() time.Time { return r.now }})
+	w, err := NewWorker(Options{
+		DB: r.core, Transcriber: r.speech, Pause: &pause.Memory{}, Logger: slog.New(slog.NewTextHandler(io.Discard, nil)),
+		MediaDir: r.media, Heard: func() { r.woken++ }, Now: func() time.Time { return r.now },
+	})
 	if err != nil {
 		r.t.Fatal(err)
 	}

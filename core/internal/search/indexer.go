@@ -226,7 +226,7 @@ const linesSQL = `
 SELECT m.id, m.chat_id, m.sent_at, m.updated_at,
        CASE m.kind WHEN 'image' THEN '(photo) ' WHEN 'video' THEN '(video) '
                    WHEN 'document' THEN '(document) ' WHEN 'poll' THEN '(poll) ' WHEN 'voice' THEN '(voice note) ' ELSE '' END
-         || `+textSQL+`,
+         || ` + textSQL + `,
        CASE WHEN m.from_me AND EXISTS (SELECT 1 FROM exchanges e WHERE e.answer_wa_id = m.wa_id) THEN 'Kaya'
             WHEN m.from_me THEN 'Me'
             ELSE (SELECT CASE WHEN lower(n) IN ('me', 'kaya') THEN '~' || n ELSE n END FROM (
