@@ -17,6 +17,7 @@ import (
 	"golang.org/x/text/language"
 	"golang.org/x/text/message"
 
+	"github.com/dhananjay6561/kaya/core/internal/actions"
 	"github.com/dhananjay6561/kaya/core/internal/llm"
 )
 
@@ -27,9 +28,11 @@ type Tool struct {
 	Description string
 	Parameters  json.RawMessage
 	// Outward is true for a tool that acts beyond Kaya: sends a message, spends money, changes
-	// something DJ would see elsewhere.
+	// something DJ would see elsewhere. It has Propose instead of Run: calling it never acts, it
+	// asks DJ, and only his yes runs the action.
 	Outward bool
 	Run     func(ctx context.Context, args json.RawMessage) (string, error)
+	Propose func(ctx context.Context, args json.RawMessage) (actions.Proposal, error)
 }
 
 // Problem is a failure the model is told about in the tool's own words, so it can try another way.
@@ -41,8 +44,8 @@ func (p *Problem) Error() string { return p.Message }
 // Problemf returns a Problem.
 func Problemf(format string, a ...any) error { return &Problem{Message: fmt.Sprintf(format, a...)} }
 
-// ErrOutward refuses an outward tool: nothing asks DJ before it acts yet.
-var ErrOutward = errors.New("an outward tool needs DJ to confirm each action, and nothing asks him yet")
+// ErrOutward refuses an outward tool that could act without asking: it must propose, never run.
+var ErrOutward = errors.New("an outward tool must only propose an action for DJ to confirm, never run one")
 
 var toolName = regexp.MustCompile(`^[a-z][a-z0-9_]{0,63}$`)
 
@@ -72,10 +75,10 @@ func (r *Registry) add(t Tool) error {
 		return errors.New("a tool already has that name")
 	case strings.TrimSpace(t.Description) == "":
 		return errors.New("a tool needs a description")
-	case t.Run == nil:
-		return errors.New("a tool needs Run")
-	case t.Outward:
+	case t.Outward && (t.Run != nil || t.Propose == nil):
 		return ErrOutward
+	case !t.Outward && (t.Run == nil || t.Propose != nil):
+		return errors.New("a tool needs Run, and only an outward tool proposes")
 	}
 	var shape struct {
 		Type string `json:"type"`

@@ -9,6 +9,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/dhananjay6561/kaya/core/internal/actions"
 	"github.com/dhananjay6561/kaya/core/internal/llm"
 	"github.com/dhananjay6561/kaya/kit/logging"
 )
@@ -41,6 +42,9 @@ type Options struct {
 	ToolTimeout time.Duration
 	// ResultTokens is the most one result may take; a longer one is shortened. Zero means 500.
 	ResultTokens int
+	// Propose stores what an outward tool proposes and returns it as stored; nil refuses outward
+	// tools.
+	Propose func(ctx context.Context, p actions.Proposal) (actions.Action, error)
 	// Budget is the most tokens a request may carry, the tools' schemas included: results share
 	// what the request leaves, and a call with too little room is not run (its short note may go a
 	// few tokens past). Zero means no limit beyond ResultTokens.
@@ -54,6 +58,7 @@ const (
 	Unknown      = "unknown"
 	BadArguments = "bad_arguments"
 	NotRun       = "not_run"
+	Proposed     = "proposed"
 )
 
 // Call is one tool call the model made and how it went.
@@ -70,6 +75,8 @@ type Result struct {
 	Calls      []Call
 	Rounds     int
 	Usage      llm.Usage
+	// Proposed is the action the model asked DJ to confirm, if it did.
+	Proposed *actions.Action
 }
 
 // ErrTooManyRounds is a model that kept calling tools after it was told to answer.
@@ -155,6 +162,10 @@ func Run(ctx context.Context, o Options, r llm.Request) (Result, error) {
 				done = Call{Tool: call.Name, Outcome: NotRun}
 			case limit < minResult:
 				content, done = noRoom, Call{Tool: call.Name, Outcome: NotRun}
+			case o.Tools.tools[call.Name].Outward:
+				if content, done, err = o.propose(ctx, call, limit, &res); err != nil {
+					return res, err
+				}
 			default:
 				if content, done, err = o.run(ctx, call, limit); err != nil {
 					return res, err
@@ -216,6 +227,55 @@ func (o *Options) call(ctx context.Context, tool Tool, args json.RawMessage) (te
 		}
 	}()
 	return tool.Run(ctx, args)
+}
+
+// propose stores the action an outward tool proposes, one a question, and tells the model it
+// waits for DJ's yes. It fails only when ctx ends or storing it fails fatally.
+func (o *Options) propose(ctx context.Context, call llm.ToolCall, limit int, res *Result) (string, Call, error) {
+	done := Call{Tool: call.Name}
+	tool := o.Tools.tools[call.Name]
+	switch {
+	case o.Propose == nil:
+		done.Outcome = NotRun
+		return o.out("Not run: acting for them is not set up here.", call, limit), done, nil
+	case res.Proposed != nil:
+		done.Outcome = NotRun
+		return o.out("Not run: one action waits for their answer already; one at a time.", call, limit), done, nil
+	}
+	args, problem := o.Tools.check(call.Name, call.Arguments)
+	if problem != "" {
+		done.Outcome = BadArguments
+		return o.out("Error: "+problem+".", call, limit), done, nil
+	}
+	raw, err := json.Marshal(o.restore(args))
+	if err != nil {
+		return "", done, err
+	}
+	started := time.Now()
+	p, err := tool.Propose(ctx, raw)
+	var problemErr *Problem
+	switch {
+	case err == nil:
+	case ctx.Err() != nil:
+		return "", done, context.Cause(ctx)
+	case o.Fatal(err):
+		return "", done, err
+	case errors.As(err, &problemErr):
+		done.Outcome, done.Elapsed = Failed, time.Since(started)
+		return o.out("Error: "+problemErr.Message, call, limit), done, nil
+	default:
+		o.Logger.Warn("a tool failed", "tool", call.Name, logging.Err(err))
+		done.Outcome, done.Elapsed = Failed, time.Since(started)
+		return o.out("Error: the tool failed.", call, limit), done, nil
+	}
+	stored, err := o.Propose(ctx, p)
+	if err != nil {
+		return "", done, err
+	}
+	res.Proposed = &stored
+	done.Outcome, done.Elapsed = Proposed, time.Since(started)
+	return o.out("Nothing is done yet: it waits for their yes. Below your answer they will see exactly this and be asked to reply yes or no: "+
+		p.Summary+". In your answer just say briefly what you have drafted; do not ask for the yes yourself and never say it is done.", call, limit), done, nil
 }
 
 // room is how many tokens the next result may take: its share of what the request leaves, the

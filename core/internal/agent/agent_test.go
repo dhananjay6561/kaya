@@ -12,6 +12,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/dhananjay6561/kaya/core/internal/actions"
 	"github.com/dhananjay6561/kaya/core/internal/llm"
 	"github.com/dhananjay6561/kaya/core/internal/masking"
 )
@@ -423,5 +424,76 @@ func TestResultsShareTheRoomTheBudgetLeaves(t *testing.T) {
 	told := toolMessages(m.requests[2])
 	if len(ran) != 2 || told[2].Content != noRoom || told[3].Content != noRoom {
 		t.Fatalf("ran %d, told %+v", len(ran), told)
+	}
+}
+
+func sendTool() Tool {
+	return Tool{Name: "send_message", Description: "Sends a message for them.", Outward: true,
+		Parameters: json.RawMessage(`{"type":"object","properties":{"to":{"type":"string"},"text":{"type":"string"}},"required":["to","text"]}`),
+		Propose: func(_ context.Context, args json.RawMessage) (actions.Proposal, error) {
+			var a struct{ To, Text string }
+			_ = json.Unmarshal(args, &a)
+			if a.To == "nobody" {
+				return actions.Proposal{}, Problemf("no contact matches %q", a.To)
+			}
+			return actions.Proposal{Kind: "send_message", TargetJID: "918888888888@s.whatsapp.net",
+				Summary: "Send " + a.To + ": " + a.Text, Payload: args}, nil
+		}}
+}
+
+func TestAnOutwardToolOnlyProposesOneActionAQuestion(t *testing.T) {
+	var stored []actions.Proposal
+	propose := func(_ context.Context, p actions.Proposal) (actions.Action, error) {
+		stored = append(stored, p)
+		return actions.Action{Proposal: p, ID: "a1"}, nil
+	}
+	m := &model{locality: llm.Cloud, steps: []step{
+		calls(call("c1", "send_message", `{"to":"Rahul","text":"call me on [PHONE_1]"}`), call("c2", "send_message", `{"to":"Priya","text":"hi"}`)),
+		answer("Drafted it for Rahul."),
+	}}
+	res, err := Run(bg, Options{LLM: m, Tools: registry(t, sendTool()), Logger: quiet, Privacy: privacy{}, Propose: propose}, question)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(stored) != 1 || stored[0].Summary != "Send Rahul: call me on +91 98765 43210" || res.Proposed == nil || res.Proposed.ID != "a1" {
+		t.Fatalf("stored %+v, proposed %+v", stored, res.Proposed)
+	}
+	told := toolMessages(m.requests[1])
+	if !strings.Contains(told[0].Content, "Send Rahul: call me on [PHONE_1]") || strings.Contains(told[0].Content, "98765") ||
+		!strings.Contains(told[0].Content, "waits for their yes") || !strings.HasPrefix(told[1].Content, "Not run: one action waits") {
+		t.Fatalf("told %+v", told)
+	}
+	if res.Calls[0].Outcome != Proposed || res.Calls[1].Outcome != NotRun {
+		t.Fatalf("calls %+v", res.Calls)
+	}
+}
+
+func TestAnOutwardToolIsRefusedWhenNothingCanStoreItsProposal(t *testing.T) {
+	m := &model{locality: llm.Local, steps: []step{calls(call("c1", "send_message", `{"to":"Rahul","text":"hi"}`)), answer("ok")}}
+	res, err := Run(bg, Options{LLM: m, Tools: registry(t, sendTool()), Logger: quiet}, question)
+	if err != nil || res.Proposed != nil || !strings.HasPrefix(toolMessages(m.requests[1])[0].Content, "Not run: acting for them") {
+		t.Fatalf("result %+v, %v", res, err)
+	}
+	m = &model{locality: llm.Local, steps: []step{calls(call("c1", "send_message", `{"to":"nobody","text":"hi"}`)), answer("ok")}}
+	propose := func(context.Context, actions.Proposal) (actions.Action, error) {
+		t.Fatal("a failed proposal was stored")
+		return actions.Action{}, nil
+	}
+	if res, err := Run(bg, Options{LLM: m, Tools: registry(t, sendTool()), Logger: quiet, Propose: propose}, question); err != nil ||
+		res.Proposed != nil || toolMessages(m.requests[1])[0].Content != `Error: no contact matches "nobody"` {
+		t.Fatalf("result %+v, %v", res, err)
+	}
+}
+
+func TestAnOutwardToolMustNeverRun(t *testing.T) {
+	run := func(context.Context, json.RawMessage) (string, error) { return "", nil }
+	tool := sendTool()
+	tool.Run = run
+	if _, err := NewRegistry(tool); !errors.Is(err, ErrOutward) {
+		t.Fatalf("err = %v", err)
+	}
+	inward := Tool{Name: "x", Description: "x", Parameters: json.RawMessage(`{"type":"object"}`), Run: run, Propose: sendTool().Propose}
+	if _, err := NewRegistry(inward); err == nil {
+		t.Fatal("a tool that is not outward was allowed to propose")
 	}
 }
