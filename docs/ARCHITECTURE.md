@@ -288,7 +288,14 @@ Folders appear when a phase needs them; empty placeholders are not committed.
   masked together for a cloud model, cut only after masking), and asks the routine model (strict JSON, medium effort) for each message's tags
   (important, ignore, task, reminder), a task's title, and a reminder's title and day in DJ's time
   zone, telling it the name DJ goes by and that messages are data, so an instruction inside one is
-  never a task. Titles have private details put back. A reminder without a day becomes a task; one
+  never a task. The request starts with DJ's open tasks (up to 25, masked), and the prompt keeps
+  tasks to DJ's own to-dos with titles that stand on their own, and a message that repeats an open
+  one gives nothing new; the answer says for each task whether it is DJ's to do (`mine`), and one
+  that is not is dropped in code. A reminder that names the same action as its task becomes the
+  task's deadline, and a task with a day keeps it. A new task is not stored when an open one of the
+  same kind has a title at least 0.7 alike by trigram similarity and, for reminders, a time within
+  12 hours. Open lists leave out reminders two hours past their time (or past their day), and mark
+  late tasks overdue. Titles have private details put back. A reminder without a day becomes a task; one
   message can give both. Every message of the batch gets a `message_tags` row, tagged or not, in
   the same transaction as its tasks and the day's tokens, so nothing is read twice; an edited message
   is read again and its open tasks replaced, a deleted one's tasks leave `/tasks`, and a due day
