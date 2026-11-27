@@ -37,6 +37,7 @@ kaya/
 │       ├── tools/          the tools the chat model can call (world_clock, open_tasks)
 │       ├── alerts/         heads-ups in DJ's own chat: the alerter and the /alerts switch
 │       ├── actions/        confirm-before-act: pending actions, DJ's yes or no, running them
+│       ├── jobs/           reminders and scheduled jobs: the schedule maths, the store, the scheduler
 │       ├── embeddings/     the embeddings Provider interface, Voyage, the stub
 │       ├── search/         the index (chunks and the indexer that keeps them embedded) and search:
 │       │                   meaning and words fused, filters, recall of older exchanges
@@ -189,7 +190,8 @@ Folders appear when a phase needs them; empty placeholders are not committed.
   `fact_learning` (what Kaya knows about DJ, and how far the learner has read), `message_tags`,
   `tasks` and `tagging` (tags on new messages, the tasks they gave, and tagging's state),
   `alerts` and `alerting` (heads-ups for DJ and the `/alerts` switch), `pending_actions` (what
-  Kaya would do elsewhere, waiting for DJ's yes; the gateway may only read it), `pause_state`, and
+  Kaya would do elsewhere, waiting for DJ's yes; the gateway may only read it), `jobs` and
+  `job_runs` (reminders and scheduled jobs, and each time one fired), `pause_state`, and
   the search index, `chunks` and `message_chunks`; later tasks, jobs, pending actions and usage. Core's tables point at messages by id or WhatsApp
   id, never by foreign key, because the chat tables belong to the gateway.
 - **Media.** A media message gets a `media` row (what the file is, and whether it is `remote`,
@@ -389,6 +391,24 @@ Folders appear when a phase needs them; empty placeholders are not committed.
   `send_message` finds the chat as `/summary` does, drafts up to
   800 characters, and its executor sends with the `confirmed` authorization under the key
   `action:<id>`, at most `SENDS_PER_HOUR` confirmed an hour.
+- **Reminders and scheduled jobs.** `set_reminder` takes what the model read in DJ's words (a local
+  date and time or minutes from now, a repeat: none, hourly, daily, weekdays, weekly on chosen days,
+  monthly, every N, an end date, and whether to answer it as a request when it fires); `jobs.At`
+  and `jobs.Next` work out the exact instants in DJ's time zone (a time daylight saving skips moves
+  forward, one it repeats is taken the first time, a monthly day past the month's end is its last
+  day), a past one-off time is refused, and a job just like an active one is not made twice. The
+  tool writes the exact time under the answer through the agent's notes ("⏰ Sat 28 Nov, 18:00: Call
+  Shaurya"), so the model's words can never misstate it; the system prompt says, between midnight
+  and 4 am, that "tomorrow" most likely means the day just begun. One scheduler in core, under its
+  own advisory lock, sleeps until the soonest `next_at` (at most an hour) and wakes at once on
+  `NOTIFY jobs`, which a trigger sends on every change; due jobs fire once per due time (a
+  `job_runs` row is the key, the send key is `job:<id>:<due>`), a plain reminder without any model
+  call and an ask job through the chat model; one more than two minutes late says it was due
+  earlier and Kaya was offline, a repeating one more than 12 hours late is passed over, and missed
+  times are skipped as the job moves to its next one. Paused, it waits. The last 5 fired messages
+  of 12 hours join the conversation like alerts, so "10 min baad" works; `/jobs` and `/cancel`
+  list and stop them. Answers that are mostly not words are never shown, and invisible format
+  characters are dropped from every answer.
 - **History sync.** Each history chunk WhatsApp announces becomes a row in `history_jobs`, stored
   in the transaction that acknowledges the announcement. A single worker downloads the chunk,
   stores it in batches of at most 200 messages (a savepoint per message, so one bad message
