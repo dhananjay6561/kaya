@@ -180,8 +180,7 @@ func (s *Summarizer) rank(ctx context.Context, lines []search.ChatLine) ([]chatL
 
 // readable is the condition for a message search can read, for counting the last messages of a
 // chat; it matches the one search applies itself.
-const readable = `n.kind IN ('text', 'image', 'video', 'document', 'poll')
-	AND n.body IS NOT NULL AND btrim(n.body) <> '' AND n.deleted_at IS NULL`
+var readable = search.Readable("n")
 
 // Chat summarises one chat, found by name: its last day, or its last minChatMessages readable
 // messages when the day was quiet. The answer starts with the chat's name, so DJ sees which chat it
