@@ -37,6 +37,14 @@ type Status struct {
 	// Tagging is set when tagging is on: how many new messages wait for tags and how many tasks
 	// are open.
 	Tagging *Tagging
+	// Alerts is set when alerts are set up: whether they are on and how many wait to go out.
+	Alerts *Alerts
+}
+
+// Alerts is how alerts stand.
+type Alerts struct {
+	On      bool
+	Waiting int
 }
 
 // Tagging is how tagging stands.
@@ -57,6 +65,8 @@ type Source struct {
 	Facts func(ctx context.Context) (all, told int, err error)
 	// Tagging reports what waits for tags and how many tasks are open; nil leaves the line out.
 	Tagging func(ctx context.Context) (waiting, openTasks int, err error)
+	// Alerts reports whether alerts are on and how many wait; nil leaves the line out.
+	Alerts func(ctx context.Context) (on bool, waiting int, err error)
 }
 
 // Read gathers the status.
@@ -96,6 +106,11 @@ func Read(ctx context.Context, src Source) (Status, error) {
 	if src.Tagging != nil {
 		if waiting, open, err := src.Tagging(ctx); err == nil {
 			st.Tagging = &Tagging{Waiting: waiting, OpenTasks: open}
+		}
+	}
+	if src.Alerts != nil {
+		if on, waiting, err := src.Alerts(ctx); err == nil {
+			st.Alerts = &Alerts{On: on, Waiting: waiting}
 		}
 	}
 	st.Now = time.Now()
@@ -159,6 +174,16 @@ func Format(st Status) string {
 			line += fmt.Sprintf("; %d new messages waiting for tags", tg.Waiting)
 		}
 		lines = append(lines, line+".")
+	}
+	if al := st.Alerts; al != nil {
+		switch {
+		case !al.On:
+			lines = append(lines, "Alerts: off (/alerts on starts them).")
+		case al.Waiting > 0:
+			lines = append(lines, fmt.Sprintf("Alerts: on, %d waiting.", al.Waiting))
+		default:
+			lines = append(lines, "Alerts: on.")
+		}
 	}
 	if st.EventsWaiting > 0 {
 		lines = append(lines, fmt.Sprintf("Events waiting for core: %d.", st.EventsWaiting))

@@ -231,3 +231,16 @@ func TestReadsTaggingAndLeavesItOutWhenItCannot(t *testing.T) {
 		t.Fatalf("a failing count broke the status: %+v, %v", st, err)
 	}
 }
+
+func TestShowsWhetherAlertsAreOn(t *testing.T) {
+	if text := Format(healthy()); strings.Contains(text, "Alerts") {
+		t.Fatal(text)
+	}
+	st := healthy()
+	st.Alerts = &Alerts{On: true}
+	matches(t, Format(st), `^Alerts: on\.$`)
+	st.Alerts.Waiting = 2
+	matches(t, Format(st), `^Alerts: on, 2 waiting\.$`)
+	st.Alerts.On = false
+	matches(t, Format(st), `^Alerts: off \(/alerts on starts them\)\.$`)
+}
