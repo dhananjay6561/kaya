@@ -439,7 +439,7 @@ func Recent(ctx context.Context, db *store.DB, since time.Time, limit int) ([]me
 		for ; j < len(rows) && rows[j].batch == rows[i].batch; j++ {
 			batch = append(batch, rows[j].w)
 		}
-		out = append(out, memory.Exchange{Question: HeadsUp, Answer: format(batch), At: rows[i].sent})
+		out = append(out, memory.Exchange{Question: HeadsUp, Answer: format(batch), At: rows[i].sent, Unasked: true})
 		i = j
 	}
 	return out, nil
