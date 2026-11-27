@@ -15,12 +15,62 @@ const (
 	System    = "system"
 	User      = "user"
 	Assistant = "assistant"
+	ToolRole  = "tool"
 )
 
-// Message is one turn of a conversation sent to the model.
+// Message is one turn of a conversation sent to the model. An assistant turn may carry the tools
+// the model called, and a tool turn answers one of them by its ID.
 type Message struct {
-	Role    string `json:"role"`
-	Content string `json:"content"`
+	Role       string     `json:"role"`
+	Content    string     `json:"content"`
+	ToolCalls  []ToolCall `json:"tool_calls,omitempty"`
+	ToolCallID string     `json:"tool_call_id,omitempty"`
+}
+
+// ToolCall is the model asking to run a tool. Arguments is the JSON the model wrote, unchecked.
+type ToolCall struct {
+	ID        string
+	Name      string
+	Arguments string
+}
+
+type wireCall struct {
+	ID       string `json:"id"`
+	Type     string `json:"type"`
+	Function struct {
+		Name      string `json:"name"`
+		Arguments string `json:"arguments"`
+	} `json:"function"`
+}
+
+// MarshalJSON writes the call the way OpenAI-compatible APIs take it back.
+func (c ToolCall) MarshalJSON() ([]byte, error) {
+	w := wireCall{ID: c.ID, Type: "function"}
+	w.Function.Name, w.Function.Arguments = c.Name, c.Arguments
+	return json.Marshal(w)
+}
+
+// ToolSpec offers the model a tool: its name, what it does and a JSON Schema of its arguments.
+type ToolSpec struct {
+	Name        string
+	Description string
+	Parameters  json.RawMessage
+}
+
+// MarshalJSON writes the tool the way OpenAI-compatible APIs take it.
+func (t ToolSpec) MarshalJSON() ([]byte, error) {
+	w := wireTool{Type: "function"}
+	w.Function.Name, w.Function.Description, w.Function.Parameters = t.Name, t.Description, t.Parameters
+	return json.Marshal(w)
+}
+
+type wireTool struct {
+	Type     string `json:"type"`
+	Function struct {
+		Name        string          `json:"name"`
+		Description string          `json:"description"`
+		Parameters  json.RawMessage `json:"parameters"`
+	} `json:"function"`
 }
 
 // Tier picks a model: routine for cheap work, heavy for answers DJ reads.
@@ -43,7 +93,8 @@ const (
 )
 
 // Request asks a model for one completion. A zero Effort or MaxTokens takes the tier's default.
-// With Schema the answer is JSON that the schema allows.
+// With Schema the answer is JSON that the schema allows. With Tools the model may answer by
+// calling them instead; a request cannot have both.
 type Request struct {
 	Tier        Tier
 	Effort      Effort
@@ -51,6 +102,7 @@ type Request struct {
 	MaxTokens   int
 	Temperature *float64
 	Schema      *Schema
+	Tools       []ToolSpec
 }
 
 // Schema is a JSON Schema an answer must follow, with a name for it.
@@ -73,9 +125,10 @@ type Usage struct {
 	OutputTokens int
 }
 
-// Completion is a model's answer.
+// Completion is a model's answer: text, or tools it wants run, or both.
 type Completion struct {
 	Text         string
+	ToolCalls    []ToolCall
 	Model        string
 	FinishReason string
 	Usage        Usage
@@ -101,7 +154,20 @@ type Provider interface {
 	Complete(ctx context.Context, r Request) (Completion, error)
 }
 
-var errNoMessages = errors.New("completion needs at least one message")
+var (
+	errNoMessages      = errors.New("completion needs at least one message")
+	errSchemaWithTools = errors.New("a completion cannot follow a schema and offer tools at once")
+)
+
+func checkRequest(r Request) error {
+	switch {
+	case len(r.Messages) == 0:
+		return errNoMessages
+	case r.Schema != nil && len(r.Tools) > 0:
+		return errSchemaWithTools
+	}
+	return nil
+}
 
 // New builds the provider config names.
 func New(cfg config.LLM) (Provider, error) {
