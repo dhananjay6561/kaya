@@ -249,7 +249,7 @@ func TestReplyAsksTheStrongerModelWithTheSystemPromptAndTheMessage(t *testing.T)
 	}
 	r := stub.Requests()[0]
 	if r.Tier != llm.Heavy || r.Effort != llm.Medium || r.MaxTokens != 3072 || len(r.Messages) != 2 ||
-		r.Messages[0].Role != llm.System || r.Messages[1] != (llm.Message{Role: llm.User, Content: "who are you?"}) {
+		r.Messages[0].Role != llm.System || !reflect.DeepEqual(r.Messages[1], llm.Message{Role: llm.User, Content: "who are you?"}) {
 		t.Fatalf("request %+v", r)
 	}
 }
