@@ -19,6 +19,7 @@ import (
 	_ "time/tzdata"
 
 	"github.com/dhananjay6561/kaya/contracts"
+	"github.com/dhananjay6561/kaya/core/internal/agent"
 	"github.com/dhananjay6561/kaya/core/internal/channel"
 	"github.com/dhananjay6561/kaya/core/internal/chat"
 	"github.com/dhananjay6561/kaya/core/internal/commands"
@@ -34,6 +35,7 @@ import (
 	"github.com/dhananjay6561/kaya/core/internal/status"
 	"github.com/dhananjay6561/kaya/core/internal/summary"
 	"github.com/dhananjay6561/kaya/core/internal/tagging"
+	"github.com/dhananjay6561/kaya/core/internal/tools"
 	"github.com/dhananjay6561/kaya/kit/envfile"
 	"github.com/dhananjay6561/kaya/kit/httpapi"
 	"github.com/dhananjay6561/kaya/kit/logging"
@@ -168,6 +170,13 @@ func run(cfg config.Config, logger *slog.Logger) error {
 			return err
 		}
 	}
+	registry, err := agent.NewRegistry(
+		tools.Clock(zone, time.Now),
+		tools.OpenTasks(tasks, zone, time.Now),
+	)
+	if err != nil {
+		return err
+	}
 	summaries, err := summary.New(summary.Options{
 		DB: db, LLM: model, Searcher: searcher, Zone: zone,
 		NewMaskSession: func() summary.MaskSession { return masking.NewSession() },
@@ -202,6 +211,7 @@ func run(cfg config.Config, logger *slog.Logger) error {
 		},
 		DatabaseAway:   databaseAway,
 		NewMaskSession: func() chat.MaskSession { return masking.NewSession() },
+		Tools:          registry,
 	})
 	if err != nil {
 		return err
@@ -290,6 +300,7 @@ func run(cfg config.Config, logger *slog.Logger) error {
 		"embeddings", embedder.Name(),
 		"channel", ch.Name(),
 		"telephony", cfg.Telephony,
+		"tools", registry.Names(),
 		"data_dir", cfg.DataDir,
 	)
 	err = httpapi.Serve(ctx, httpapi.NewServer(handler, logger), ln, shutdownGrace)
