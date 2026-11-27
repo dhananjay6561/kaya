@@ -107,7 +107,7 @@ func plan(what, at string, inMinutes int, repeat string, every int, weekdays []s
 	case inMinutes > 0 && at != "":
 		return jobs.Job{}, agent.Problemf("give either at or in_minutes, not both")
 	case inMinutes > 0:
-		first = now.Add(time.Duration(inMinutes) * time.Minute).Truncate(time.Second)
+		first = now.Add(time.Duration(inMinutes) * time.Minute).Round(time.Minute)
 	case at != "":
 		day, err := time.ParseInLocation("2006-01-02", at[:10], zone)
 		if err != nil {
@@ -127,6 +127,11 @@ func plan(what, at string, inMinutes int, repeat string, every int, weekdays []s
 				first, _ = jobs.At(day, clock, zone)
 				break
 			}
+		}
+	}
+	if repeat == jobs.Weekdays {
+		for first.In(zone).Weekday() == time.Saturday || first.In(zone).Weekday() == time.Sunday {
+			first, _ = jobs.At(first.In(zone).AddDate(0, 0, 1), clock, zone)
 		}
 	}
 	if repeat == jobs.Monthly {

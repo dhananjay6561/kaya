@@ -58,11 +58,12 @@ func TestSetReminderWorksOutTheExactTime(t *testing.T) {
 		args, note string
 	}{
 		{`{"text":"Call Shaurya","at":"2026-11-28 18:00"}`, "⏰ Sat 28 Nov, 18:00: Call Shaurya"},
-		{`{"text":"Check the oven","in_minutes":20}`, "⏰ Sat 28 Nov, 15:20: Check the oven"},
+		{`{"text":"Check the oven","in_minutes":20}`, "⏰ Sat 28 Nov, 15:21: Check the oven"},
 		{`{"text":"Stretch","at":"2026-11-28 09:00","repeat":"daily"}`, "⏰ Sun 29 Nov, 09:00, then every day: Stretch"},
 		{`{"text":"Gym","at":"2026-11-28 07:00","repeat":"weekly","weekdays":["thu","mon"]}`, "⏰ Mon 30 Nov, 07:00, then every week on Mon, Thu: Gym"},
 		{`{"text":"Pay rent","at":"2026-12-01 10:00","repeat":"monthly"}`, "⏰ Tue 1 Dec, 10:00, then every month: Pay rent"},
 		{`{"text":"send me my open tasks","at":"2026-11-30 09:00","repeat":"weekdays","ask":true}`, "⏰ Mon 30 Nov, 09:00, then every weekday: send me my open tasks"},
+		{`{"text":"standup notes","at":"2026-11-29 09:00","repeat":"weekdays"}`, "⏰ Mon 30 Nov, 09:00, then every weekday: standup notes"},
 	}
 	for _, c := range cases {
 		result, notes, err := noted(t, set, c.args)
@@ -70,7 +71,7 @@ func TestSetReminderWorksOutTheExactTime(t *testing.T) {
 			t.Errorf("%s: result %q, notes %q, %v", c.args, result, notes, err)
 		}
 	}
-	if book.jobs[1].NextAt != now.Add(20*time.Minute).Truncate(time.Second) || book.jobs[4].Repeat.MonthDay != 1 || !book.jobs[5].Ask {
+	if !book.jobs[1].NextAt.Equal(now.Add(20*time.Minute).Round(time.Minute)) || book.jobs[4].Repeat.MonthDay != 1 || !book.jobs[5].Ask {
 		t.Fatalf("jobs %+v", book.jobs)
 	}
 	if result, _, err := noted(t, set, `{"text":"Call Shaurya","at":"2026-11-28 18:00"}`); err != nil || !strings.HasPrefix(result, "That was already set") {
