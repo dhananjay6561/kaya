@@ -214,14 +214,19 @@ const readableSQL = `(m.kind IN ('text', 'image', 'video', 'document', 'poll') A
 	OR m.kind = 'voice' AND EXISTS (SELECT 1 FROM transcripts tr WHERE tr.message_id = m.id AND tr.state = 'done' AND btrim(tr.text) <> ''))
 	AND m.deleted_at IS NULL`
 
+// textSQL is what message m says: its body, or a voice note's transcript.
+const textSQL = `coalesce(nullif(btrim(m.body), ''), (SELECT tr.text FROM transcripts tr WHERE tr.message_id = m.id AND tr.state = 'done'), '')`
+
 // Readable is the condition for a message readable as alias, shared by tagging and summaries.
-func Readable(alias string) string { return strings.ReplaceAll(readableSQL, "m.", alias+".") }
+func Readable(alias string) string {
+	return strings.NewReplacer("m.kind", alias+".kind", "m.body", alias+".body", "m.id", alias+".id", "m.deleted_at", alias+".deleted_at").Replace(readableSQL)
+}
 
 const linesSQL = `
 SELECT m.id, m.chat_id, m.sent_at, m.updated_at,
        CASE m.kind WHEN 'image' THEN '(photo) ' WHEN 'video' THEN '(video) '
                    WHEN 'document' THEN '(document) ' WHEN 'poll' THEN '(poll) ' WHEN 'voice' THEN '(voice note) ' ELSE '' END
-         || coalesce(nullif(btrim(m.body), ''), (SELECT tr.text FROM transcripts tr WHERE tr.message_id = m.id AND tr.state = 'done'), ''),
+         || `+textSQL+`,
        CASE WHEN m.from_me AND EXISTS (SELECT 1 FROM exchanges e WHERE e.answer_wa_id = m.wa_id) THEN 'Kaya'
             WHEN m.from_me THEN 'Me'
             ELSE (SELECT CASE WHEN lower(n) IN ('me', 'kaya') THEN '~' || n ELSE n END FROM (
@@ -454,7 +459,7 @@ func (ix *Indexer) closed(ctx context.Context, group []Line) (bool, error) {
 	var length int
 	var indexed bool
 	err := ix.o.DB.QueryRow(ctx, `
-		SELECT m.sent_at, length(m.body), EXISTS (SELECT 1 FROM message_chunks mc WHERE mc.message_id = m.id)
+		SELECT m.sent_at, length(`+textSQL+`), EXISTS (SELECT 1 FROM message_chunks mc WHERE mc.message_id = m.id)
 		FROM messages m WHERE m.chat_id = $1 AND m.sent_at > $2 AND `+eligible+`
 		ORDER BY m.sent_at, m.id LIMIT 1`, last.ChatID, last.SentAt).Scan(&sentAt, &length, &indexed)
 	if errors.Is(err, pgx.ErrNoRows) {
@@ -472,7 +477,7 @@ func (ix *Indexer) before(ctx context.Context, chatID int64, at time.Time) (stri
 	var text *string
 	err := ix.o.DB.QueryRow(ctx, `
 		SELECT string_agg(body, E'\n') FROM (
-			SELECT m.body FROM messages m WHERE m.chat_id = $1 AND m.sent_at < $2 AND `+eligible+`
+			SELECT `+textSQL+` AS body FROM messages m WHERE m.chat_id = $1 AND m.sent_at < $2 AND `+eligible+`
 			ORDER BY m.sent_at DESC LIMIT 3) recent`, chatID, at).Scan(&text)
 	if err != nil || text == nil {
 		return "", err
