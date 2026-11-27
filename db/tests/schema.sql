@@ -592,6 +592,8 @@ BEGIN
     VALUES ('send_message', '918888888888@s.whatsapp.net', 'x', '{}', now() + interval '2 hours')$q$, '23514');
   PERFORM pg_temp.expect_error($q$INSERT INTO pending_actions (kind, target_jid, summary, payload, expires_at, state)
     VALUES ('send_message', '918888888888@s.whatsapp.net', 'x', '{}', now() + interval '10 minutes', 'confirmed')$q$, '23514');
+  PERFORM pg_temp.expect_error($q$INSERT INTO pending_actions (kind, target_jid, summary, payload, expires_at, state)
+    VALUES ('send_message', '918888888888@s.whatsapp.net', 'never shown', '{}', now() + interval '10 minutes', 'pending')$q$, '23514');
   INSERT INTO alerts (task_id, due_at, chat_id, note) VALUES (1, now(), 1, 'Call soon');
   PERFORM pg_temp.expect_error($q$INSERT INTO alerts (task_id, due_at, chat_id, note) SELECT 2, due_at, 1, 'same time again' FROM alerts WHERE task_id = 1$q$, '23505');
   INSERT INTO chunks (chat_id, first_sent_at, last_sent_at, message_count, text_hash, model, embedding)
