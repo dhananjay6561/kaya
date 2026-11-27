@@ -152,11 +152,13 @@ contact, and it works with everything your WhatsApp account can see.
   `/alerts on` switch them. Alerts from the last 12 hours are part of your conversation with Kaya,
   so a reply like "what did she want?" or "remind me later" knows which one you mean.
 - **Messages sent for you, only after your yes.** "Tell Rahul I'll be late" or "office group mein
-  bol do standup 11 baje" makes Kaya draft the message, find the contact or group by name, and show
-  you exactly what will be sent and to whom; it goes out only if you reply yes (or haan, ok, bhej
-  do) within 10 minutes, and no or nahi cancels it. Anything longer than a yes or no is just a new
-  message, so "yes but at 7" never sends. The gateway sends it only if your yes is in your own
-  chat, after Kaya asked, for that same chat, and only once; `SENDS_PER_HOUR` (20) caps them.
+  bol do standup 11 baje" makes Kaya draft the message, find the contact or group by name, and put
+  exactly what will be sent and to whom (a group, or a contact with their number) at the top of her
+  reply; it goes out only if you reply yes (or haan, ok, bhej do) within 10 minutes, after that
+  question and before anything else from Kaya, and no or nahi cancels it. Anything longer than a yes
+  or no is just a new message, so "yes but at 7" never sends. The gateway sends it only if your yes
+  is in your own chat, after Kaya asked, for that same chat and that same text, and only once;
+  `SENDS_PER_HOUR` (20) caps them.
 - **Least-privilege database logins.** The gateway and core each have their own Postgres role.
   Core, the part that will talk to an LLM, can read chats but cannot see the WhatsApp session, its
   encryption keys, or the keys needed to fetch media.

@@ -82,10 +82,10 @@ Folders appear when a phase needs them; empty placeholders are not committed.
   `authorization` and an `expires_at`. The gateway enforces both before sending:
   - `self_chat` may only go to DJ's own JID.
   - `confirmed` needs a pending action that is confirmed, targets this very chat (a person's phone
-    number or LID, or a group), was decided in the last 15 minutes by a message DJ sent in his own
-    direct chat after the action was proposed, and has no other request for it already sending or
-    sent. The gateway checks all of it in the database itself, so core alone can never send
-    elsewhere.
+    number or LID, or a group) with this very text, was decided in the last 15 minutes by a live
+    message DJ typed in his own direct chat after Kaya asked him (never one Kaya sent there), and
+    has no other request for it already sending or sent. The gateway checks all of it in the
+    database itself, so core alone can never send elsewhere.
   - Nothing goes out after `expires_at`; the gateway reports `send.result` failed with `expired`.
   - `expires_at` must be after `created_at` and at most 24 h later. A schema can't compare two
     fields, so both validators check this on top of it, and the shared samples cover it.
@@ -366,16 +366,20 @@ Folders appear when a phase needs them; empty placeholders are not committed.
   each as an exchange whose question is a note that Kaya sent it unasked, so a reply to one has it
   in context, the search planner can take its names, and it is masked like any past answer.
 - **Confirm-before-act.** A tool marked outward has no Run, only Propose: the agent loop stores its
-  proposal in `pending_actions` (one a question; a new one supersedes any still waiting), tells the
-  model nothing is done yet, and chat puts the exact summary and "reply yes or no (within 10 min)"
-  under Kaya's answer in code, whatever the model wrote or if it failed. Before a plain message
-  goes to the model, `actions.Runner` reads it as a decision only when the whole message is one of
-  a few plain yes or no words in English, Hinglish or Hindi; then it decides the newest waiting
-  action, runs a confirmed one through its kind's executor and records `done` or `failed` with the
-  result. The same message replayed gets the same answer and never runs the action twice; a yes
-  after the action lapsed is told so. `send_message` finds the chat as `/summary` does, drafts the
-  text and target JID, and its executor sends with the `confirmed` authorization under the key
-  `action:<id>`, at most `SENDS_PER_HOUR` an hour.
+  proposal in `pending_actions` as a `draft` (one a question) and tells the model nothing is done
+  yet; chat puts the exact summary (who, as "group" or "contact, +number", and the text) and "reply
+  yes or no (within 10 min)" at the top of Kaya's answer in code, with at most 300 characters from
+  the model under it, whatever the model wrote or if it failed. Only once that answer is sent,
+  unchanged, does the draft become `pending` with `shown_at` (WhatsApp's time) and the asking
+  message's id, superseding any older one; a draft never shown can never be decided. Before a plain
+  message goes to the model, `actions.Runner` reads it as a decision only when the whole message is
+  one of a few plain yes or no words in English, Hinglish or Hindi, sent after `shown_at` with no
+  other message from Kaya in between; then it decides the waiting action, runs a confirmed one
+  through its kind's executor and records `done` or `failed` with the result. The same message
+  replayed, however late, gets the same answer and never runs the action twice; a yes after the
+  last question expired is told so. `send_message` finds the chat as `/summary` does, drafts up to
+  800 characters, and its executor sends with the `confirmed` authorization under the key
+  `action:<id>`, at most `SENDS_PER_HOUR` confirmed an hour.
 - **History sync.** Each history chunk WhatsApp announces becomes a row in `history_jobs`, stored
   in the transaction that acknowledges the announcement. A single worker downloads the chunk,
   stores it in batches of at most 200 messages (a savepoint per message, so one bad message
