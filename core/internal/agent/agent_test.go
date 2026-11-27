@@ -530,3 +530,17 @@ func TestWhoAMessageGoesToMustComeFromTheOwnersOwnWords(t *testing.T) {
 		}
 	}
 }
+
+func TestToolsCanLeaveNotesForTheAnswer(t *testing.T) {
+	tool := Tool{Name: "remind", Description: "Sets a reminder.", Parameters: json.RawMessage(`{"type":"object"}`),
+		Run: func(ctx context.Context, _ json.RawMessage) (string, error) {
+			AddNote(ctx, "⏰ Sat 28 Nov, 18:00: Call Shaurya")
+			return "set", nil
+		}}
+	m := &model{locality: llm.Local, steps: []step{calls(call("a", "remind", `{}`), call("b", "remind", `{}`)), answer("done")}}
+	res, err := Run(bg, Options{LLM: m, Tools: registry(t, tool), Logger: quiet}, question)
+	if err != nil || len(res.Notes) != 1 || res.Notes[0] != "⏰ Sat 28 Nov, 18:00: Call Shaurya" {
+		t.Fatalf("notes %q, %v", res.Notes, err)
+	}
+	AddNote(bg, "nobody collects this")
+}
