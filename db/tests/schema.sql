@@ -578,6 +578,9 @@ BEGIN
   PERFORM pg_temp.expect_error($q$INSERT INTO alerts (message_id, task_id, chat_id, note) VALUES (900205, 1, 1, 'both')$q$, '23514');
   PERFORM pg_temp.expect_error($q$INSERT INTO alerts (message_id, chat_id, note) VALUES (900206, 1, ' ')$q$, '23514');
   PERFORM pg_temp.expect_error($q$INSERT INTO alerts (message_id, chat_id, note, sent_at) VALUES (900207, 1, 'x', now())$q$, '23514');
+  PERFORM pg_temp.expect_error($q$INSERT INTO alerts (task_id, chat_id, note) VALUES (1, 1, 'reminder without its time')$q$, '23514');
+  INSERT INTO alerts (task_id, due_at, chat_id, note) VALUES (1, now(), 1, 'Call soon');
+  PERFORM pg_temp.expect_error($q$INSERT INTO alerts (task_id, due_at, chat_id, note) SELECT 2, due_at, 1, 'same time again' FROM alerts WHERE task_id = 1$q$, '23505');
   INSERT INTO chunks (chat_id, first_sent_at, last_sent_at, message_count, text_hash, model, embedding)
   VALUES (1, now(), now(), 1, 'h', 'm', array_fill(0.1, ARRAY[1024])::halfvec(1024));
   INSERT INTO chunks (chat_id, first_sent_at, last_sent_at, message_count, text_hash, model, skipped)
