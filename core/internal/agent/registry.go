@@ -37,6 +37,9 @@ type Tool struct {
 	// what a reminder says: a value none of whose words he wrote is refused, so text from someone
 	// else's message can never pick them.
 	Grounded []string
+	// Untrusted marks a tool whose results carry other people's words, such as tasks found in
+	// chats: they reach the model fenced in data tags and escaped, never as plain text.
+	Untrusted bool
 }
 
 // Problem is a failure the model is told about in the tool's own words, so it can try another way.
