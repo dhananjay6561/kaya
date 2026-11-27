@@ -66,7 +66,9 @@ func TestReplyLeavesRoomForTheToolsInTheBudget(t *testing.T) {
 		past = append(past, memory.Exchange{Question: strings.Repeat("q", 100), Answer: strings.Repeat("a", 100), At: now})
 	}
 	tools := lookupTool(new([]string), "", nil)
-	model := &scripted{responses: func(llm.Request) (llm.Completion, error) { return llm.Completion{Text: "ok", FinishReason: llm.FinishStop}, nil }}
+	model := &scripted{responses: func(llm.Request) (llm.Completion, error) {
+		return llm.Completion{Text: "ok", FinishReason: llm.FinishStop}, nil
+	}}
 	reply(t, newChat(t, Options{LLM: model, History: history(past...), Tools: tools}), "hi")
 	reply(t, newChat(t, Options{LLM: model, History: history(past...)}), "hi")
 	withTools, without := model.requests[0].Messages, model.requests[1].Messages
