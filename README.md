@@ -79,8 +79,7 @@ contact, and it works with everything your WhatsApp account can see.
   `/pause` stops every answer until `/resume`. The pause is kept in the database, so it holds
   across restarts, and while paused Kaya still answers its slash commands. `/facts`, `/remember`
   and `/forget` show and change what Kaya knows about you; `/tasks` and `/done` show and close
-  the tasks found in your chats; `/summary` sums up today or one chat; `/alerts` switches alerts;
-  `/jobs` and `/cancel` show and stop reminders.
+  the tasks found in your chats; `/summary` sums up today or one chat; `/alerts` switches alerts.
 - **Answers from Groq, with lasting memory.** Anything else you type in your own chat is answered by
   Groq's `openai/gpt-oss-120b`, in your language and style, with today's date in your time zone.
   Kaya builds the context itself: facts about you, your conversation with it (kept for good) and
@@ -167,7 +166,7 @@ contact, and it works with everything your WhatsApp account can see.
   the exact time under her answer (⏰ Sat 28 Nov, 18:00: Call Shaurya), worked out by code in your
   time zone, so what you read is when it fires. A reminder arrives on the minute; one that repeats
   moves on to its next time; an "ask" job (your tasks every morning) is answered fresh each time.
-  "10 min baad" right after a reminder works, `/jobs` lists them, and `/cancel 3` or "gym wala
+  "10 min baad" right after a reminder works, "mere reminders dikhao" lists them, and "gym wala
   cancel kar do" stops one. If Kaya was off when one was due, it still comes, saying so. The
   scheduler sleeps until the next one is due and wakes when you set one, so it costs nothing while
   waiting, and a plain reminder needs no model call when it fires.

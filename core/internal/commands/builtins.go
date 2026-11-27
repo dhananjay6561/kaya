@@ -14,10 +14,10 @@ import (
 	"github.com/dhananjay6561/kaya/core/internal/text"
 )
 
-var builtinNames = []string{"help", "status", "pause", "resume", "facts", "remember", "forget", "tasks", "done", "summary", "alerts", "jobs", "cancel"}
+var builtinNames = []string{"help", "status", "pause", "resume", "facts", "remember", "forget", "tasks", "done", "summary", "alerts"}
 
 // takesText are the built-ins that act on the words after them.
-var takesText = []string{"remember", "forget", "done", "summary", "alerts", "cancel"}
+var takesText = []string{"remember", "forget", "done", "summary", "alerts"}
 
 // Slash kinds.
 const (
@@ -99,7 +99,6 @@ const helpText = "Commands:\n" +
 	"/done <number>: close a task, by its number in /tasks\n" +
 	"/summary: what came in today; /summary <chat>: one chat's last day\n" +
 	"/alerts: whether I message you when something needs you; /alerts on, /alerts off\n" +
-	"/jobs: your reminders and scheduled messages; /cancel <number>: stop one\n" +
 	"Anything else you send here goes to an AI model, which answers with what it knows about you, your conversation and what a search of your other chats finds."
 
 // answerSlash works out the reply to a slash command; /pause and /resume flip the switch.
@@ -142,10 +141,6 @@ func answerSlash(ctx context.Context, s *Slash, m channel.IncomingMessage, o Opt
 		return listTasks(ctx, o.Tasks, o.Zone, o.Now())
 	case "alerts":
 		return switchAlerts(ctx, o.Alerts, s.Args)
-	case "jobs":
-		return listJobs(ctx, o.Jobs, o.Zone, o.Now())
-	case "cancel":
-		return cancelJob(ctx, o.Jobs, s.Args)
 	case "done":
 		return done(ctx, o.Tasks, s.Args, o.Zone, o.Now())
 	case "pause":
