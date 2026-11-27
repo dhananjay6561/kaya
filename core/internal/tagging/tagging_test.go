@@ -574,3 +574,82 @@ func TestMasksNamesCodesAcrossMessagesAndDetailsAtTheCut(t *testing.T) {
 		}
 	}
 }
+
+func TestANewTaskThatRepeatsAnOpenOneIsNotAddedAndTheModelSeesTheList(t *testing.T) {
+	r := newRig(t)
+	first := r.say(msg{body: "hourly reminder: Asad (Drizz) today at 3 pm"})
+	due := time.Date(2026, 11, 26, 15, 0, 0, 0, kolkata)
+	r.exec(`INSERT INTO tasks (message_id, chat_id, kind, title, due_at, due_has_time) VALUES ($1, $2, 'reminder', 'Asad (Drizz) today at 3 pm', $3, true)`, first, r.direct, due)
+	r.exec(`INSERT INTO tasks (message_id, chat_id, kind, title) VALUES ($1, $2, 'task', 'Send Rahul the deck')`, first, r.direct)
+	r.exec(`INSERT INTO message_tags (message_id, tags) VALUES ($1, '{reminder}')`, first)
+	r.say(msg{body: "hourly reminder: Asad (drizz) today 3pm"})
+	r.say(msg{body: "send the deck to rahul and the invoice too"})
+	m := (&model{locality: llm.Local}).script(`{"tagged":[
+		{"line":1,"tags":["reminder"],"task":"","reminder":"Asad (drizz) today 3pm","due":"2026-11-26 15:00"},
+		{"line":2,"tags":["task"],"task":"Send the deck to Rahul","reminder":"","due":""},
+		{"line":2,"tags":["task"],"task":"","reminder":"","due":""}]}`)
+	tg := r.tagger(m, Options{})
+	if found, err := r.step(tg); !found || err != nil {
+		t.Fatalf("found %v, err %v", found, err)
+	}
+	open, err := NewTasks(r.core, func() time.Time { return today }).Open(bg, 10)
+	if err != nil || len(open) != 2 {
+		t.Fatalf("open %+v, %v", open, err)
+	}
+	user := m.requests()[0].Messages[1].Content
+	if !strings.HasPrefix(user, "Already on their list:\n- Asad (Drizz) today at 3 pm (was at Thu 26 Nov 15:00)\n- Send Rahul the deck\n\nChat: Rahul\n") {
+		t.Fatalf("request = %q", user)
+	}
+	system := m.requests()[0].Messages[0].Content
+	for _, rule := range []string{"Only the owner's own to-dos are tasks", "makes sense on its own weeks later", `"Already on their list" holds`} {
+		if !strings.Contains(system, rule) {
+			t.Errorf("the prompt lacks %q", rule)
+		}
+	}
+
+	r.say(msg{body: "and send rahul the invoice"})
+	m.script(`{"tagged":[{"line":1,"tags":["task"],"task":"Send Rahul the invoice","reminder":"","due":""}]}`)
+	if found, err := r.step(tg); !found || err != nil {
+		t.Fatalf("found %v, err %v", found, err)
+	}
+	if n, _ := NewTasks(r.core, func() time.Time { return today }).CountOpen(bg); n != 3 {
+		t.Fatalf("a different task was taken for a repeat: %d open", n)
+	}
+}
+
+func TestRemindersDropOffWhenTheyAreOverAndLateTasksSaySo(t *testing.T) {
+	r := newRig(t)
+	at := time.Date(2026, 11, 27, 22, 0, 0, 0, kolkata)
+	add := func(kind, title string, due *time.Time, timed bool) {
+		id := r.say(msg{body: title})
+		r.exec(`INSERT INTO tasks (message_id, chat_id, kind, title, due_at, due_has_time) VALUES ($1, $2, $3, $4, $5, $6)`, id, r.direct, kind, title, due, timed)
+	}
+	day := func(y, m, d, h, min int) *time.Time {
+		t := time.Date(y, time.Month(m), d, h, min, 0, 0, kolkata)
+		return &t
+	}
+	add(KindReminder, "call at three", day(2026, 11, 27, 15, 0), true)
+	add(KindReminder, "call at eight", day(2026, 11, 27, 20, 30), true)
+	add(KindReminder, "birthday today", day(2026, 11, 27, 0, 0), false)
+	add(KindReminder, "birthday yesterday", day(2026, 11, 26, 0, 0), false)
+	add(KindTask, "send the form", day(2026, 11, 26, 18, 0), true)
+	add(KindTask, "pay rent", day(2026, 11, 28, 0, 0), false)
+	s := NewTasks(r.core, func() time.Time { return at })
+	open, err := s.Open(bg, 10)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var lines []string
+	for _, o := range open {
+		lines = append(lines, Describe(o, kolkata, at)[strings.Index(Describe(o, kolkata, at), " ")+1:])
+	}
+	same(t, lines, []string{
+		"send the form, overdue: was due Thu 26 Nov 18:00 (Rahul, 26 Nov)",
+		"birthday today, due Fri 27 Nov (Rahul, 26 Nov)",
+		"call at eight, was at Fri 27 Nov 20:30 (Rahul, 26 Nov)",
+		"pay rent, due Sat 28 Nov (Rahul, 26 Nov)",
+	})
+	if n, err := s.CountOpen(bg); err != nil || n != 4 {
+		t.Fatalf("count %d, %v", n, err)
+	}
+}
