@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"io"
 	"log/slog"
 	"strings"
@@ -12,6 +13,7 @@ import (
 	"time"
 
 	"github.com/dhananjay6561/kaya/core/internal/llm"
+	"github.com/dhananjay6561/kaya/core/internal/masking"
 )
 
 var bg = context.Background()
@@ -343,5 +345,79 @@ func TestTheRegistryRefusesToolsItCannotOffer(t *testing.T) {
 	}
 	if n := registry(t).Tokens(func(s string) int { return len(s) }); n != 0 {
 		t.Fatalf("no tools cost %d", n)
+	}
+}
+
+func TestResultsAreMaskedBeforeTheyAreCutAndCodesAreHidden(t *testing.T) {
+	var lines []string
+	for i := range 60 {
+		lines = append(lines, fmt.Sprintf("%d. Call +91 98765 432%02d about the deck, then mail priya%d@example.com", i+1, i, i))
+	}
+	lines = append([]string{"1. Send 482913 to the delivery guy"}, lines...)
+	tool := Tool{Name: "tasks", Description: "Lists tasks.", Parameters: json.RawMessage(`{"type":"object"}`),
+		Run: func(context.Context, json.RawMessage) (string, error) { return strings.Join(lines, "\n"), nil }}
+	for _, limit := range []int{80, 97, 133, 211, 500} {
+		m := &model{locality: llm.Cloud, steps: []step{calls(call("a", "tasks", `{}`)), answer("ok")}}
+		o := Options{LLM: m, Tools: registry(t, tool), Logger: quiet, Privacy: masking.NewSession(), ResultTokens: limit}
+		if _, err := Run(bg, o, question); err != nil {
+			t.Fatal(err)
+		}
+		told := toolMessages(m.requests[1])[0].Content
+		for _, leak := range []string{"98765", "482913", "@example", "priya"} {
+			if strings.Contains(told, leak) {
+				t.Fatalf("limit %d: %q reached the model: %q", limit, leak, told)
+			}
+		}
+		if m.CountTokens(told) > limit || !strings.HasSuffix(told, "more lines cut to fit.)") {
+			t.Fatalf("limit %d: told %d tokens: %q", limit, m.CountTokens(told), told)
+		}
+	}
+}
+
+func TestALongLineIsCutOutsideAPlaceholder(t *testing.T) {
+	count := func(s string) int { return len(s) }
+	got := fit("call [PHONE_1] or [EMAIL_1] now", 26, count)
+	if got != "call [PHONE_1] or … (cut to fit.)" && got != "call … (cut to fit.)" {
+		t.Fatalf("got %q", got)
+	}
+	if strings.Count(got, "[") != strings.Count(got, "]") {
+		t.Fatalf("a placeholder was split: %q", got)
+	}
+	if got := fit("short", 10, count); got != "short" {
+		t.Fatalf("got %q", got)
+	}
+	if got := fit("[PHONE_1][PHONE_2]", 3, count); got != "(too long to show.)" {
+		t.Fatalf("got %q", got)
+	}
+}
+
+func TestResultsShareTheRoomTheBudgetLeaves(t *testing.T) {
+	var ran []string
+	long := Tool{Name: "echo", Description: "Says a lot.", Parameters: zoneParams,
+		Run: func(_ context.Context, args json.RawMessage) (string, error) {
+			ran = append(ran, string(args))
+			return strings.Repeat("word ", 800), nil
+		}}
+	two := calls(call("a", "echo", `{"zone":"UTC"}`), call("b", "echo", `{"zone":"UTC"}`))
+	m := &model{locality: llm.Local, steps: []step{two, two, answer("ok")}}
+	budget := 600
+	if _, err := Run(bg, Options{LLM: m, Tools: registry(t, long), Logger: quiet, Budget: budget}, question); err != nil {
+		t.Fatal(err)
+	}
+	for i, r := range m.requests {
+		used := registry(t, long).Tokens(m.CountTokens)
+		for _, msg := range r.Messages {
+			used += m.CountTokens(msg.Content)
+			for _, c := range msg.ToolCalls {
+				used += m.CountTokens(c.Name + c.Arguments)
+			}
+		}
+		if notes := 2 * m.CountTokens(noRoom); used > budget+notes {
+			t.Fatalf("request %d carried %d tokens, over the budget of %d", i, used, budget)
+		}
+	}
+	told := toolMessages(m.requests[2])
+	if len(ran) != 2 || told[2].Content != noRoom || told[3].Content != noRoom {
+		t.Fatalf("ran %d, told %+v", len(ran), told)
 	}
 }
