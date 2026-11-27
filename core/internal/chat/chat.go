@@ -153,12 +153,13 @@ func (c *Chat) Reply(ctx context.Context, q Question) (Answer, error) {
 		return in
 	}
 	var proposed *actions.Action
+	var owner string
 	ask := func(history, recalled []memory.Exchange, effort llm.Effort) (llm.Completion, error) {
 		built := memory.Build(input(history, recalled))
 		started := time.Now()
 		res, err := c.complete(ctx, llm.Request{
 			Tier: llm.Heavy, Effort: effort, MaxTokens: maxAnswerTokens, Messages: built.Messages,
-		}, privacy)
+		}, privacy, owner)
 		completion := res.Completion
 		if res.Proposed != nil {
 			proposed = res.Proposed
@@ -217,6 +218,7 @@ func (c *Chat) Reply(ctx context.Context, q Question) (Answer, error) {
 	if err != nil {
 		return Answer{}, err
 	}
+	owner = ownerWords(q, history, now)
 	history = mask(history)
 	query := q.Text
 	if o.Excerpts != nil {
@@ -267,13 +269,9 @@ func (c *Chat) Reply(ctx context.Context, q Question) (Answer, error) {
 	}
 	if errors.Is(err, agent.ErrTooManyRounds) {
 		o.Logger.Warn("the model kept calling tools; giving up on the question")
-		return c.withProposal(Answer{Text: goingInCircles}, proposed), nil
+		return Answer{Text: goingInCircles}, nil
 	}
 	if err != nil {
-		if proposed != nil && ctx.Err() == nil && (o.DatabaseAway == nil || !o.DatabaseAway(err)) {
-			o.Logger.Warn("the model failed after proposing an action; asking the owner anyway", "action", proposed.ID)
-			return c.withProposal(Answer{Text: "I drafted this but could not finish my answer."}, proposed), nil
-		}
 		return Answer{}, err
 	}
 
@@ -288,9 +286,9 @@ func (c *Chat) Reply(ctx context.Context, q Question) (Answer, error) {
 	ranOut := completion.FinishReason == llm.FinishLength
 	if answer == "" {
 		if ranOut {
-			return c.withProposal(Answer{Text: "I ran out of room before I could answer. Try a narrower question."}, proposed), nil
+			return Answer{Text: "I ran out of room before I could answer. Try a narrower question."}, nil
 		}
-		return c.withProposal(Answer{Text: "I had no answer to that. Try asking another way."}, proposed), nil
+		return Answer{Text: "I had no answer to that. Try asking another way."}, nil
 	}
 	cut := utf8.RuneCountInString(answer) > o.MaxReplyLength
 	answer = ClipTo(answer, o.MaxReplyLength)
@@ -387,7 +385,7 @@ func (c *Chat) read(ctx context.Context, q Question, source func(context.Context
 
 // complete asks the model once, or, with tools, until it stops calling them; a nil privacy means a
 // local model.
-func (c *Chat) complete(ctx context.Context, r llm.Request, privacy MaskSession) (agent.Result, error) {
+func (c *Chat) complete(ctx context.Context, r llm.Request, privacy MaskSession, owner string) (agent.Result, error) {
 	if c.o.Tools == nil {
 		completion, err := c.o.LLM.Complete(ctx, r)
 		return agent.Result{Completion: completion, Usage: completion.Usage}, err
@@ -397,9 +395,21 @@ func (c *Chat) complete(ctx context.Context, r llm.Request, privacy MaskSession)
 		hide = privacy
 	}
 	return agent.Run(ctx, agent.Options{
-		LLM: c.o.LLM, Tools: c.o.Tools, Logger: c.o.Logger, Privacy: hide, Budget: c.o.LLM.ContextTokens(), Propose: c.o.Propose,
+		LLM: c.o.LLM, Tools: c.o.Tools, Logger: c.o.Logger, Privacy: hide, Budget: c.o.LLM.ContextTokens(), Propose: c.o.Propose, OwnerWords: owner,
 		Fatal: func(err error) bool { return c.o.DatabaseAway != nil && c.o.DatabaseAway(err) },
 	}, r)
+}
+
+// ownerWords is what DJ wrote himself lately: this question and his questions of the last 30
+// minutes, never what Kaya sent unasked.
+func ownerWords(q Question, history []memory.Exchange, now time.Time) string {
+	words := []string{q.Text}
+	for _, e := range history {
+		if !e.Unasked && now.Sub(e.At) <= 30*time.Minute {
+			words = append(words, e.Question)
+		}
+	}
+	return strings.Join(words, "\n")
 }
 
 // withProposal puts the exact question for DJ at the top of an answer that proposed an action,
