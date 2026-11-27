@@ -8,6 +8,7 @@ import (
 	"slices"
 	"strings"
 	"time"
+	"unicode"
 	"unicode/utf8"
 
 	"github.com/dhananjay6561/kaya/core/internal/actions"
@@ -289,8 +290,21 @@ func (c *Chat) Reply(ctx context.Context, q Question) (Answer, error) {
 		}
 		reply = privacy.Restore(reply)
 	}
-	answer := ToWhatsApp(reply)
+	answer := strings.Map(func(r rune) rune {
+		if unicode.Is(unicode.Cf, r) && r != 0x200d {
+			return -1
+		}
+		return r
+	}, ToWhatsApp(reply))
 	ranOut := completion.FinishReason == llm.FinishLength
+	if garbled(answer) {
+		o.Logger.Warn("the model's answer was garbled; it is not shown")
+		if len(notes) > 0 || proposed != nil {
+			answer = "Done."
+		} else {
+			return Answer{Text: "My answer came out garbled. Ask me again."}, nil
+		}
+	}
 	if answer == "" {
 		if ranOut {
 			return withNotes(Answer{Text: "I ran out of room before I could answer. Try a narrower question."}, notes), nil
@@ -443,4 +457,22 @@ func (c *Chat) withProposal(a Answer, proposed *actions.Action) Answer {
 		text += "\n\n" + note
 	}
 	return Answer{Text: text, Remember: true, ActionID: proposed.ID}
+}
+
+// garbled is an answer that is mostly not words, such as dots and odd spaces, which a model
+// sometimes writes instead of an answer.
+func garbled(s string) bool {
+	letters, others := 0, 0
+	for _, r := range s {
+		switch {
+		case unicode.IsLetter(r) || unicode.IsNumber(r):
+			letters++
+		case unicode.IsSpace(r) || r == 0xa0 || r == 0x202f:
+		case unicode.Is(unicode.So, r) || r == 0x200d || unicode.Is(unicode.Sk, r):
+			letters++
+		default:
+			others++
+		}
+	}
+	return letters+others >= 8 && letters < others
 }
