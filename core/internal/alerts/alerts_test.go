@@ -155,7 +155,7 @@ func TestAnUrgentAlertGoesOutAtOnceAndOnlyOnce(t *testing.T) {
 	r.step(a)
 	r.step(a)
 	got := r.texts()
-	if len(got) != 1 || got[0] != "*Heads up* (Ritu)\nRitu is worried you're unwell and says you should see a doctor" {
+	if len(got) != 1 || got[0] != "*Heads up*\nFrom Ritu: Ritu is worried you're unwell and says you should see a doctor" {
 		t.Fatalf("sent %q", got)
 	}
 	if s := r.skipped(); s["sent"] != 1 {
@@ -175,7 +175,7 @@ func TestAlertsThatCanWaitAreGatheredIntoOneMessage(t *testing.T) {
 	r.alert(r.ritusChat, true, "Ritu needs the rent money today")
 	r.step(a)
 	got := r.texts()
-	want := "*Heads up*\n• Ritu: Ritu needs the rent money today\n• Office Team: Your name came up: Asad asks if you can take the demo\n• Ritu: Ritu asks if you're free on Sunday"
+	want := "*Heads up*\n• From Ritu: Ritu needs the rent money today\n• From Office Team: Your name came up: Asad asks if you can take the demo\n• From Ritu: Ritu asks if you're free on Sunday"
 	if len(got) != 1 || got[0] != want {
 		t.Fatalf("sent %q", got)
 	}
@@ -184,7 +184,7 @@ func TestAlertsThatCanWaitAreGatheredIntoOneMessage(t *testing.T) {
 	r.step(a)
 	r.shift = 46 * time.Minute
 	r.step(a)
-	if got := r.texts(); len(got) != 2 || got[1] != "*Heads up* (Office Team)\nStandup moved to 11" {
+	if got := r.texts(); len(got) != 2 || got[1] != "*Heads up*\nFrom Office Team: Standup moved to 11" {
 		t.Fatalf("a gathered alert was not sent after waiting: %q", got)
 	}
 }
@@ -215,7 +215,7 @@ func TestARemindersAlertGoesOutBeforeItsTime(t *testing.T) {
 	r.step(a)
 	r.step(a)
 	got := r.texts()
-	if len(got) != 1 || !strings.HasPrefix(got[0], "*Heads up* (Reminder)\nIn 20 min, at ") || !strings.HasSuffix(got[0], ": Call with Shaurya") {
+	if len(got) != 1 || !strings.HasPrefix(got[0], "*Heads up*\nReminder: In 20 min, at ") || !strings.HasSuffix(got[0], ": Call with Shaurya") {
 		t.Fatalf("sent %q", got)
 	}
 
@@ -226,7 +226,7 @@ func TestARemindersAlertGoesOutBeforeItsTime(t *testing.T) {
 	r.step(a)
 	_, _ = r.pause.Resume(bg, "test")
 	r.exec("UPDATE tasks SET state = 'done', done_at = now() WHERE title = 'Gym'")
-	r.exec("INSERT INTO alerts (task_id, chat_id, urgent, note) SELECT id, chat_id, true, 'Gym soon' FROM tasks WHERE title = 'Gym'")
+	r.exec("INSERT INTO alerts (task_id, due_at, chat_id, urgent, note) SELECT id, due_at, chat_id, true, 'Gym soon' FROM tasks WHERE title = 'Gym'")
 	r.step(a)
 	if s := r.skipped(); s["done"] != 1 || len(r.texts()) != 1 {
 		t.Fatalf("alerts %v, sent %q", s, r.texts())
@@ -305,7 +305,105 @@ func TestASendThatWasCutOffGoesOutUnderTheSameKey(t *testing.T) {
 	r.alert(r.ritusChat, true, "never sent")
 	r.phone.errs = []error{&channel.SendFailedError{Code: "expired"}}
 	r.step(a)
-	if s := r.skipped(); s["not_sent"] != 1 {
+	if s := r.skipped(); s["send_expired"] != 1 {
 		t.Fatalf("alerts %v", s)
+	}
+}
+
+func TestARefusedSendNeverHoldsUpLaterAlerts(t *testing.T) {
+	r := newRig(t)
+	a := r.alerter(Options{})
+	r.alert(r.ritusChat, true, "refused")
+	r.phone.errs = []error{&channel.SendFailedError{Code: "rejected"}}
+	r.step(a)
+	r.alert(r.ritusChat, true, "after it")
+	r.step(a)
+	if got := r.texts(); len(got) != 1 || !strings.HasSuffix(got[0], "after it") {
+		t.Fatalf("sent %q", got)
+	}
+	if s := r.skipped(); s["send_rejected"] != 1 {
+		t.Fatalf("alerts %v", s)
+	}
+}
+
+func TestAMovedReminderGetsANewAlertAtItsNewTime(t *testing.T) {
+	r := newRig(t)
+	id := r.say(r.ritusChat, false, "call at 6")
+	r.exec(`INSERT INTO tasks (message_id, chat_id, kind, title, due_at, due_has_time) VALUES ($1, $2, 'reminder', 'Call with Shaurya', $3, true)`,
+		id, r.ritusChat, time.Now().Add(20*time.Minute))
+	a := r.alerter(Options{})
+	_, _ = r.pause.Pause(bg, "test")
+	r.step(a)
+	_, _ = r.pause.Resume(bg, "test")
+	r.exec("INSERT INTO alerts (task_id, due_at, chat_id, urgent, note) SELECT id, due_at, chat_id, true, 'old time' FROM tasks")
+	r.exec("UPDATE tasks SET due_at = due_at + interval '2 hours'")
+	r.step(a)
+	if s := r.skipped(); s["moved"] != 1 || len(r.texts()) != 0 {
+		t.Fatalf("alerts %v, sent %q", s, r.texts())
+	}
+	r.shift = 2 * time.Hour
+	r.step(a)
+	if got := r.texts(); len(got) != 1 || !strings.HasSuffix(got[0], "Call with Shaurya") || strings.Contains(got[0], "old time") {
+		t.Fatalf("sent %q", got)
+	}
+}
+
+func TestRemindersGoOutPastTheHourlyCap(t *testing.T) {
+	r := newRig(t)
+	a := r.alerter(Options{PerHour: 1})
+	r.alert(r.ritusChat, true, "uses the hour")
+	r.step(a)
+	r.alert(r.ritusChat, true, "waits")
+	id := r.say(r.ritusChat, false, "call at 6")
+	r.exec(`INSERT INTO tasks (message_id, chat_id, kind, title, due_at, due_has_time) VALUES ($1, $2, 'reminder', 'Call with Shaurya', $3, true)`,
+		id, r.ritusChat, time.Now().Add(10*time.Minute))
+	r.step(a)
+	if got := r.texts(); len(got) != 2 || !strings.HasSuffix(got[1], "Call with Shaurya") || strings.Contains(got[1], "waits") {
+		t.Fatalf("sent %q", got)
+	}
+}
+
+func TestOldNewsIsNeverSent(t *testing.T) {
+	r := newRig(t)
+	a := r.alerter(Options{})
+	r.alert(r.ritusChat, true, "stuck in a batch")
+	r.exec("UPDATE alerts SET batch = 'alerts-old', created_at = now() - interval '7 hours'")
+	old := r.say(r.ritusChat, false, "from yesterday")
+	r.exec("UPDATE messages SET sent_at = now() - interval '20 hours' WHERE id = $1", old)
+	r.exec("INSERT INTO alerts (message_id, chat_id, urgent, note) VALUES ($1, $2, true, 'yesterday''s news')", old, r.ritusChat)
+	r.step(a)
+	if s := r.skipped(); s["stale"] != 2 || len(r.texts()) != 0 {
+		t.Fatalf("alerts %v, sent %q", s, r.texts())
+	}
+
+	r.alert(r.ritusChat, true, "keyed when switched off")
+	r.exec("UPDATE alerts SET batch = 'alerts-new' WHERE note = 'keyed when switched off'")
+	sw := NewSwitch(r.core)
+	_, _ = sw.Set(bg, false)
+	_, _ = sw.Set(bg, true)
+	r.step(a)
+	if len(r.texts()) != 0 {
+		t.Fatalf("a batch from before /alerts off went out: %q", r.texts())
+	}
+}
+
+func TestInAGroupOnlyAReplyToItCountsAsAnswered(t *testing.T) {
+	r := newRig(t)
+	asked := r.alert(r.office, false, "Asad asks if you can take the demo")
+	r.exec("UPDATE messages SET sent_at = now() - interval '1 hour' WHERE id = $1", asked)
+	other := r.say(r.office, true, "lunch?")
+	r.exec("UPDATE messages SET sent_at = now() - interval '30 minutes' WHERE id = $1", other)
+	a := r.alerter(Options{})
+	r.step(a)
+	if s := r.skipped(); s["answered"] != 0 {
+		t.Fatalf("an unrelated message in the group answered it: %v", s)
+	}
+	reply := r.say(r.office, true, "haan le lunga")
+	r.exec(`UPDATE messages SET reply_to_wa_id = (SELECT wa_id FROM messages WHERE id = $2),
+		reply_to_sender_id = (SELECT sender_id FROM messages WHERE id = $2) WHERE id = $1`, reply, asked)
+	r.exec("UPDATE alerts SET batch = NULL WHERE sent_at IS NULL")
+	r.step(a)
+	if s := r.skipped(); s["answered"] != 1 {
+		t.Fatalf("a reply did not answer it: %v, sent %q", s, r.texts())
 	}
 }
