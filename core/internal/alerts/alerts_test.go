@@ -41,7 +41,7 @@ func (p *phone) Send(_ context.Context, m channel.OutgoingMessage, _ channel.Sen
 type rig struct {
 	t                 *testing.T
 	core, admin       *store.DB
-	me, ritu, rahul   int64
+	me, ritu          int64
 	ritusChat, office int64
 	seq               int
 	phone             *phone
@@ -222,9 +222,9 @@ func TestARemindersAlertGoesOutBeforeItsTime(t *testing.T) {
 	closed := r.say(r.ritusChat, false, "gym at 7")
 	r.exec(`INSERT INTO tasks (message_id, chat_id, kind, title, due_at, due_has_time) VALUES ($1, $2, 'reminder', 'Gym', $3, true)`,
 		closed, r.ritusChat, time.Now().Add(10*time.Minute))
-	r.pause.Pause(bg, "test")
+	_, _ = r.pause.Pause(bg, "test")
 	r.step(a)
-	r.pause.Resume(bg, "test")
+	_, _ = r.pause.Resume(bg, "test")
 	r.exec("UPDATE tasks SET state = 'done', done_at = now() WHERE title = 'Gym'")
 	r.exec("INSERT INTO alerts (task_id, chat_id, urgent, note) SELECT id, chat_id, true, 'Gym soon' FROM tasks WHERE title = 'Gym'")
 	r.step(a)
@@ -254,12 +254,12 @@ func TestNothingGoesOutWhilePausedOrSwitchedOff(t *testing.T) {
 	r := newRig(t)
 	a := r.alerter(Options{})
 	r.alert(r.ritusChat, true, "while paused")
-	r.pause.Pause(bg, "test")
+	_, _ = r.pause.Pause(bg, "test")
 	r.step(a)
 	if len(r.texts()) != 0 {
 		t.Fatal("an alert went out while paused")
 	}
-	r.pause.Resume(bg, "test")
+	_, _ = r.pause.Resume(bg, "test")
 	sw := NewSwitch(r.core)
 	if changed, err := sw.Set(bg, false); !changed || err != nil {
 		t.Fatalf("off: %v, %v", changed, err)
