@@ -33,6 +33,10 @@ type Tool struct {
 	Outward bool
 	Run     func(ctx context.Context, args json.RawMessage) (string, error)
 	Propose func(ctx context.Context, args json.RawMessage) (actions.Proposal, error)
+	// Grounded names arguments of an outward tool that must come from DJ's own words, such as who
+	// a message goes to: a value none of whose words he wrote is refused, so text from someone
+	// else's message can never pick the target.
+	Grounded []string
 }
 
 // Problem is a failure the model is told about in the tool's own words, so it can try another way.

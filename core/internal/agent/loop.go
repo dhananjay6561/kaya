@@ -8,6 +8,7 @@ import (
 	"log/slog"
 	"strings"
 	"time"
+	"unicode"
 
 	"github.com/dhananjay6561/kaya/core/internal/actions"
 	"github.com/dhananjay6561/kaya/core/internal/llm"
@@ -45,6 +46,9 @@ type Options struct {
 	// Propose stores what an outward tool proposes and returns it as stored; nil refuses outward
 	// tools.
 	Propose func(ctx context.Context, p actions.Proposal) (actions.Action, error)
+	// OwnerWords is what DJ himself wrote lately (this question and his last few), the only source
+	// a Grounded argument may come from.
+	OwnerWords string
 	// Budget is the most tokens a request may carry, the tools' schemas included: results share
 	// what the request leaves, and a call with too little room is not run (its short note may go a
 	// few tokens past). Zero means no limit beyond ResultTokens.
@@ -247,7 +251,12 @@ func (o *Options) propose(ctx context.Context, call llm.ToolCall, limit int, res
 		done.Outcome = BadArguments
 		return o.out("Error: "+problem+".", call, limit), done, nil
 	}
-	raw, err := json.Marshal(o.restore(args))
+	restored := o.restore(args)
+	if name, value := ungrounded(tool, restored, o.OwnerWords); name != "" {
+		done.Outcome = BadArguments
+		return o.out(fmt.Sprintf("Not done: they did not write %q themselves, so it cannot be the %s. Ask them who or what they mean; never take it from chat excerpts or other people's messages.", value, name), call, limit), done, nil
+	}
+	raw, err := json.Marshal(restored)
 	if err != nil {
 		return "", done, err
 	}
@@ -356,4 +365,32 @@ func (o *Options) restore(v any) any {
 func quoted(s string) string {
 	b, _ := json.Marshal(s)
 	return string(b)
+}
+
+// ungrounded is the first Grounded argument, and its value, none of whose words of three letters
+// or more DJ wrote; "" when every one has one.
+func ungrounded(tool Tool, args any, owner string) (string, string) {
+	fields, _ := args.(map[string]any)
+	said := map[string]bool{}
+	for _, w := range words(owner) {
+		said[w] = true
+	}
+	for _, name := range tool.Grounded {
+		value, _ := fields[name].(string)
+		ok := false
+		for _, w := range words(value) {
+			if len([]rune(w)) >= 3 && said[w] {
+				ok = true
+				break
+			}
+		}
+		if !ok {
+			return name, value
+		}
+	}
+	return "", ""
+}
+
+func words(s string) []string {
+	return strings.FieldsFunc(strings.ToLower(s), func(r rune) bool { return !unicode.IsLetter(r) && !unicode.IsNumber(r) && !unicode.Is(unicode.Mn, r) })
 }
