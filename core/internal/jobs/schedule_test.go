@@ -27,10 +27,16 @@ func TestNextWalksEachRepeat(t *testing.T) {
 		{"daily", at(2026, 11, 28, 18, 0), Repeat{Kind: Daily}, []time.Time{at(2026, 11, 29, 18, 0), at(2026, 11, 30, 18, 0)}},
 		{"every 2 days", at(2026, 11, 28, 8, 0), Repeat{Kind: Daily, Every: 2}, []time.Time{at(2026, 11, 30, 8, 0), at(2026, 12, 2, 8, 0)}},
 		{"weekdays over a weekend", at(2026, 11, 27, 9, 30), Repeat{Kind: Weekdays}, []time.Time{at(2026, 11, 30, 9, 30), at(2026, 12, 1, 9, 30)}},
-		{"weekly mon and thu", at(2026, 11, 30, 7, 0), Repeat{Kind: Weekly, Days: []time.Weekday{time.Monday, time.Thursday}},
-			[]time.Time{at(2026, 12, 3, 7, 0), at(2026, 12, 7, 7, 0)}},
-		{"every 2 weeks on sat", at(2026, 11, 28, 10, 0), Repeat{Kind: Weekly, Every: 2, Days: []time.Weekday{time.Saturday}},
-			[]time.Time{at(2026, 12, 12, 10, 0), at(2026, 12, 26, 10, 0)}},
+		{
+			"weekly mon and thu", at(2026, 11, 30, 7, 0),
+			Repeat{Kind: Weekly, Days: []time.Weekday{time.Monday, time.Thursday}},
+			[]time.Time{at(2026, 12, 3, 7, 0), at(2026, 12, 7, 7, 0)},
+		},
+		{
+			"every 2 weeks on sat", at(2026, 11, 28, 10, 0),
+			Repeat{Kind: Weekly, Every: 2, Days: []time.Weekday{time.Saturday}},
+			[]time.Time{at(2026, 12, 12, 10, 0), at(2026, 12, 26, 10, 0)},
+		},
 		{"monthly on the 31st", at(2027, 1, 31, 9, 0), Repeat{Kind: Monthly, MonthDay: 31}, []time.Time{at(2027, 2, 28, 9, 0), at(2027, 3, 31, 9, 0)}},
 		{"hourly", at(2026, 11, 28, 23, 15), Repeat{Kind: Hourly}, []time.Time{at(2026, 11, 29, 0, 15), at(2026, 11, 29, 1, 15)}},
 	}
