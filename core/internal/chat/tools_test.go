@@ -107,7 +107,7 @@ func TestReplyFailsWhenAToolFindsTheDatabaseAway(t *testing.T) {
 
 func TestReplyGivesAToolTheRealDetailsAndTheCloudModelOnlyPlaceholders(t *testing.T) {
 	var ran []string
-	model := &scripted{cloud: true, responses: lookupThenAnswer(`{"number":"[PHONE_1]"}`)}
+	model := roomy{&scripted{cloud: true, responses: lookupThenAnswer(`{"number":"[PHONE_1]"}`)}}
 	c := newChat(t, Options{
 		LLM: model, NewMaskSession: realMasking, Tools: lookupTool(&ran, "9876543210 is Rahul, mail rahul@x.com", nil),
 		History: history(memory.Exchange{Question: "what's that number?", Answer: "It is 9876543210", At: now}),
