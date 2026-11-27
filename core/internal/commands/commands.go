@@ -72,6 +72,8 @@ func failureNotice(err error) string {
 		return "The AI service does not know a model I am set to use. Check GROQ_MODEL_HEAVY and GROQ_MODEL_ROUTINE."
 	case llm.Rejected:
 		return "The AI service turned this message down. Try asking another way."
+	case llm.BadToolCall:
+		return "I fumbled one of my tools answering that. Try asking again."
 	}
 	return "The AI service is not answering right now. Try again in a bit."
 }
