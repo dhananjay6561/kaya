@@ -208,7 +208,7 @@ func TestTagsABatchAndKeepsItsTasksAndReminders(t *testing.T) {
 		t.Fatalf("found %v, err %v", found, err)
 	}
 	same(t, r.tags(), []string{"hey: -", "can you send me the deck tonight?: important task", "and the call with Priya is tomorrow 5pm: reminder", "50% off on shoes!!: ignore"})
-	open, err := NewTasks(r.core).Open(bg, 10)
+	open, err := NewTasks(r.core, func() time.Time { return today }).Open(bg, 10)
 	if err != nil || len(open) != 2 {
 		t.Fatalf("open %+v, %v", open, err)
 	}
@@ -291,7 +291,7 @@ func TestMasksMessagesForACloudModelAndPutsDetailsBackInTitles(t *testing.T) {
 	if strings.Contains(asked, "9876543210") || !strings.Contains(asked, "[PHONE_1]") {
 		t.Fatalf("not masked: %q", asked)
 	}
-	open, _ := NewTasks(r.core).Open(bg, 10)
+	open, _ := NewTasks(r.core, func() time.Time { return today }).Open(bg, 10)
 	if len(open) != 1 || open[0].Title != "Call Rahul on 9876543210" {
 		t.Fatalf("open = %+v", open)
 	}
@@ -310,7 +310,7 @@ func TestAMessageCanGiveATaskAndAReminderAndAReminderWithoutADayIsATask(t *testi
 	if _, err := r.step(r.tagger(m, Options{})); err != nil {
 		t.Fatal(err)
 	}
-	open, _ := NewTasks(r.core).Open(bg, 10)
+	open, _ := NewTasks(r.core, func() time.Time { return today }).Open(bg, 10)
 	if len(open) != 3 || open[0].Kind != KindReminder || open[0].Title != "Exam" || open[0].DueHasTime ||
 		!open[0].Due.Equal(time.Date(2026, 12, 3, 0, 0, 0, 0, kolkata)) {
 		t.Fatalf("open = %+v", open)
@@ -446,7 +446,7 @@ func TestPassesOverOldMessagesAndRetagsEditedOnes(t *testing.T) {
 	if _, err := r.step(tg); err != nil {
 		t.Fatal(err)
 	}
-	open, _ := NewTasks(r.core).Open(bg, 10)
+	open, _ := NewTasks(r.core, func() time.Time { return today }).Open(bg, 10)
 	if len(open) != 1 || !open[0].Due.Equal(time.Date(2026, 11, 27, 17, 0, 0, 0, kolkata)) {
 		t.Fatalf("open = %+v", open)
 	}
@@ -465,7 +465,7 @@ func TestDropsADueDayBeforeTheMessageOrAfterAYear(t *testing.T) {
 	if _, err := r.step(r.tagger(m, Options{})); err != nil {
 		t.Fatal(err)
 	}
-	open, _ := NewTasks(r.core).Open(bg, 10)
+	open, _ := NewTasks(r.core, func() time.Time { return today }).Open(bg, 10)
 	if len(open) != 2 || open[0].Kind != KindTask || open[1].Kind != KindTask {
 		t.Fatalf("open = %+v", open)
 	}
@@ -476,10 +476,10 @@ func TestOpenLeavesOutTasksFromDeletedMessages(t *testing.T) {
 	a := r.say(msg{body: "a"})
 	r.exec(`INSERT INTO tasks (message_id, chat_id, kind, title) VALUES ($1, $2, 'task', 'gone')`, a, r.direct)
 	r.exec("UPDATE messages SET deleted_at = now(), body = NULL WHERE id = $1", a)
-	if open, _ := NewTasks(r.core).Open(bg, 10); len(open) != 0 {
+	if open, _ := NewTasks(r.core, func() time.Time { return today }).Open(bg, 10); len(open) != 0 {
 		t.Fatalf("open = %+v", open)
 	}
-	if n, _ := NewTasks(r.core).CountOpen(bg); n != 0 {
+	if n, _ := NewTasks(r.core, func() time.Time { return today }).CountOpen(bg); n != 0 {
 		t.Fatalf("counted %d", n)
 	}
 }
@@ -514,7 +514,7 @@ func TestDoneClosesOnlyOpenTasksAndOpenListsDueFirst(t *testing.T) {
 	r.exec(`INSERT INTO tasks (message_id, chat_id, kind, title, created_at) VALUES ($1, $2, 'task', 'older task', now() - interval '1 day')`, a, r.direct)
 	r.exec(`INSERT INTO tasks (message_id, chat_id, kind, title) VALUES ($1, $2, 'task', 'newer task')`, b, r.direct)
 	r.exec(`INSERT INTO tasks (message_id, chat_id, kind, title, due_at) VALUES ($1, $2, 'reminder', 'due', now() + interval '1 day')`, c, r.group)
-	s := NewTasks(r.core)
+	s := NewTasks(r.core, func() time.Time { return today })
 	open, err := s.Open(bg, 10)
 	if err != nil || len(open) != 3 || open[0].Title != "due" || open[0].Chat != "Office Team" || open[1].Title != "newer task" {
 		t.Fatalf("open %+v, %v", open, err)
