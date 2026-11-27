@@ -377,7 +377,11 @@ Folders appear when a phase needs them; empty placeholders are not committed.
   other message from Kaya in between; then it decides the waiting action, runs a confirmed one
   through its kind's executor and records `done` or `failed` with the result. The same message
   replayed, however late, gets the same answer and never runs the action twice; a yes after the
-  last question expired is told so. `send_message` finds the chat as `/summary` does, drafts up to
+  last question expired is told so. An outward tool's grounded arguments (`send_message`'s `to`)
+  must share a word with what DJ wrote himself in this message or his questions of the last 30
+  minutes, never alerts or excerpts, or the proposal is refused and the model asked to check with
+  him; only a finished answer, never a failed or canned one, asks him to confirm.
+  `send_message` finds the chat as `/summary` does, drafts up to
   800 characters, and its executor sends with the `confirmed` authorization under the key
   `action:<id>`, at most `SENDS_PER_HOUR` confirmed an hour.
 - **History sync.** Each history chunk WhatsApp announces becomes a row in `history_jobs`, stored
