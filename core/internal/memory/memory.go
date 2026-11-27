@@ -143,7 +143,9 @@ var (
 
 // escaped turns every angle bracket and its look-alikes in an excerpt into ‹ and ›, so no message
 // can pass for a tag.
-func escaped(excerpt string) string {
+// Escaped turns every look-alike of an angle bracket in text from someone else into a harmless one,
+// so nothing inside data tags can close them.
+func Escaped(excerpt string) string {
 	excerpt = angleEntities.ReplaceAllStringFunc(excerpt, func(entity string) string {
 		if e := strings.ToLower(strings.TrimSuffix(entity, ";")); strings.HasSuffix(e, "lt") || strings.HasSuffix(e, "60") || strings.HasSuffix(e, "3c") {
 			return "‹"
@@ -172,7 +174,7 @@ func excerptMessage(system string, excerpts []string, tag string, limit int, cou
 	noteCost := count(system+note) - count(system)
 	message = excerptsHeader
 	for _, e := range excerpts {
-		candidate := message + "\n\n<" + tag + ">\n" + escaped(e) + "\n</" + tag + ">"
+		candidate := message + "\n\n<" + tag + ">\n" + Escaped(e) + "\n</" + tag + ">"
 		if noteCost+count(candidate) <= limit {
 			message, kept = candidate, kept+1
 		}
