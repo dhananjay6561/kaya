@@ -5,6 +5,7 @@ import (
 	"crypto/rand"
 	"errors"
 	"log/slog"
+	"slices"
 	"strings"
 	"time"
 	"unicode/utf8"
@@ -153,6 +154,7 @@ func (c *Chat) Reply(ctx context.Context, q Question) (Answer, error) {
 		return in
 	}
 	var proposed *actions.Action
+	var notes []string
 	var owner string
 	ask := func(history, recalled []memory.Exchange, effort llm.Effort) (llm.Completion, error) {
 		built := memory.Build(input(history, recalled))
@@ -163,6 +165,11 @@ func (c *Chat) Reply(ctx context.Context, q Question) (Answer, error) {
 		completion := res.Completion
 		if res.Proposed != nil {
 			proposed = res.Proposed
+		}
+		for _, n := range res.Notes {
+			if !slices.Contains(notes, n) {
+				notes = append(notes, n)
+			}
 		}
 		if err != nil {
 			return completion, err
@@ -269,7 +276,7 @@ func (c *Chat) Reply(ctx context.Context, q Question) (Answer, error) {
 	}
 	if errors.Is(err, agent.ErrTooManyRounds) {
 		o.Logger.Warn("the model kept calling tools; giving up on the question")
-		return Answer{Text: goingInCircles}, nil
+		return withNotes(Answer{Text: goingInCircles}, notes), nil
 	}
 	if err != nil {
 		return Answer{}, err
@@ -286,16 +293,16 @@ func (c *Chat) Reply(ctx context.Context, q Question) (Answer, error) {
 	ranOut := completion.FinishReason == llm.FinishLength
 	if answer == "" {
 		if ranOut {
-			return Answer{Text: "I ran out of room before I could answer. Try a narrower question."}, nil
+			return withNotes(Answer{Text: "I ran out of room before I could answer. Try a narrower question."}, notes), nil
 		}
-		return Answer{Text: "I had no answer to that. Try asking another way."}, nil
+		return withNotes(Answer{Text: "I had no answer to that. Try asking another way."}, notes), nil
 	}
 	cut := utf8.RuneCountInString(answer) > o.MaxReplyLength
 	answer = ClipTo(answer, o.MaxReplyLength)
 	if ranOut || cut {
 		answer += cutShort
 	}
-	return c.withProposal(Answer{Text: answer, Remember: true}, proposed), nil
+	return withNotes(c.withProposal(Answer{Text: answer, Remember: true}, proposed), notes), nil
 }
 
 // excerpts renders the passages Excerpts finds, masked for a cloud model with the question's mask
@@ -410,6 +417,17 @@ func ownerWords(q Question, history []memory.Exchange, now time.Time) string {
 		}
 	}
 	return strings.Join(words, "\n")
+}
+
+// withNotes puts the lines tools wrote for DJ under an answer, as they are, such as the exact time
+// a reminder was set for; an answer with notes is remembered, so a follow-up has them.
+func withNotes(a Answer, notes []string) Answer {
+	if len(notes) == 0 {
+		return a
+	}
+	a.Text = strings.TrimSpace(a.Text) + "\n\n" + strings.Join(notes, "\n")
+	a.Remember = true
+	return a
 }
 
 // withProposal puts the exact question for DJ at the top of an answer that proposed an action,

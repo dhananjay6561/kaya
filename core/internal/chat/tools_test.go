@@ -200,3 +200,24 @@ func TestTheOwnersWordsAreHisRecentQuestionsNeverAnAlert(t *testing.T) {
 		t.Fatalf("got %q", got)
 	}
 }
+
+func TestAToolsNoteShowsUnderTheAnswerAsWritten(t *testing.T) {
+	r, err := agent.NewRegistry(agent.Tool{Name: "set_reminder", Description: "Sets a reminder.", Parameters: json.RawMessage(`{"type":"object"}`),
+		Run: func(ctx context.Context, _ json.RawMessage) (string, error) {
+			agent.AddNote(ctx, "⏰ Sat 28 Nov, 18:00: Call Shaurya")
+			return "set", nil
+		}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	model := &scripted{responses: func(req llm.Request) (llm.Completion, error) {
+		if toolMessage(req) == "" {
+			return llm.Completion{ToolCalls: []llm.ToolCall{{ID: "c1", Name: "set_reminder", Arguments: `{}`}}, FinishReason: llm.FinishToolCalls}, nil
+		}
+		return llm.Completion{Text: "Done, 6:30 baje yaad dila dungi.", FinishReason: llm.FinishStop}, nil
+	}}
+	got := reply(t, newChat(t, Options{LLM: model, Tools: r}), "6 baje shaurya ko call yaad dilana")
+	if got.Text != "Done, 6:30 baje yaad dila dungi.\n\n⏰ Sat 28 Nov, 18:00: Call Shaurya" || !got.Remember {
+		t.Fatalf("got %+v", got)
+	}
+}
