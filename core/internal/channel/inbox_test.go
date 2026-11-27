@@ -717,3 +717,42 @@ func TestCutsADeliveryShortWhenTheWorkerLockIsLost(t *testing.T) {
 		t.Fatalf("most at once %d, attempts %v", most.Load(), r.attempts())
 	}
 }
+
+func TestAVoiceNoteDJSentIsACommandOnceItIsTranscribed(t *testing.T) {
+	r := newInboxRig(t)
+	seen := make(chan string, 2)
+	box := r.start(func(_ context.Context, m IncomingMessage) (Handled, error) { seen <- m.Text; return Handled{}, nil }, nil, nil)
+	spoken := r.message(fixture{kind: "voice", body: str("")})
+	if !r.record(spoken, slash) {
+		t.Fatal("a voice note DJ sent his own chat is a command")
+	}
+	box.Wake()
+	select {
+	case got := <-seen:
+		t.Fatalf("a voice note was answered before it was transcribed: %q", got)
+	case <-time.After(300 * time.Millisecond):
+	}
+	exec(t, r.admin, "INSERT INTO transcripts (message_id, state, text) VALUES ($1, 'done', 'kal 6 baje yaad dilana')", spoken.MessageID)
+	box.Wake()
+	select {
+	case got := <-seen:
+		if got != "kal 6 baje yaad dilana" {
+			t.Fatalf("got %q", got)
+		}
+	case <-time.After(5 * time.Second):
+		t.Fatal("the transcribed voice note was never answered")
+	}
+
+	unheard := r.message(fixture{kind: "voice", body: str("")})
+	r.record(unheard, slash)
+	exec(t, r.admin, "INSERT INTO transcripts (message_id, state, error) VALUES ($1, 'failed', 'file_late')", unheard.MessageID)
+	box.Wake()
+	select {
+	case got := <-seen:
+		if got != cannotHear {
+			t.Fatalf("got %q", got)
+		}
+	case <-time.After(5 * time.Second):
+		t.Fatal("a voice note that could not be heard was never answered")
+	}
+}
