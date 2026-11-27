@@ -53,6 +53,8 @@ type Config struct {
 	Telephony   string
 	// TaggingTokensPerDay is the most routine-model tokens tagging spends a day; 0 turns tagging off.
 	TaggingTokensPerDay int
+	// AlertsPerHour is the most alert messages Kaya sends DJ in an hour; 0 turns alerts off.
+	AlertsPerHour int
 }
 
 // Error lists every problem found in the config. It never includes the values themselves.
@@ -159,6 +161,16 @@ func Load(getenv func(string) string, baseDir string) (Config, error) {
 			fail("TAGGING_TOKENS_PER_DAY", "must be 0 (off) or at least 5000")
 		default:
 			cfg.TaggingTokensPerDay = n
+		}
+	}
+	cfg.AlertsPerHour = 10
+	if raw := strings.TrimSpace(getenv("ALERTS_PER_HOUR")); raw != "" {
+		n, err := strconv.Atoi(raw)
+		switch {
+		case err != nil || n < 0:
+			fail("ALERTS_PER_HOUR", "must be 0 (off) or a positive whole number")
+		default:
+			cfg.AlertsPerHour = n
 		}
 	}
 	if cfg.LLM.Provider == "groq" && cfg.LLM.Groq.APIKey == "" {
