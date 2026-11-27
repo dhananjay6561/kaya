@@ -9,6 +9,7 @@ import (
 	"time"
 	"unicode/utf8"
 
+	"github.com/dhananjay6561/kaya/core/internal/agent"
 	"github.com/dhananjay6561/kaya/core/internal/llm"
 	"github.com/dhananjay6561/kaya/core/internal/memory"
 	"github.com/dhananjay6561/kaya/core/internal/search"
@@ -65,18 +66,26 @@ type Options struct {
 	DatabaseAway func(err error) bool
 	// NewMaskSession is required for a cloud model.
 	NewMaskSession func() MaskSession
+	// Tools are offered to the model with every question; nil means none. A tool error that
+	// DatabaseAway recognises fails the question like a History error does.
+	Tools          *agent.Registry
 	Now            func() time.Time
 	MaxReplyLength int
 }
 
 // Chat answers DJ's plain messages.
-type Chat struct{ o Options }
+type Chat struct {
+	o Options
+	// toolTokens is what offering the tools adds to every request.
+	toolTokens int
+}
 
 const (
 	maxRecalled     = 3
 	newestLabel     = "(Among the newest messages found for the question.)"
 	maxAnswerTokens = 3072
 	cutShort        = "\n\n(Cut short here. Ask for less, or for the rest.)"
+	goingInCircles  = "I went round in circles with my tools on that one. Try asking another way."
 )
 
 // New checks the options and returns a Chat.
@@ -95,7 +104,11 @@ func New(o Options) (*Chat, error) {
 	if o.MaxReplyLength == 0 {
 		o.MaxReplyLength = 8000
 	}
-	return &Chat{o: o}, nil
+	c := &Chat{o: o}
+	if o.Tools != nil {
+		c.toolTokens = o.Tools.Tokens(o.LLM.CountTokens)
+	}
+	return c, nil
 }
 
 // Reply answers q with the model, carrying as much of the conversation as fits its budget.
@@ -121,7 +134,7 @@ func (c *Chat) Reply(ctx context.Context, q Question) (Answer, error) {
 			Recalled:    recalled,
 			MaxRecalled: maxRecalled,
 			Question:    q.Text,
-			Budget:      o.LLM.ContextTokens(),
+			Budget:      o.LLM.ContextTokens() - c.toolTokens,
 			Count:       o.LLM.CountTokens,
 			Now:         now,
 		}
@@ -133,18 +146,25 @@ func (c *Chat) Reply(ctx context.Context, q Question) (Answer, error) {
 	ask := func(history, recalled []memory.Exchange, effort llm.Effort) (llm.Completion, error) {
 		built := memory.Build(input(history, recalled))
 		started := time.Now()
-		completion, err := o.LLM.Complete(ctx, llm.Request{
+		res, err := c.complete(ctx, llm.Request{
 			Tier: llm.Heavy, Effort: effort, MaxTokens: maxAnswerTokens, Messages: built.Messages,
-		})
+		}, privacy)
+		completion := res.Completion
 		if err != nil {
 			return completion, err
+		}
+		calls := make([]string, len(res.Calls))
+		for i, call := range res.Calls {
+			calls[i] = call.Tool + ":" + call.Outcome
 		}
 		o.Logger.Info("the model answered",
 			"model", completion.Model,
 			"finish_reason", completion.FinishReason,
-			"input_tokens", completion.Usage.InputTokens,
-			"output_tokens", completion.Usage.OutputTokens,
-			"counted_tokens", built.Tokens,
+			"input_tokens", res.Usage.InputTokens,
+			"output_tokens", res.Usage.OutputTokens,
+			"counted_tokens", built.Tokens+c.toolTokens,
+			"tool_rounds", res.Rounds,
+			"tool_calls", calls,
 			"exchanges", built.Exchanges,
 			"left_out", built.LeftOut,
 			"recalled", built.Recalled,
@@ -228,14 +248,16 @@ func (c *Chat) Reply(ctx context.Context, q Question) (Answer, error) {
 		excerpts, chatSearch = nil, memory.DidNotFit
 		completion, err = ask(sent, sentRecalled, llm.Medium)
 	}
+	if text.Trim(completion.Text) == "" && completion.FinishReason == llm.FinishLength && err == nil {
+		o.Logger.Warn("the model spent its room thinking; asking again with less effort")
+		completion, err = ask(sent, sentRecalled, llm.Low)
+	}
+	if errors.Is(err, agent.ErrTooManyRounds) {
+		o.Logger.Warn("the model kept calling tools; giving up on the question")
+		return Answer{Text: goingInCircles}, nil
+	}
 	if err != nil {
 		return Answer{}, err
-	}
-	if text.Trim(completion.Text) == "" && completion.FinishReason == llm.FinishLength {
-		o.Logger.Warn("the model spent its room thinking; asking again with less effort")
-		if completion, err = ask(sent, sentRecalled, llm.Low); err != nil {
-			return Answer{}, err
-		}
 	}
 
 	reply := completion.Text
@@ -344,4 +366,21 @@ func (c *Chat) read(ctx context.Context, q Question, source func(context.Context
 		c.o.Logger.Warn(failed, logging.Err(err))
 		return nil, nil
 	}
+}
+
+// complete asks the model once, or, with tools, until it stops calling them; a nil privacy means a
+// local model.
+func (c *Chat) complete(ctx context.Context, r llm.Request, privacy MaskSession) (agent.Result, error) {
+	if c.o.Tools == nil {
+		completion, err := c.o.LLM.Complete(ctx, r)
+		return agent.Result{Completion: completion, Usage: completion.Usage}, err
+	}
+	var hide agent.Privacy
+	if privacy != nil {
+		hide = privacy
+	}
+	return agent.Run(ctx, agent.Options{
+		LLM: c.o.LLM, Tools: c.o.Tools, Logger: c.o.Logger, Privacy: hide,
+		Fatal: func(err error) bool { return c.o.DatabaseAway != nil && c.o.DatabaseAway(err) },
+	}, r)
 }
