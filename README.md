@@ -122,8 +122,11 @@ contact, and it works with everything your WhatsApp account can see.
   minutes after it arrives, a chat at a time in batches, and tagged: important (a question to you,
   something urgent, money, family, a deadline), ignore (promotions, forwards, chatter that is not
   about you), task (something you were asked or promised to do) or reminder (a meeting, call, bill
-  or birthday with a day). Tasks and reminders get a short title and a due date, and `/tasks` lists
-  the open ones with where they came from; `/done 12` closes one. Messages are masked before they
+  or birthday with a day). Only your own to-dos count: what you tell someone else to do is theirs,
+  and a message too vague to act on gives nothing. Tasks and reminders get a title that makes sense
+  on its own and a due date; a repeat of one already open (an hourly reminder, a "don't forget") is
+  not added again. `/tasks` lists the open ones with where they came from, marks late tasks
+  overdue and drops a reminder once its time has passed; `/done 12` closes one. Messages are masked before they
   reach the model, and tagging stays inside a daily token allowance so your questions always have
   room. Older history is not tagged.
 - **Summaries on request.** `/summary` sums up what came in today across your chats, direct chats
