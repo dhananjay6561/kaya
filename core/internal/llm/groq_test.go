@@ -625,13 +625,22 @@ func TestGroqCallsAToolCallItCannotReadABadResponse(t *testing.T) {
 		"no id":                  toolAnswer(`[{"type":"function","function":{"name":"clock","arguments":"{}"}}]`, `"tool_calls"`),
 		"no name":                toolAnswer(`[{"id":"fc_a","type":"function","function":{"arguments":"{}"}}]`, `"tool_calls"`),
 		"null call":              toolAnswer(`[null]`, `"tool_calls"`),
-		"calls but stopped":      toolAnswer(`[{"id":"fc_a","type":"function","function":{"name":"clock","arguments":"{}"}}]`, `"stop"`),
 		"tool_calls but no call": toolAnswer(`[]`, `"tool_calls"`),
 	} {
 		f := newFake(t, reply)
 		_, err := f.llm(GroqOptions{}).Complete(bg, ask)
 		if e := llmError(t, err); e.Code != BadResponse {
 			t.Fatalf("%s: code = %s", name, e.Code)
+		}
+	}
+}
+
+func TestGroqTakesToolCallsWhateverTheFinishReasonSays(t *testing.T) {
+	for _, finish := range []string{`"stop"`, `"length"`, `"something_new"`, `null`} {
+		f := newFake(t, toolAnswer(`[{"id":"fc_a","type":"function","function":{"name":"clock","arguments":"{}"}}]`, finish))
+		got, err := f.llm(GroqOptions{}).Complete(bg, ask)
+		if err != nil || got.FinishReason != FinishToolCalls || len(got.ToolCalls) != 1 {
+			t.Fatalf("%s: got %+v, %v", finish, got, err)
 		}
 	}
 }
