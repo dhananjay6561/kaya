@@ -354,8 +354,10 @@ func TestResultsAreMaskedBeforeTheyAreCutAndCodesAreHidden(t *testing.T) {
 		lines = append(lines, fmt.Sprintf("%d. Call +91 98765 432%02d about the deck, then mail priya%d@example.com", i+1, i, i))
 	}
 	lines = append([]string{"1. Send 482913 to the delivery guy"}, lines...)
-	tool := Tool{Name: "tasks", Description: "Lists tasks.", Parameters: json.RawMessage(`{"type":"object"}`),
-		Run: func(context.Context, json.RawMessage) (string, error) { return strings.Join(lines, "\n"), nil }}
+	tool := Tool{
+		Name: "tasks", Description: "Lists tasks.", Parameters: json.RawMessage(`{"type":"object"}`),
+		Run: func(context.Context, json.RawMessage) (string, error) { return strings.Join(lines, "\n"), nil },
+	}
 	for _, limit := range []int{80, 97, 133, 211, 500} {
 		m := &model{locality: llm.Cloud, steps: []step{calls(call("a", "tasks", `{}`)), answer("ok")}}
 		o := Options{LLM: m, Tools: registry(t, tool), Logger: quiet, Privacy: masking.NewSession(), ResultTokens: limit}
@@ -393,11 +395,13 @@ func TestALongLineIsCutOutsideAPlaceholder(t *testing.T) {
 
 func TestResultsShareTheRoomTheBudgetLeaves(t *testing.T) {
 	var ran []string
-	long := Tool{Name: "echo", Description: "Says a lot.", Parameters: zoneParams,
+	long := Tool{
+		Name: "echo", Description: "Says a lot.", Parameters: zoneParams,
 		Run: func(_ context.Context, args json.RawMessage) (string, error) {
 			ran = append(ran, string(args))
 			return strings.Repeat("word ", 800), nil
-		}}
+		},
+	}
 	two := calls(call("a", "echo", `{"zone":"UTC"}`), call("b", "echo", `{"zone":"UTC"}`))
 	m := &model{locality: llm.Local, steps: []step{two, two, answer("ok")}}
 	budget := 600
