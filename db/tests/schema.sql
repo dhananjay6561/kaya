@@ -324,6 +324,11 @@ BEGIN
   ASSERT has_table_privilege('kaya_core', 'alerting', 'SELECT, UPDATE')
     AND NOT has_table_privilege('kaya_core', 'alerting', 'INSERT'), 'core switches alerts but cannot add the switch';
   ASSERT NOT has_table_privilege('kaya_gateway', 'alerts', 'SELECT'), 'the gateway cannot read alerts';
+  ASSERT has_table_privilege('kaya_core', 'pending_actions', 'SELECT, INSERT, UPDATE')
+    AND NOT has_table_privilege('kaya_core', 'pending_actions', 'DELETE'), 'core proposes and settles actions but keeps them';
+  ASSERT has_table_privilege('kaya_gateway', 'pending_actions', 'SELECT')
+    AND NOT has_table_privilege('kaya_gateway', 'pending_actions', 'UPDATE')
+    AND NOT has_table_privilege('kaya_gateway', 'pending_actions', 'INSERT'), 'the gateway checks actions but cannot confirm one';
   ASSERT has_table_privilege('kaya_core', 'fact_learning', 'SELECT, UPDATE')
     AND NOT has_table_privilege('kaya_core', 'fact_learning', 'INSERT')
     AND NOT has_table_privilege('kaya_core', 'fact_learning', 'DELETE'), 'core moves the learning cursor but cannot add or remove it';
@@ -579,6 +584,14 @@ BEGIN
   PERFORM pg_temp.expect_error($q$INSERT INTO alerts (message_id, chat_id, note) VALUES (900206, 1, ' ')$q$, '23514');
   PERFORM pg_temp.expect_error($q$INSERT INTO alerts (message_id, chat_id, note, sent_at) VALUES (900207, 1, 'x', now())$q$, '23514');
   PERFORM pg_temp.expect_error($q$INSERT INTO alerts (task_id, chat_id, note) VALUES (1, 1, 'reminder without its time')$q$, '23514');
+  INSERT INTO pending_actions (kind, target_jid, summary, payload, expires_at)
+    VALUES ('send_message', '918888888888@s.whatsapp.net', 'Send Rahul: running late', '{}', now() + interval '10 minutes');
+  PERFORM pg_temp.expect_error($q$INSERT INTO pending_actions (kind, target_jid, summary, payload, expires_at)
+    VALUES ('send_message', 'status@broadcast', 'x', '{}', now() + interval '10 minutes')$q$, '23514');
+  PERFORM pg_temp.expect_error($q$INSERT INTO pending_actions (kind, target_jid, summary, payload, expires_at)
+    VALUES ('send_message', '918888888888@s.whatsapp.net', 'x', '{}', now() + interval '2 hours')$q$, '23514');
+  PERFORM pg_temp.expect_error($q$INSERT INTO pending_actions (kind, target_jid, summary, payload, expires_at, state)
+    VALUES ('send_message', '918888888888@s.whatsapp.net', 'x', '{}', now() + interval '10 minutes', 'confirmed')$q$, '23514');
   INSERT INTO alerts (task_id, due_at, chat_id, note) VALUES (1, now(), 1, 'Call soon');
   PERFORM pg_temp.expect_error($q$INSERT INTO alerts (task_id, due_at, chat_id, note) SELECT 2, due_at, 1, 'same time again' FROM alerts WHERE task_id = 1$q$, '23505');
   INSERT INTO chunks (chat_id, first_sent_at, last_sent_at, message_count, text_hash, model, embedding)
