@@ -279,12 +279,22 @@ func run(cfg config.Config, logger *slog.Logger) error {
 		},
 		Chat: func(ctx context.Context, m channel.IncomingMessage) (commands.ChatAnswer, error) {
 			answer, err := replies.Reply(ctx, chat.Question{ID: m.ID, Text: m.Text, SentAt: m.SentAt})
-			return commands.ChatAnswer{Text: answer.Text, Remember: answer.Remember}, err
+			return commands.ChatAnswer{Text: answer.Text, Remember: answer.Remember, ActionID: answer.ActionID}, err
 		},
 		DatabaseAway: databaseAway,
 		Alerts:       alertsCommand(alerter, alertSwitch),
 		Decide: func(ctx context.Context, m channel.IncomingMessage) (string, bool, error) {
 			return runner.Handle(ctx, m.ID, m.Text)
+		},
+		Replay: func(ctx context.Context, m channel.IncomingMessage) (string, bool, error) {
+			return runner.Replay(ctx, m.ID)
+		},
+		Shown: func(ctx context.Context, actionID string, sent channel.SentMessage) error {
+			shown, err := actionStore.Shown(ctx, actionID, sent.ID, sent.SentAt)
+			if err == nil && !shown {
+				logger.Warn("an action asked about was no longer a draft", "action", actionID)
+			}
+			return err
 		},
 	})
 	defer stopCommands()

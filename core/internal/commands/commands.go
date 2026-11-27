@@ -19,6 +19,8 @@ import (
 type ChatAnswer struct {
 	Text     string
 	Remember bool
+	// ActionID is an action the answer asks DJ to confirm.
+	ActionID string
 }
 
 // Options configure the command handler. Zero durations take their defaults.
@@ -37,8 +39,12 @@ type Options struct {
 	// Alerts switches alerts for /alerts; nil answers it with a notice.
 	Alerts AlertSwitch
 	// Decide answers a plain message that decides the action waiting for DJ's yes, reporting false
-	// for any other message, which then goes to Chat; nil means no actions.
+	// for any other message, which then goes to Chat; nil means no actions. Replay answers a
+	// message that already decided one, however late it is run again. Shown marks an action
+	// proposed in an answer as asked, once that answer was sent.
 	Decide func(ctx context.Context, m channel.IncomingMessage) (string, bool, error)
+	Replay func(ctx context.Context, m channel.IncomingMessage) (string, bool, error)
+	Shown  func(ctx context.Context, actionID string, sent channel.SentMessage) error
 	// Zone is DJ's time zone, for the dates replies show; nil means UTC.
 	Zone *time.Location
 	Chat func(ctx context.Context, m channel.IncomingMessage) (ChatAnswer, error)
@@ -142,6 +148,19 @@ func (h *handler) handle(ctx context.Context, m channel.IncomingMessage) (channe
 			return channel.Handled{}, nil
 		}
 	}
+	if late > o.MaxAge && o.Replay != nil {
+		// A yes that already decided an action is answered with what happened, however late it is
+		// run again, so DJ is never told nothing was done when it was.
+		text, replayed, err := o.Replay(ctx, m)
+		if err != nil {
+			return channel.Handled{}, err
+		}
+		if replayed {
+			_, err := o.Channel.Send(ctx, channel.OutgoingMessage{IdempotencyKey: "command:" + m.ID + ":replayed", ReplyTo: m.ID, Text: text},
+				channel.SendOptions{TTL: o.NoticeTTL})
+			return channel.Handled{}, err
+		}
+	}
 	if late > o.MaxAge {
 		_, err := o.Channel.Send(ctx, channel.OutgoingMessage{
 			IdempotencyKey: "command:" + m.ID,
@@ -209,10 +228,17 @@ func (h *handler) answer(ctx context.Context, m channel.IncomingMessage, slash *
 	if slash == nil && !produced.Remember {
 		sendKey = canned
 	}
+	// An answer asking DJ to confirm an action must be sent as written, so the action marked as
+	// asked is the one he sees; a different answer queued earlier under the same key fails instead.
 	sent, err := o.Channel.Send(ctx, channel.OutgoingMessage{IdempotencyKey: sendKey, ReplyTo: m.ID, Text: produced.Text},
-		channel.SendOptions{TTL: ttl, TextMayChange: true})
+		channel.SendOptions{TTL: ttl, TextMayChange: produced.ActionID == ""})
 	if err != nil {
 		return channel.Handled{}, err
+	}
+	if produced.ActionID != "" && o.Shown != nil {
+		if err := o.Shown(ctx, produced.ActionID, sent); err != nil {
+			return channel.Handled{}, err
+		}
 	}
 	if slash == nil && produced.Remember {
 		return channel.Handled{AnswerID: sent.ID}, nil

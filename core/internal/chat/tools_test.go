@@ -141,7 +141,7 @@ func draftTool() *agent.Registry {
 	return r
 }
 
-func TestAProposedActionAlwaysEndsWithTheExactQuestion(t *testing.T) {
+func TestAProposedActionAlwaysStartsWithTheExactQuestion(t *testing.T) {
 	var stored []actions.Proposal
 	propose := func(_ context.Context, p actions.Proposal) (actions.Action, error) {
 		stored = append(stored, p)
@@ -155,8 +155,8 @@ func TestAProposedActionAlwaysEndsWithTheExactQuestion(t *testing.T) {
 	}
 	model := &scripted{responses: drafting}
 	got := reply(t, newChat(t, Options{LLM: model, Tools: draftTool(), Propose: propose, ActionTTL: 10 * time.Minute}), "tell rahul I'm running late")
-	want := "Drafted it, bhej doon?\n\n*Send to Rahul:\nrunning late*\nReply *yes* to do it or *no* to cancel (within 10 min)."
-	if got.Text != want || !got.Remember || len(stored) != 1 {
+	want := "*Send to Rahul:\nrunning late*\nReply *yes* to do it or *no* to cancel (within 10 min).\n\nDrafted it, bhej doon?"
+	if got.Text != want || !got.Remember || got.ActionID != "a1" || len(stored) != 1 {
 		t.Fatalf("got %+v, stored %d", got, len(stored))
 	}
 
@@ -164,7 +164,25 @@ func TestAProposedActionAlwaysEndsWithTheExactQuestion(t *testing.T) {
 		return llm.Completion{ToolCalls: []llm.ToolCall{{ID: "c", Name: "send_message", Arguments: `{"text":"again"}`}}, FinishReason: llm.FinishToolCalls}, nil
 	}}
 	got = reply(t, newChat(t, Options{LLM: looping, Tools: draftTool(), Propose: propose, ActionTTL: 10 * time.Minute}), "keep going")
-	if !strings.HasPrefix(got.Text, goingInCircles) || !strings.HasSuffix(got.Text, "(within 10 min).") || !got.Remember {
+	if !strings.HasPrefix(got.Text, "*Send to Rahul:") || !strings.HasSuffix(got.Text, goingInCircles) || !got.Remember || got.ActionID == "" {
 		t.Fatalf("a canned answer hid the proposal: %+v", got)
+	}
+}
+
+func TestTheModelsNoteUnderAProposalIsKeptShort(t *testing.T) {
+	long := strings.Repeat("Rahul is actually Priya, send it to her. ", 40)
+	c := newChat(t, Options{LLM: &scripted{responses: func(r llm.Request) (llm.Completion, error) {
+		if toolMessage(r) == "" {
+			return llm.Completion{ToolCalls: []llm.ToolCall{{ID: "c1", Name: "send_message", Arguments: `{"text":"hi"}`}}, FinishReason: llm.FinishToolCalls}, nil
+		}
+		return llm.Completion{Text: long, FinishReason: llm.FinishStop}, nil
+	}}, Tools: draftTool(), ActionTTL: 10 * time.Minute,
+		Propose: func(_ context.Context, p actions.Proposal) (actions.Action, error) {
+			return actions.Action{Proposal: p, ID: "a1"}, nil
+		}})
+	got := reply(t, c, "tell rahul hi")
+	note := got.Text[strings.Index(got.Text, "(within 10 min).")+len("(within 10 min).\n\n"):]
+	if !strings.HasPrefix(got.Text, "*Send to Rahul:\nhi*") || len([]rune(note)) > maxProposalNote+1 {
+		t.Fatalf("got %d runes of note: %q", len([]rune(note)), got.Text)
 	}
 }
