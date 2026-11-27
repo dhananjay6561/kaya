@@ -54,11 +54,12 @@ func TestSendMessageDraftsForAContactOrAGroupAndNeverSends(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if p.Kind != SendKind || p.TargetJID != "918888888888@s.whatsapp.net" || p.Summary != "Send to Rahul:\nrunning late, 10 min" ||
+	if p.Kind != SendKind || p.TargetJID != "918888888888@s.whatsapp.net" || p.Summary != "Send to Rahul (contact, +918888888888):\nrunning late, 10 min" ||
 		string(p.Payload) != `{"chat_id":`+itoa(rahulsChat)+`,"title":"Rahul","text":"running late, 10 min"}` {
 		t.Fatalf("proposal %+v %s", p, p.Payload)
 	}
-	if p, err := tool.Propose(bg, json.RawMessage(`{"to":"Office Team","text":"standup at 11"}`)); err != nil || p.TargetJID != "120363000000000001@g.us" {
+	if p, err := tool.Propose(bg, json.RawMessage(`{"to":"Office Team","text":"standup at 11"}`)); err != nil || p.TargetJID != "120363000000000001@g.us" ||
+		!strings.HasPrefix(p.Summary, "Send to Office Team (group):") {
 		t.Fatalf("group %+v, %v", p, err)
 	}
 	var problem *agent.Problem
@@ -100,9 +101,12 @@ func TestSendExecutorSendsTheConfirmedMessageWithinItsLimit(t *testing.T) {
 		t.Fatalf("result %q, %v", result, err)
 	}
 	box.err = nil
+	if _, err := admin.Exec(bg, "CREATE SEQUENCE pending_seq"); err != nil {
+		t.Fatal(err)
+	}
 	for range 3 {
-		if _, err := admin.Exec(bg, `INSERT INTO pending_actions (kind, target_jid, summary, payload, state, expires_at, decided_at, decided_by)
-			VALUES ('send_message', '918888888888@s.whatsapp.net', 'x', '{}', 'done', now() + interval '5 minutes', now(), 1)`); err != nil {
+		if _, err := admin.Exec(bg, `INSERT INTO pending_actions (kind, target_jid, summary, payload, state, expires_at, shown_at, shown_wa_id, decided_at, decided_by)
+			VALUES ('send_message', '918888888888@s.whatsapp.net', 'x', '{}', 'done', now() + interval '5 minutes', now(), 'w', now(), nextval('pending_seq'))`); err != nil {
 			t.Fatal(err)
 		}
 	}
