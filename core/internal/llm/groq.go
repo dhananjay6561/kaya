@@ -115,13 +115,14 @@ func (g *Groq) ContextTokens() int { return g.contextTokens }
 func (g *Groq) CountTokens(text string) int { return o200k.Count(text) + framingTokens }
 
 type groqRequest struct {
-	Model            string    `json:"model"`
-	Messages         []Message `json:"messages"`
-	MaxTokens        int       `json:"max_completion_tokens"`
-	Temperature      *float64  `json:"temperature,omitempty"`
-	ReasoningEffort  Effort    `json:"reasoning_effort"`
-	IncludeReasoning bool      `json:"include_reasoning"`
-	ResponseFormat   *format   `json:"response_format,omitempty"`
+	Model            string     `json:"model"`
+	Messages         []Message  `json:"messages"`
+	MaxTokens        int        `json:"max_completion_tokens"`
+	Temperature      *float64   `json:"temperature,omitempty"`
+	ReasoningEffort  Effort     `json:"reasoning_effort"`
+	IncludeReasoning bool       `json:"include_reasoning"`
+	ResponseFormat   *format    `json:"response_format,omitempty"`
+	Tools            []ToolSpec `json:"tools,omitempty"`
 }
 
 type format struct {
@@ -142,6 +143,7 @@ func (g *Groq) body(r Request) ([]byte, error) {
 		MaxTokens:       r.MaxTokens,
 		Temperature:     r.Temperature,
 		ReasoningEffort: r.Effort,
+		Tools:           r.Tools,
 	}
 	if r.Schema != nil {
 		req.ResponseFormat = &format{Type: "json_schema", JSONSchema: jsonSchema{Name: r.Schema.Name, Strict: true, Schema: r.Schema.Schema}}
@@ -167,8 +169,8 @@ func (g *Groq) Complete(ctx context.Context, r Request) (Completion, error) {
 	if err := ctx.Err(); err != nil {
 		return Completion{}, context.Cause(ctx)
 	}
-	if len(r.Messages) == 0 {
-		return Completion{}, errNoMessages
+	if err := checkRequest(r); err != nil {
+		return Completion{}, err
 	}
 	body, err := g.body(r)
 	if err != nil {
@@ -287,6 +289,8 @@ func (g *Groq) problem(resp *http.Response, raw []byte) *Error {
 		e.Code = TooLong
 	case status == http.StatusNotFound || e.Detail == "model_not_found" || e.Detail == "model_decommissioned":
 		e.Code = Misconfigured
+	case e.Detail == "tool_use_failed":
+		e.Code = BadToolCall
 	default:
 		e.Code = Rejected
 	}
@@ -354,7 +358,8 @@ func decodeAnswer(raw []byte) (Completion, bool) {
 		Model   *string `json:"model"`
 		Choices []*struct {
 			Message *struct {
-				Content *string `json:"content"`
+				Content   *string     `json:"content"`
+				ToolCalls []*wireCall `json:"tool_calls"`
 			} `json:"message"`
 			FinishReason *string `json:"finish_reason"`
 		} `json:"choices"`
@@ -387,8 +392,17 @@ func decodeAnswer(raw []byte) (Completion, bool) {
 	if first.Message.Content != nil {
 		c.Text = *first.Message.Content
 	}
+	for _, call := range first.Message.ToolCalls {
+		if call == nil || call.ID == "" || call.Function.Name == "" {
+			return Completion{}, false
+		}
+		c.ToolCalls = append(c.ToolCalls, ToolCall{ID: call.ID, Name: call.Function.Name, Arguments: call.Function.Arguments})
+	}
 	if first.FinishReason != nil && slices.Contains(finishReasons, *first.FinishReason) {
 		c.FinishReason = *first.FinishReason
+	}
+	if (c.FinishReason == FinishToolCalls) != (len(c.ToolCalls) > 0) {
+		return Completion{}, false
 	}
 	return c, true
 }
