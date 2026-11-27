@@ -339,17 +339,23 @@ Folders appear when a phase needs them; empty placeholders are not committed.
   how far each is from DJ's zone) and `open_tasks` (what `/tasks` shows, task text marked as data).
 - **Alerts.** Tagging's answer gives each message an alert level (`now`, `later` or `none`) and, for
   an alert, a one-line note for DJ, which gets placeholders put back and is queued in `alerts` in
-  the batch's transaction; DJ's own messages never are, and an edit updates an alert not yet sent.
+  the batch's transaction; DJ's own messages never are, an edit updates an alert not yet sent, and
+  a re-tag that needs none withdraws it. Code, not the prompt, keeps notes safe: links become
+  "(link)", a note with a placeholder the model made up is dropped, a message mentioning an OTP,
+  password, PIN or code gets a fixed warning in front, and an urgent message with no note is quoted.
   One worker in core, under its own advisory lock, every 30 seconds while Kaya is not paused and
   `/alerts` is on: queues an urgent alert for each open reminder with a time within the next 30
-  minutes; passes over waiting alerts whose message was deleted, whose chat DJ has written in
-  since, whose task was closed or came due, or that are 6 hours old; then, unless `ALERTS_PER_HOUR`
-  messages already went out in the last hour, sends the waiting alerts once one is urgent or the
-  oldest has waited 45 minutes: up to 10 in one message, urgent first, each with its chat. The
-  batch's idempotency key is written on its alerts before sending, so a send cut off by a restart
-  goes out again under the same key and never twice; an expired send passes its alerts over.
-  There are no quiet hours. `/alerts off` passes over everything waiting, so `/alerts on` never
-  brings old news.
+  minutes, keyed by its chat and time so a moved reminder gets a new one; passes over alerts whose
+  message was deleted or is 6 hours old, that DJ has answered (in a direct chat any later message
+  of his, in a group a reply to it or its sender or a message within ten minutes), whose reminder
+  was closed, moved, removed or has come, or that waited 6 hours, keyed or not; then sends the
+  waiting alerts once one is urgent or the oldest has waited 45 minutes: up to 10 in one message,
+  urgent first, each saying "From <chat>" or "Reminder". Past `ALERTS_PER_HOUR` messages in the
+  last hour only reminders go out. The batch's idempotency key is written on its alerts before
+  sending, so a send cut off by a restart goes out again under the same key and never twice; a
+  reminder's send expires at its time, and any send the gateway refuses passes its alerts over
+  with the reason. There are no quiet hours. `/alerts off` passes over everything not yet sent,
+  so `/alerts on` never brings old news.
 - **History sync.** Each history chunk WhatsApp announces becomes a row in `history_jobs`, stored
   in the transaction that acknowledges the announcement. A single worker downloads the chunk,
   stores it in batches of at most 200 messages (a savepoint per message, so one bad message

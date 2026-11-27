@@ -145,8 +145,9 @@ contact, and it works with everything your WhatsApp account can see.
   you: someone waiting on your answer, money, health, family, a plan changing, a deadline, or a
   message asking for an OTP or money that looks like a scam. Urgent ones come at once; the rest are
   gathered into one message within 45 minutes. Reminders get a heads-up 30 minutes before their
-  time. Nothing is sent once you have replied in that chat or the message was deleted, there are no
-  quiet hours, `ALERTS_PER_HOUR` caps the messages (10 by default), and `/alerts off` and
+  time. Nothing is sent once you have replied or the message was deleted, a note never carries a
+  link, and one about a code or password always warns you. There are no quiet hours;
+  `ALERTS_PER_HOUR` caps the messages (10 by default, reminders always go), and `/alerts off` and
   `/alerts on` switch them.
 - **Least-privilege database logins.** The gateway and core each have their own Postgres role.
   Core, the part that will talk to an LLM, can read chats but cannot see the WhatsApp session, its
