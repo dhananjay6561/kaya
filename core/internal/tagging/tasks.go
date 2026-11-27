@@ -77,13 +77,22 @@ func collect(rows pgx.Rows, err error) ([]Task, error) {
 // Open returns up to limit open tasks, leaving out those whose message was deleted and reminders
 // that are over: the ones with a due date first, soonest first, then the rest, newest first.
 func (s *Tasks) Open(ctx context.Context, limit int) ([]Task, error) {
+	return s.open(ctx, nil, limit)
+}
+
+// OpenIn is Open for the tasks found in one chat.
+func (s *Tasks) OpenIn(ctx context.Context, chat int64, limit int) ([]Task, error) {
+	return s.open(ctx, &chat, limit)
+}
+
+func (s *Tasks) open(ctx context.Context, chat *int64, limit int) ([]Task, error) {
 	var out []Task
 	err := s.db.InTx(ctx, func(tx pgx.Tx) error {
 		var err error
 		out, err = collect(tx.Query(ctx, `SELECT `+taskColumns+` FROM tasks t`+taskJoins+`
-			WHERE `+current+`
+			WHERE `+current+` AND (@chat::bigint IS NULL OR t.chat_id = @chat)
 			ORDER BY t.due_at IS NULL, t.due_at, t.created_at DESC, t.id DESC
-			LIMIT @limit`, pgx.NamedArgs{"now": s.now(), "limit": limit}))
+			LIMIT @limit`, pgx.NamedArgs{"now": s.now(), "limit": limit, "chat": chat}))
 		return err
 	})
 	return out, err
