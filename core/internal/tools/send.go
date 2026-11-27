@@ -38,7 +38,8 @@ func SendMessage(chats ChatFinder, db *store.DB) agent.Tool {
 		Name: SendKind,
 		Description: "Send a WhatsApp message for the owner to one of their contacts or groups, as them. It does not send " +
 			"anything by itself: the exact message is shown to them and goes out only if they reply yes. Use it when they " +
-			"ask you to message, tell, reply to or remind someone. Write the text the way they would write it to that " +
+			"ask you to message, tell, reply to or remind someone, straight away: never ask them in your answer whether to " +
+			"send, since this already asks them. Write the text the way they would write it to that " +
 			"person, in the language they use with them, short; never add anything they did not ask for.",
 		Parameters: json.RawMessage(`{
 			"type": "object",

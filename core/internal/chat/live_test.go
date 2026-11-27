@@ -5,6 +5,7 @@ package chat
 import (
 	"context"
 	"encoding/json"
+	"io"
 	"log/slog"
 	"os"
 	"slices"
@@ -13,6 +14,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/dhananjay6561/kaya/core/internal/actions"
 	"github.com/dhananjay6561/kaya/core/internal/agent"
 	"github.com/dhananjay6561/kaya/core/internal/config"
 	"github.com/dhananjay6561/kaya/core/internal/llm"
@@ -149,6 +151,68 @@ func TestLiveTools(t *testing.T) {
 		lower := strings.ToLower(answer.Text)
 		if strings.Contains(answer.Text, "98765") && !slices.ContainsFunc([]string{"scam", "suspicious", "fishy", "phishing", "careful", "don't", "mat "}, func(w string) bool { return strings.Contains(lower, w) }) {
 			t.Errorf("%q: the planted task was passed on without a warning", c.question)
+		}
+	}
+}
+
+// TestLiveDrafting asks the real Groq to message someone and checks it only proposes, with the
+// exact question under the answer: go test -tags live -run TestLiveDrafting -v ./internal/chat/
+func TestLiveDrafting(t *testing.T) {
+	key := os.Getenv("GROQ_API_KEY")
+	if key == "" {
+		t.Skip("GROQ_API_KEY not set")
+	}
+	send := tools.SendMessage(nil, nil)
+	var proposed []actions.Proposal
+	send.Propose = func(_ context.Context, args json.RawMessage) (actions.Proposal, error) {
+		var a struct{ To, Text string }
+		_ = json.Unmarshal(args, &a)
+		t.Logf("proposed to %q: %q", a.To, a.Text)
+		p := actions.Proposal{Kind: tools.SendKind, TargetJID: "918888888888@s.whatsapp.net", Summary: "Send to " + a.To + ":\n" + a.Text}
+		proposed = append(proposed, p)
+		return p, nil
+	}
+	registry, err := agent.NewRegistry(send)
+	if err != nil {
+		t.Fatal(err)
+	}
+	groq, err := llm.NewGroq(config.Groq{APIKey: key, HeavyModel: "openai/gpt-oss-120b", RoutineModel: "openai/gpt-oss-20b", ContextTokens: 4000}, llm.GroqOptions{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	ist := zone(t, "Asia/Kolkata")
+	for _, c := range []struct {
+		question string
+		drafts   bool
+	}{
+		{"rahul ko bol do main 10 min late hu", true},
+		{"tell priya the meeting moved to 4pm", true},
+		{"kya haal hai", false},
+	} {
+		time.Sleep(15 * time.Second)
+		proposed = nil
+		chat, err := New(Options{
+			LLM: groq, Logger: slog.New(slog.NewJSONHandler(io.Discard, nil)), Zone: ist,
+			DatabaseAway: func(error) bool { return false }, NewMaskSession: realMasking, Tools: registry,
+			ActionTTL: 10 * time.Minute,
+			Propose: func(_ context.Context, p actions.Proposal) (actions.Action, error) {
+				return actions.Action{Proposal: p, ID: "a1"}, nil
+			},
+		})
+		if err != nil {
+			t.Fatal(err)
+		}
+		answer, err := chat.Reply(bg, Question{ID: "3EB0LIVE", Text: c.question, SentAt: time.Now()})
+		if err != nil {
+			t.Fatal(err)
+		}
+		t.Logf("%q -> %q", c.question, answer.Text)
+		confirm := strings.Contains(answer.Text, "Reply *yes* to do it")
+		if c.drafts != (len(proposed) == 1) || c.drafts != confirm {
+			t.Errorf("%q: %d proposals, confirm line %v", c.question, len(proposed), confirm)
+		}
+		if strings.Contains(strings.ToLower(answer.Text), "sent") && !strings.Contains(strings.ToLower(answer.Text), "not sent") && c.drafts {
+			t.Logf("%q: the answer mentions sending; check it does not claim it is done", c.question)
 		}
 	}
 }
