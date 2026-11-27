@@ -75,6 +75,8 @@ type rigOptions struct {
 	summary func(context.Context, string) (string, error)
 	alerts  AlertSwitch
 	decide  func(context.Context, channel.IncomingMessage) (string, bool, error)
+	replay  func(context.Context, channel.IncomingMessage) (string, bool, error)
+	shown   func(context.Context, string, channel.SentMessage) error
 }
 
 // errAway is the rig's database outage; every other error is a handler's own.
@@ -93,7 +95,7 @@ func newRig(t *testing.T, o rigOptions) *rig {
 			return ChatAnswer{Text: "You said: " + Clip(m.Text), Remember: true}, nil
 		}
 	}
-	r.stop = Start(Options{Channel: r.ch, Logger: quiet, Pause: r.pause, Status: o.status, Chat: o.chat, Now: o.now, DatabaseAway: isAway, Facts: o.facts, Tasks: o.tasks, Zone: kolkata, Summary: o.summary, Alerts: o.alerts, Decide: o.decide})
+	r.stop = Start(Options{Channel: r.ch, Logger: quiet, Pause: r.pause, Status: o.status, Chat: o.chat, Now: o.now, DatabaseAway: isAway, Facts: o.facts, Tasks: o.tasks, Zone: kolkata, Summary: o.summary, Alerts: o.alerts, Decide: o.decide, Replay: o.replay, Shown: o.shown})
 	if err := r.ch.Start(bg); err != nil {
 		t.Fatal(err)
 	}
@@ -906,5 +908,37 @@ func TestAYesOrNoForAWaitingActionNeverReachesTheModel(t *testing.T) {
 	same(t, r.answers("what's up", now), []string{"model: what's up"})
 	if !slices.Equal(asked, []string{"what's up"}) {
 		t.Fatalf("the model was asked %q", asked)
+	}
+}
+
+func TestAnActionIsMarkedAskedOnlyOnceItsAnswerIsSent(t *testing.T) {
+	var shown []string
+	r := newRig(t, rigOptions{
+		chat: func(context.Context, channel.IncomingMessage) (ChatAnswer, error) {
+			return ChatAnswer{Text: "*Send to Rahul: hi*", Remember: true, ActionID: "a1"}, nil
+		},
+		shown: func(_ context.Context, id string, sent channel.SentMessage) error {
+			if sent.ID == "" {
+				t.Error("marked asked without the sent message")
+			}
+			shown = append(shown, id)
+			return nil
+		},
+	})
+	same(t, r.answers("tell rahul hi", now), []string{"*Send to Rahul: hi*"})
+	if !slices.Equal(shown, []string{"a1"}) {
+		t.Fatalf("shown %v", shown)
+	}
+}
+
+func TestALateYesThatAlreadyActedSaysWhatHappened(t *testing.T) {
+	r := newRig(t, rigOptions{
+		replay: func(_ context.Context, m channel.IncomingMessage) (string, bool, error) {
+			return "Sent to Rahul.", m.Text == "yes", nil
+		},
+	})
+	same(t, r.answers("yes", channel.ReceiveOptions{SentAt: ago(11 * time.Minute)}), []string{"Sent to Rahul."})
+	if got := r.first("order the usual", channel.ReceiveOptions{SentAt: ago(11 * time.Minute)}); !strings.HasPrefix(got, "I was away when you sent this") {
+		t.Fatalf("got %q", got)
 	}
 }
