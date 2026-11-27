@@ -232,7 +232,8 @@ func TestAGarbledAnswerIsNeverShown(t *testing.T) {
 	if got := reply(t, newChat(t, Options{LLM: model}), "hi"); got.Text != "My answer came out garbled. Ask me again." || got.Remember {
 		t.Fatalf("got %+v", got)
 	}
-	for _, fine := range []string{"Okay... 6 baje 👍", "Haan!", "ठीक है, कल 7 बजे।", "...", "Done: ⏰"} {
+	for _, fine := range []string{"Okay... 6 baje 👍", "Haan!", "ठीक है, कल 7 बजे।", "...", "Done: ⏰", "मैं ठीक हूँ, आप कैसे हैं?", "हाँ, मैं याद दिला दूँगी।",
+		"=> (1/2) + (3/4) = 5/4 ✓", "1️⃣ 2️⃣ 3️⃣", "https://example.com/a?b=c&d=e"} {
 		if garbled(fine) {
 			t.Errorf("%q was taken as garbled", fine)
 		}
