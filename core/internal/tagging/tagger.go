@@ -311,8 +311,8 @@ func (t *Tagger) today() string { return t.o.Now().In(t.o.Zone).Format("2006-01-
 func (t *Tagger) tidy(ctx context.Context, self int64) error {
 	age := t.o.MaxAge.Seconds()
 	stale, err := t.o.DB.Exec(ctx, `INSERT INTO message_tags (message_id, skipped)
-		SELECT m.id, 'stale' FROM messages m WHERE `+eligible+` AND `+waiting+` AND m.sent_at < now() - make_interval(secs => $2)
-		ON CONFLICT (message_id) DO UPDATE SET tags = '{}', skipped = 'stale', created_at = now()`, self, age)
+		SELECT m.id, 'stale' FROM messages m WHERE `+eligible+` AND `+waiting+` AND m.sent_at < $3::timestamptz - make_interval(secs => $2)
+		ON CONFLICT (message_id) DO UPDATE SET tags = '{}', skipped = 'stale', created_at = now()`, self, age, t.o.Now())
 	if err != nil {
 		return err
 	}
