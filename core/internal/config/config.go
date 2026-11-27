@@ -58,6 +58,10 @@ type Config struct {
 	// SendsPerHour is the most messages Kaya sends to other chats for DJ in an hour, each after his
 	// yes; 0 turns sending for him off.
 	SendsPerHour int
+	// TranscribeModel is the speech model voice notes are transcribed with, on Groq.
+	TranscribeModel string
+	// MediaDir is where the gateway keeps downloaded files, which core reads (read-only).
+	MediaDir string
 }
 
 // Error lists every problem found in the config. It never includes the values themselves.
@@ -198,6 +202,11 @@ func Load(getenv func(string) string, baseDir string) (Config, error) {
 	}
 	if !filepath.IsAbs(cfg.DataDir) {
 		cfg.DataDir = filepath.Join(baseDir, cfg.DataDir)
+	}
+	cfg.TranscribeModel = orDefault(getenv("GROQ_MODEL_TRANSCRIBE"), "whisper-large-v3-turbo")
+	cfg.MediaDir = orDefault(getenv("MEDIA_DIR"), filepath.Join(cfg.DataDir, "gateway", "media"))
+	if !filepath.IsAbs(cfg.MediaDir) {
+		cfg.MediaDir = filepath.Join(baseDir, cfg.MediaDir)
 	}
 	return cfg, nil
 }
