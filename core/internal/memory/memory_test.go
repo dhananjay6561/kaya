@@ -477,3 +477,16 @@ func TestBuildWithoutFactsLeavesTheSystemMessageAsItWas(t *testing.T) {
 		t.Fatalf("a fact too big for the room was sent: %q", p.Messages[0].Content)
 	}
 }
+
+func TestInterleaveMergesExchangesByTime(t *testing.T) {
+	at := time.Date(2026, 11, 27, 10, 0, 0, 0, time.UTC)
+	asked := []Exchange{{Question: "a", At: at}, {Question: "c", At: at.Add(2 * time.Minute)}}
+	sent := []Exchange{{Question: "b", At: at.Add(time.Minute)}, {Question: "d", At: at.Add(3 * time.Minute)}}
+	var got []string
+	for _, e := range Interleave(asked, sent) {
+		got = append(got, e.Question)
+	}
+	if strings.Join(got, "") != "abcd" || len(asked) != 2 {
+		t.Fatalf("got %v", got)
+	}
+}
