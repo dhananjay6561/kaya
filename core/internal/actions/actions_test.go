@@ -17,17 +17,17 @@ import (
 var bg = context.Background()
 
 func TestDecisionTakesOnlyAPlainYesOrNo(t *testing.T) {
-	for _, m := range []string{"yes", "Yes!", " haan ", "Haan ji", "ok.", "bhej do", "हाँ", "👍", "send it", "Theek hai"} {
+	for _, m := range []string{"yes", "Yes!", " haan ", "Haan ji", "ok.", "bhej do", "हाँ", "👍", "send it", "Theek hai", "Yess", "YESSS", "okk", "haaaan", "bhejjj do"} {
 		if yes, no := Decision(m); !yes || no {
 			t.Errorf("%q is not a yes", m)
 		}
 	}
-	for _, m := range []string{"no", "No.", "nahi", "mat bhejo", "cancel", "नहीं", "don't"} {
+	for _, m := range []string{"no", "No.", "nahi", "mat bhejo", "cancel", "नहीं", "don't", "noo", "Nahiii"} {
 		if yes, no := Decision(m); yes || !no {
 			t.Errorf("%q is not a no", m)
 		}
 	}
-	for _, m := range []string{"yes but at 7", "ok change it to tomorrow", "send it to priya instead", "haan aur usko bol", "", "yess", "what?", "k", "go", "ji", "send"} {
+	for _, m := range []string{"yes but at 7", "ok change it to tomorrow", "send it to priya instead", "haan aur usko bol", "", "what?", "yes yes but later", "k", "go", "ji", "send"} {
 		if yes, no := Decision(m); yes || no {
 			t.Errorf("%q was taken as a decision", m)
 		}

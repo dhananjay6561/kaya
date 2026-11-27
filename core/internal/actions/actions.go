@@ -187,24 +187,38 @@ var (
 )
 
 // Decision reads a reply to a confirmation: yes or no only when the whole message is one of a few
-// plain words, in English, Hinglish or Hindi; anything longer is not a decision, so "yes but at 7"
-// never confirms.
+// plain words, in English, Hinglish or Hindi, however its letters are drawn out ("yesss", "haaan");
+// anything longer is not a decision, so "yes but at 7" never confirms.
 func Decision(message string) (yes, no bool) {
 	cleaned := strings.ToLower(strings.TrimFunc(message, func(r rune) bool {
 		return unicode.IsSpace(r) || unicode.IsPunct(r) && r != '\''
 	}))
-	cleaned = strings.Join(strings.Fields(cleaned), " ")
+	cleaned = squeeze(strings.Join(strings.Fields(cleaned), " "))
 	for _, w := range yesWords {
-		if cleaned == w {
+		if cleaned == squeeze(w) {
 			return true, false
 		}
 	}
 	for _, w := range noWords {
-		if cleaned == w {
+		if cleaned == squeeze(w) {
 			return false, true
 		}
 	}
 	return false, false
+}
+
+// squeeze writes each run of one letter once, so "yesss" and "yes", "haaan" and "han" compare equal.
+func squeeze(s string) string {
+	var b strings.Builder
+	var last rune
+	for i, r := range s {
+		if i > 0 && r == last && unicode.IsLetter(r) {
+			continue
+		}
+		b.WriteRune(r)
+		last = r
+	}
+	return b.String()
 }
 
 // Executor runs a confirmed action and says what happened, in words for DJ.
