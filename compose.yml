@@ -128,9 +128,11 @@ services:
       CHAT_CHANNEL: ${CHAT_CHANNEL:-}
       TELEPHONY_PROVIDER: ${TELEPHONY_PROVIDER:-}
       DATA_DIR: /data
+      MEDIA_DIR: /media
       LISTEN_HOST: 0.0.0.0
     volumes:
       - ${DATA_DIR:-./data}/core:/data
+      - ${DATA_DIR:-./data}/gateway/media:/media:ro
     healthcheck:
       test: ["CMD", "/core", "healthcheck"]
       interval: 10s
