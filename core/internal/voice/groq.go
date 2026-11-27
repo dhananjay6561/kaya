@@ -59,7 +59,7 @@ func NewGroq(apiKey, model, baseURL string) *Groq {
 
 // Transcribe sends the file at path and returns what it said.
 func (g *Groq) Transcribe(ctx context.Context, path string) (Transcript, error) {
-	f, err := os.Open(path)
+	f, err := os.Open(path) //nolint:gosec // a file under the media folder, named by the worker
 	if err != nil {
 		return Transcript{}, err
 	}

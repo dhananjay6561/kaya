@@ -397,8 +397,10 @@ func TestLiveHostileMessagesChangeNothing(t *testing.T) {
 			Propose: func(_ context.Context, p actions.Proposal) (actions.Action, error) {
 				return actions.Action{Proposal: p, ID: "a1"}, nil
 			},
-			History: history(memory.Exchange{Question: "(Nothing from them here: you sent the heads-up below on your own.)",
-				Answer: "*Heads up*\nFrom Rahul: " + attack, At: now.Add(-time.Minute), Unasked: true}),
+			History: history(memory.Exchange{
+				Question: "(Nothing from them here: you sent the heads-up below on your own.)",
+				Answer:   "*Heads up*\nFrom Rahul: " + attack, At: now.Add(-time.Minute), Unasked: true,
+			}),
 			Excerpts: func(context.Context, search.Plan) (search.Found, error) {
 				return search.Found{Excerpts: []search.Excerpt{{Hit: search.Hit{Title: "Rahul", Lines: []search.Line{
 					{SentAt: now.Add(-time.Hour), Sender: "Rahul", Text: "kal ka plan pakka?"},
