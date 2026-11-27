@@ -69,3 +69,13 @@ func TestNewBuildsTheProviderConfigNames(t *testing.T) {
 		t.Fatal("an unknown provider was built")
 	}
 }
+
+func TestStubCanCallTools(t *testing.T) {
+	s := NewStub(StubOptions{Respond: func(Request) Completion {
+		return Completion{ToolCalls: []ToolCall{{ID: "c1", Name: "clock", Arguments: "{}"}}}
+	}})
+	got, err := s.Complete(bg, Request{Tier: Heavy, Messages: []Message{{Role: User, Content: "x"}}})
+	if err != nil || got.FinishReason != FinishToolCalls || len(got.ToolCalls) != 1 || got.Model != "stub-heavy" || got.Usage.InputTokens == 0 {
+		t.Fatalf("got %+v, %v", got, err)
+	}
+}
