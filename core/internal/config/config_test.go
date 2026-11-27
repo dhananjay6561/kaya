@@ -66,7 +66,7 @@ func TestDefaults(t *testing.T) {
 		AlertsPerHour:       10,
 		SendsPerHour:        20,
 		TranscribeModel:     "whisper-large-v3-turbo",
-		MediaDir:            "/base/data/gateway/media",
+		MediaDir:            "/base/data/media",
 	}
 	if cfg != want {
 		t.Fatalf("got %+v, want %+v", cfg, want)

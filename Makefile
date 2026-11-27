@@ -73,7 +73,7 @@ clean: ## remove build output
 	rm -rf gateway/bin core/bin
 
 data-dirs:
-	@mkdir -p "$(DATA_DIR)/postgres" "$(DATA_DIR)/core" "$(DATA_DIR)/gateway"
+	@mkdir -p "$(DATA_DIR)/postgres" "$(DATA_DIR)/core" "$(DATA_DIR)/gateway/media"
 
 up: data-dirs ## build and start the whole stack in Docker, wait until every service is healthy
 	$(COMPOSE) up --build --detach --wait --wait-timeout 180

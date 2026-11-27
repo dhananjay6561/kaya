@@ -24,11 +24,14 @@ COMMENT ON TABLE transcribing IS 'Where transcribing started: only voice notes s
 
 INSERT INTO transcribing (started_after) SELECT coalesce(max(id), 0) FROM messages;
 
+CREATE INDEX messages_live_voice_idx ON messages (id) WHERE kind = 'voice' AND source = 'live';
+
 GRANT SELECT, INSERT, UPDATE ON transcripts TO kaya_core;
 GRANT SELECT ON transcribing TO kaya_core;
 GRANT INSERT (message_id) ON media_requests TO kaya_core;
 
 -- migrate:down
+DROP INDEX messages_live_voice_idx;
 REVOKE INSERT (message_id) ON media_requests FROM kaya_core;
 DROP TABLE transcribing;
 DROP TABLE transcripts;
