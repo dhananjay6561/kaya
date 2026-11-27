@@ -129,6 +129,7 @@ services:
       TELEPHONY_PROVIDER: ${TELEPHONY_PROVIDER:-}
       DATA_DIR: /data
       MEDIA_DIR: /media
+      GROQ_MODEL_TRANSCRIBE: ${GROQ_MODEL_TRANSCRIBE:-whisper-large-v3-turbo}
       LISTEN_HOST: 0.0.0.0
     volumes:
       - ${DATA_DIR:-./data}/core:/data

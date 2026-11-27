@@ -204,7 +204,7 @@ func Load(getenv func(string) string, baseDir string) (Config, error) {
 		cfg.DataDir = filepath.Join(baseDir, cfg.DataDir)
 	}
 	cfg.TranscribeModel = orDefault(getenv("GROQ_MODEL_TRANSCRIBE"), "whisper-large-v3-turbo")
-	cfg.MediaDir = orDefault(getenv("MEDIA_DIR"), filepath.Join(cfg.DataDir, "gateway", "media"))
+	cfg.MediaDir = orDefault(getenv("MEDIA_DIR"), filepath.Join(cfg.DataDir, "media"))
 	if !filepath.IsAbs(cfg.MediaDir) {
 		cfg.MediaDir = filepath.Join(baseDir, cfg.MediaDir)
 	}
