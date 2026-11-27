@@ -17,6 +17,7 @@ import (
 	"github.com/dhananjay6561/kaya/core/internal/actions"
 	"github.com/dhananjay6561/kaya/core/internal/agent"
 	"github.com/dhananjay6561/kaya/core/internal/config"
+	"github.com/dhananjay6561/kaya/core/internal/jobs"
 	"github.com/dhananjay6561/kaya/core/internal/llm"
 	"github.com/dhananjay6561/kaya/core/internal/memory"
 	"github.com/dhananjay6561/kaya/core/internal/search"
@@ -275,5 +276,78 @@ func TestLiveAgainAfterASend(t *testing.T) {
 				t.Errorf("run %d: drafted for someone the owner never named: %q", run, p)
 			}
 		}
+	}
+}
+
+type liveJobs struct{ list []jobs.Job }
+
+func (b *liveJobs) Create(_ context.Context, j jobs.Job, _ int64) (jobs.Job, bool, error) {
+	j.ID = int64(len(b.list) + 1)
+	b.list = append(b.list, j)
+	return j, true, nil
+}
+func (b *liveJobs) List(context.Context) ([]jobs.Job, error) { return b.list, nil }
+func (b *liveJobs) Cancel(_ context.Context, ids []int64) ([]jobs.Job, error) {
+	var gone, kept []jobs.Job
+	for _, j := range b.list {
+		if slices.Contains(ids, j.ID) {
+			gone = append(gone, j)
+		} else {
+			kept = append(kept, j)
+		}
+	}
+	b.list = kept
+	return gone, nil
+}
+
+// TestLiveReminders sets, lists and cancels reminders with the real Groq and logs what was set:
+// go test -tags live -run TestLiveReminders -v ./internal/chat/
+func TestLiveReminders(t *testing.T) {
+	key := os.Getenv("GROQ_API_KEY")
+	if key == "" {
+		t.Skip("GROQ_API_KEY not set")
+	}
+	ist := zone(t, "Asia/Kolkata")
+	now := time.Now()
+	clock := func() time.Time { return now }
+	book := &liveJobs{}
+	registry, err := agent.NewRegistry(tools.SetReminder(book, ist, clock), tools.ListReminders(book, ist, clock), tools.CancelReminder(book, ist, clock))
+	if err != nil {
+		t.Fatal(err)
+	}
+	groq, err := llm.NewGroq(config.Groq{APIKey: key, HeavyModel: "openai/gpt-oss-120b", RoutineModel: "openai/gpt-oss-20b", ContextTokens: 4000}, llm.GroqOptions{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	var past []memory.Exchange
+	questions := []string{
+		"6 baje shaurya ko call karna yaad dilana",
+		"20 min baad chai bana lena remind kar",
+		"kal subah 7 baje gym",
+		"every weekday 9am send me my open tasks",
+		"har mahine 1 tareekh ko rent pay karna hai, yaad dila dena",
+		"gym wala cancel kar do",
+	}
+	if only := os.Getenv("KAYA_LIVE_ONLY"); only != "" {
+		questions = strings.Split(only, "|")
+	}
+	for _, q := range questions {
+		time.Sleep(20 * time.Second)
+		c, err := New(Options{
+			LLM: groq, Logger: slog.New(slog.NewJSONHandler(io.Discard, nil)), Zone: ist, Now: clock,
+			DatabaseAway: func(error) bool { return false }, NewMaskSession: realMasking, Tools: registry, History: history(past...),
+		})
+		if err != nil {
+			t.Fatal(err)
+		}
+		answer, err := c.Reply(bg, Question{ID: "3EB0LIVE", Text: q, SentAt: now})
+		if err != nil {
+			t.Fatal(err)
+		}
+		t.Logf("%q -> %q", q, answer.Text)
+		past = append(past, memory.Exchange{Question: q, Answer: answer.Text, At: now})
+	}
+	for _, j := range book.list {
+		t.Logf("left: #%d %s: %s (ask %v)", j.ID, jobs.Describe(j.NextAt, j.Repeat, ist, now), j.Text, j.Ask)
 	}
 }
