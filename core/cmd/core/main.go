@@ -176,7 +176,10 @@ func run(cfg config.Config, logger *slog.Logger) error {
 	}
 	actionStore := actions.NewStore(db, time.Now, 10*time.Minute)
 	toolset := []agent.Tool{tools.Clock(zone, time.Now), tools.OpenTasks(tasks, zone, time.Now)}
-	runner := &actions.Runner{Store: actionStore, Logger: logger, Executors: map[string]actions.Executor{}, MessageID: ownMessageID(db)}
+	runner := &actions.Runner{
+		Store: actionStore, Logger: logger, Executors: map[string]actions.Executor{}, MessageID: ownMessageID(db),
+		Judge: actions.NewJudge(model, func() actions.Masker { return masking.NewSession() }, logger),
+	}
 	if cfg.SendsPerHour > 0 {
 		toolset = append(toolset, tools.SendMessage(searcher, db))
 		runner.Executors[tools.SendKind] = tools.SendExecutor(ch, actionStore, cfg.SendsPerHour, time.Now)
