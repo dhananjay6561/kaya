@@ -124,7 +124,11 @@ func (w *Worker) Step(ctx context.Context, cli Client, own ingest.Own) bool {
 		w.purge(ctx)
 		return false
 	}
-	parsed, to, code := w.check(req, own)
+	parsed, to, code, err := w.check(ctx, req, own)
+	if err != nil {
+		w.logger.Warn("could not check a request's authorization", "request_id", req.id, logging.Err(err))
+		return false
+	}
 	if code != "" {
 		return w.refuse(ctx, req.id, code)
 	}
@@ -232,24 +236,63 @@ func (w *Worker) next(ctx context.Context, connected bool) (*request, error) {
 }
 
 // check decides whether a request may be sent at all, and returns the code to refuse it with if
-// not. Until confirmed actions exist, the only chat Kaya may write to is DJ's own.
-func (w *Worker) check(req *request, own ingest.Own) (contracts.SendRequest, types.JID, string) {
+// not. Kaya may write to DJ's own chat, and to another chat only for an action DJ confirmed; an
+// error means the check could not be made and the request waits.
+func (w *Worker) check(ctx context.Context, req *request, own ingest.Own) (contracts.SendRequest, types.JID, string, error) {
 	parsed, err := w.validator.DecodeSendRequest(req.payload)
 	if err != nil || parsed.ID != req.id {
-		return parsed, types.EmptyJID, CodeInvalid
+		return parsed, types.EmptyJID, CodeInvalid, nil
 	}
 	if req.expired {
-		return parsed, types.EmptyJID, CodeExpired
+		return parsed, types.EmptyJID, CodeExpired, nil
 	}
 	to, err := types.ParseJID(parsed.To)
 	if err != nil || to.Device != 0 {
-		return parsed, types.EmptyJID, CodeInvalid
+		return parsed, types.EmptyJID, CodeInvalid, nil
 	}
 	self := parsed.To != "" && (parsed.To == own.PN || parsed.To == own.LID)
-	if parsed.Authorization.Kind != contracts.AuthSelfChat || !self {
-		return parsed, types.EmptyJID, CodeNotAuthorized
+	switch parsed.Authorization.Kind {
+	case contracts.AuthSelfChat:
+		if self {
+			return parsed, to, "", nil
+		}
+	case contracts.AuthConfirmed:
+		allowed := to.Server == types.DefaultUserServer || to.Server == types.HiddenUserServer || to.Server == types.GroupServer
+		if !self && allowed && (own.PN != "" || own.LID != "") {
+			ok, err := w.confirmed(ctx, req.id, parsed, own)
+			if err != nil {
+				return parsed, types.EmptyJID, "", err
+			}
+			if ok {
+				return parsed, to, "", nil
+			}
+		}
 	}
-	return parsed, to, ""
+	return parsed, types.EmptyJID, CodeNotAuthorized, nil
+}
+
+// confirmed checks a confirmed send against the action it names: the action is confirmed, for
+// this very chat, decided in the last 15 minutes by a message DJ sent in his own chat after the
+// action was proposed, and no other request for it was ever sent.
+func (w *Worker) confirmed(ctx context.Context, id string, req contracts.SendRequest, own ingest.Own) (bool, error) {
+	var ok bool
+	err := w.db.InTx(ctx, func(tx pgx.Tx) error {
+		return tx.QueryRow(ctx, `
+			SELECT EXISTS (
+				SELECT 1 FROM pending_actions pa
+				JOIN messages m ON m.id = pa.decided_by
+				JOIN chats c ON c.id = m.chat_id AND c.kind = 'direct'
+				JOIN contacts k ON k.id = c.contact_id
+				WHERE pa.id = $1::uuid AND pa.state = 'confirmed' AND pa.target_jid = $2
+				  AND pa.decided_at > now() - interval '15 minutes'
+				  AND m.from_me AND m.deleted_at IS NULL AND m.sent_at >= pa.created_at
+				  AND (k.pn = nullif($3, '') OR k.lid = nullif($4, ''))
+				  AND NOT EXISTS (
+					SELECT 1 FROM send_requests s
+					WHERE s.id <> $5::uuid AND s.payload->'authorization'->>'action_id' = $6::text AND s.state IN ('sending', 'sent')))`,
+			req.Authorization.ActionID, req.To, own.PN, own.LID, id, req.Authorization.ActionID).Scan(&ok)
+	})
+	return ok, err
 }
 
 func (w *Worker) build(ctx context.Context, req contracts.SendRequest) (*waE2E.Message, error) {
