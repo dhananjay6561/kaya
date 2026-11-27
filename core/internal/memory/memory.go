@@ -20,6 +20,9 @@ type Exchange struct {
 	Question string
 	Answer   string
 	At       time.Time
+	// Unasked is an answer Kaya sent on her own, such as an alert; its Question is a note, not
+	// DJ's words.
+	Unasked bool
 }
 
 // Input is what Build needs. Count is the model's own token counter.
