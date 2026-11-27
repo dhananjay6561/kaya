@@ -36,6 +36,7 @@ kaya/
 │       ├── agent/          tool calling: the registry of tools and the loop that runs their calls
 │       ├── tools/          the tools the chat model can call (world_clock, open_tasks)
 │       ├── alerts/         heads-ups in DJ's own chat: the alerter and the /alerts switch
+│       ├── actions/        confirm-before-act: pending actions, DJ's yes or no, running them
 │       ├── embeddings/     the embeddings Provider interface, Voyage, the stub
 │       ├── search/         the index (chunks and the indexer that keeps them embedded) and search:
 │       │                   meaning and words fused, filters, recall of older exchanges
@@ -80,7 +81,11 @@ Folders appear when a phase needs them; empty placeholders are not committed.
   (never Status, broadcast lists, channels or bots), optionally quoting a message. Each carries an
   `authorization` and an `expires_at`. The gateway enforces both before sending:
   - `self_chat` may only go to DJ's own JID.
-  - `confirmed` needs a pending action (4.6) that exists, is confirmed and targets the same chat.
+  - `confirmed` needs a pending action that is confirmed, targets this very chat (a person's phone
+    number or LID, or a group), was decided in the last 15 minutes by a message DJ sent in his own
+    direct chat after the action was proposed, and has no other request for it already sending or
+    sent. The gateway checks all of it in the database itself, so core alone can never send
+    elsewhere.
   - Nothing goes out after `expires_at`; the gateway reports `send.result` failed with `expired`.
   - `expires_at` must be after `created_at` and at most 24 h later. A schema can't compare two
     fields, so both validators check this on top of it, and the shared samples cover it.
@@ -183,7 +188,8 @@ Folders appear when a phase needs them; empty placeholders are not committed.
   days after it finishes), `exchanges` (the conversation memory, kept for good), `facts` and
   `fact_learning` (what Kaya knows about DJ, and how far the learner has read), `message_tags`,
   `tasks` and `tagging` (tags on new messages, the tasks they gave, and tagging's state),
-  `alerts` and `alerting` (heads-ups for DJ and the `/alerts` switch), `pause_state`, and
+  `alerts` and `alerting` (heads-ups for DJ and the `/alerts` switch), `pending_actions` (what
+  Kaya would do elsewhere, waiting for DJ's yes; the gateway may only read it), `pause_state`, and
   the search index, `chunks` and `message_chunks`; later tasks, jobs, pending actions and usage. Core's tables point at messages by id or WhatsApp
   id, never by foreign key, because the chat tables belong to the gateway.
 - **Media.** A media message gets a `media` row (what the file is, and whether it is `remote`,
@@ -359,6 +365,17 @@ Folders appear when a phase needs them; empty placeholders are not committed.
   conversation the chat model reads (`alerts.Recent`, merged by time with `memory.Interleave`),
   each as an exchange whose question is a note that Kaya sent it unasked, so a reply to one has it
   in context, the search planner can take its names, and it is masked like any past answer.
+- **Confirm-before-act.** A tool marked outward has no Run, only Propose: the agent loop stores its
+  proposal in `pending_actions` (one a question; a new one supersedes any still waiting), tells the
+  model nothing is done yet, and chat puts the exact summary and "reply yes or no (within 10 min)"
+  under Kaya's answer in code, whatever the model wrote or if it failed. Before a plain message
+  goes to the model, `actions.Runner` reads it as a decision only when the whole message is one of
+  a few plain yes or no words in English, Hinglish or Hindi; then it decides the newest waiting
+  action, runs a confirmed one through its kind's executor and records `done` or `failed` with the
+  result. The same message replayed gets the same answer and never runs the action twice; a yes
+  after the action lapsed is told so. `send_message` finds the chat as `/summary` does, drafts the
+  text and target JID, and its executor sends with the `confirmed` authorization under the key
+  `action:<id>`, at most `SENDS_PER_HOUR` an hour.
 - **History sync.** Each history chunk WhatsApp announces becomes a row in `history_jobs`, stored
   in the transaction that acknowledges the announcement. A single worker downloads the chunk,
   stores it in batches of at most 200 messages (a savepoint per message, so one bad message
