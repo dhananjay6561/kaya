@@ -79,8 +79,8 @@ func TestReplyLeavesRoomForTheToolsInTheBudget(t *testing.T) {
 	for _, m := range withTools {
 		sent += model.CountTokens(m.Content)
 	}
-	if sent > model.ContextTokens() {
-		t.Fatalf("sent %d tokens with a budget of %d", sent, model.ContextTokens())
+	if room := model.ContextTokens() / 8; sent > model.ContextTokens()-room {
+		t.Fatalf("sent %d tokens with a budget of %d, leaving less than %d for tool results", sent, model.ContextTokens(), room)
 	}
 }
 
