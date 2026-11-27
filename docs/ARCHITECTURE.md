@@ -35,6 +35,7 @@ kaya/
 │       ├── chat/           system prompt, replies, WhatsApp formatting
 │       ├── agent/          tool calling: the registry of tools and the loop that runs their calls
 │       ├── tools/          the tools the chat model can call (world_clock, open_tasks)
+│       ├── alerts/         heads-ups in DJ's own chat: the alerter and the /alerts switch
 │       ├── embeddings/     the embeddings Provider interface, Voyage, the stub
 │       ├── search/         the index (chunks and the indexer that keeps them embedded) and search:
 │       │                   meaning and words fused, filters, recall of older exchanges
@@ -182,7 +183,7 @@ Folders appear when a phase needs them; empty placeholders are not committed.
   days after it finishes), `exchanges` (the conversation memory, kept for good), `facts` and
   `fact_learning` (what Kaya knows about DJ, and how far the learner has read), `message_tags`,
   `tasks` and `tagging` (tags on new messages, the tasks they gave, and tagging's state),
-  `pause_state`, and
+  `alerts` and `alerting` (heads-ups for DJ and the `/alerts` switch), `pause_state`, and
   the search index, `chunks` and `message_chunks`; later tasks, jobs, pending actions and usage. Core's tables point at messages by id or WhatsApp
   id, never by foreign key, because the chat tables belong to the gateway.
 - **Media.** A media message gets a `media` row (what the file is, and whether it is `remote`,
@@ -336,6 +337,19 @@ Folders appear when a phase needs them; empty placeholders are not committed.
   leaves (500 tokens each at most), and a call with too little room is answered "not run". Only the answer joins the conversation, not the
   calls. Today's tools only read: `world_clock` (the time in IANA zones, now or at a given time, and
   how far each is from DJ's zone) and `open_tasks` (what `/tasks` shows, task text marked as data).
+- **Alerts.** Tagging's answer gives each message an alert level (`now`, `later` or `none`) and, for
+  an alert, a one-line note for DJ, which gets placeholders put back and is queued in `alerts` in
+  the batch's transaction; DJ's own messages never are, and an edit updates an alert not yet sent.
+  One worker in core, under its own advisory lock, every 30 seconds while Kaya is not paused and
+  `/alerts` is on: queues an urgent alert for each open reminder with a time within the next 30
+  minutes; passes over waiting alerts whose message was deleted, whose chat DJ has written in
+  since, whose task was closed or came due, or that are 6 hours old; then, unless `ALERTS_PER_HOUR`
+  messages already went out in the last hour, sends the waiting alerts once one is urgent or the
+  oldest has waited 45 minutes: up to 10 in one message, urgent first, each with its chat. The
+  batch's idempotency key is written on its alerts before sending, so a send cut off by a restart
+  goes out again under the same key and never twice; an expired send passes its alerts over.
+  There are no quiet hours. `/alerts off` passes over everything waiting, so `/alerts on` never
+  brings old news.
 - **History sync.** Each history chunk WhatsApp announces becomes a row in `history_jobs`, stored
   in the transaction that acknowledges the announcement. A single worker downloads the chunk,
   stores it in batches of at most 200 messages (a savepoint per message, so one bad message
