@@ -618,7 +618,8 @@ type decision struct {
 	decidedAgo time.Duration
 }
 
-func (h *harness) action(target string, d decision) string {
+func (h *harness) action(d decision) string {
+	target := "918888888888@s.whatsapp.net"
 	h.t.Helper()
 	ctx := context.Background()
 	var me, friend, chat int64
@@ -675,17 +676,17 @@ func TestAConfirmedActionSendsToItsOwnChatOnlyOnce(t *testing.T) {
 	h := newHarness(t)
 	friend := "918888888888@s.whatsapp.net"
 	yes := decision{state: "confirmed", fromMe: true, inOwnChat: true}
-	good := h.action(friend, yes)
+	good := h.action(yes)
 	first := h.queue("running late", to(friend), confirmedBy(good))
 	again := h.queue("running late again", to(friend), confirmedBy(good))
 	elsewhere := h.queue("to a group instead", to("120363000000000000@g.us"), confirmedBy(good))
 	refused := map[string]string{
-		"not yet confirmed": h.queue("x", to(friend), confirmedBy(h.action(friend, decision{state: "pending", fromMe: true, inOwnChat: true}))),
-		"declined":          h.queue("x", to(friend), confirmedBy(h.action(friend, decision{state: "declined", fromMe: true, inOwnChat: true}))),
-		"yes from them":     h.queue("x", to(friend), confirmedBy(h.action(friend, decision{state: "confirmed", fromMe: false, inOwnChat: true}))),
-		"yes in their chat": h.queue("x", to(friend), confirmedBy(h.action(friend, decision{state: "confirmed", fromMe: true}))),
-		"yes before asked":  h.queue("x", to(friend), confirmedBy(h.action(friend, decision{state: "confirmed", fromMe: true, inOwnChat: true, before: true}))),
-		"yes long ago":      h.queue("x", to(friend), confirmedBy(h.action(friend, decision{state: "confirmed", fromMe: true, inOwnChat: true, decidedAgo: 20 * time.Minute}))),
+		"not yet confirmed": h.queue("x", to(friend), confirmedBy(h.action(decision{state: "pending", fromMe: true, inOwnChat: true}))),
+		"declined":          h.queue("x", to(friend), confirmedBy(h.action(decision{state: "declined", fromMe: true, inOwnChat: true}))),
+		"yes from them":     h.queue("x", to(friend), confirmedBy(h.action(decision{state: "confirmed", fromMe: false, inOwnChat: true}))),
+		"yes in their chat": h.queue("x", to(friend), confirmedBy(h.action(decision{state: "confirmed", fromMe: true}))),
+		"yes before asked":  h.queue("x", to(friend), confirmedBy(h.action(decision{state: "confirmed", fromMe: true, inOwnChat: true, before: true}))),
+		"yes long ago":      h.queue("x", to(friend), confirmedBy(h.action(decision{state: "confirmed", fromMe: true, inOwnChat: true, decidedAgo: 20 * time.Minute}))),
 		"unknown action":    h.queue("x", to(friend), confirmed()),
 	}
 	h.drain(h.cli)
