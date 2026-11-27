@@ -409,8 +409,8 @@ Folders appear when a phase needs them; empty placeholders are not committed.
   passed over, missed times are skipped as the job moves on, and a one-off the gateway refused is
   tried again five minutes later, up to six times. A reminder's text must share a word with what DJ
   wrote, like a send's recipient, so a chat excerpt cannot set one. Paused, it waits. The last 5 fired messages
-  of 12 hours join the conversation like alerts, so "10 min baad" works; `/jobs` and `/cancel`
-  list and stop them. Answers that are mostly not words are never shown, and invisible format
+  of 12 hours join the conversation like alerts, so "10 min baad" works; DJ lists and stops them by
+  asking, through the same tools. Answers that are mostly not words are never shown, and invisible format
   characters are dropped from every answer.
 - **History sync.** Each history chunk WhatsApp announces becomes a row in `history_jobs`, stored
   in the transaction that acknowledges the announcement. A single worker downloads the chunk,

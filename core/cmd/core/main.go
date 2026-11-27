@@ -314,7 +314,6 @@ func run(cfg config.Config, logger *slog.Logger) error {
 		},
 		DatabaseAway: databaseAway,
 		Alerts:       alertsCommand(alerter, alertSwitch),
-		Jobs:         jobStore,
 		Decide: func(ctx context.Context, m channel.IncomingMessage) (string, bool, error) {
 			return runner.Handle(ctx, m.ID, m.Text)
 		},

@@ -38,8 +38,6 @@ type Options struct {
 	Summary func(ctx context.Context, chat string) (string, error)
 	// Alerts switches alerts for /alerts; nil answers it with a notice.
 	Alerts AlertSwitch
-	// Jobs keeps the reminders /jobs and /cancel work on; nil answers them with a notice.
-	Jobs JobBook
 	// Decide answers a plain message that decides the action waiting for DJ's yes, reporting false
 	// for any other message, which then goes to Chat; nil means no actions. Replay answers a
 	// message that already decided one, however late it is run again. Shown marks an action
