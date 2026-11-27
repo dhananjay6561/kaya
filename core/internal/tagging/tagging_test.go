@@ -199,7 +199,7 @@ func TestTagsABatchAndKeepsItsTasksAndReminders(t *testing.T) {
 	r.say(msg{body: "and the call with Priya is tomorrow 5pm"})
 	r.say(msg{body: "50% off on shoes!!"})
 	m := (&model{locality: llm.Local}).script(`{"tagged":[
-		{"line":2,"tags":["important","task","task"],"task":"Send Rahul the deck","reminder":"","due":""},
+		{"line":2,"tags":["important","task","task"],"task":"Send Rahul the deck","mine":true,"reminder":"","due":""},
 		{"line":3,"tags":["reminder"],"task":"","reminder":"Call with Priya","due":"2026-11-27 17:00"},
 		{"line":4,"tags":["ignore"],"task":"","reminder":"","due":""},
 		{"line":9,"tags":["important"],"task":"","reminder":"","due":""}]}`)
@@ -283,7 +283,7 @@ func TestShowsEarlierMessagesAsContextAndTagsOneChatAtATime(t *testing.T) {
 func TestMasksMessagesForACloudModelAndPutsDetailsBackInTitles(t *testing.T) {
 	r := newRig(t)
 	r.say(msg{body: "call me on 9876543210 tomorrow"})
-	m := (&model{locality: llm.Cloud}).script(`{"tagged":[{"line":1,"tags":["task"],"task":"Call Rahul on [PHONE_1]","reminder":"","due":""}]}`)
+	m := (&model{locality: llm.Cloud}).script(`{"tagged":[{"line":1,"tags":["task"],"task":"Call Rahul on [PHONE_1]","mine":true,"reminder":"","due":""}]}`)
 	if _, err := r.step(r.tagger(m, Options{})); err != nil {
 		t.Fatal(err)
 	}
@@ -306,7 +306,7 @@ func TestAMessageCanGiveATaskAndAReminderAndAReminderWithoutADayIsATask(t *testi
 	r.say(msg{body: "exam on 3 dec"})
 	m := (&model{locality: llm.Local}).script(`{"tagged":[
 		{"line":1,"tags":["reminder"],"task":"","reminder":"Book the dentist","due":"soon"},
-		{"line":2,"tags":["reminder","task"],"task":"Revise for the exam","reminder":"Exam","due":"2026-12-03"}]}`)
+		{"line":2,"tags":["reminder","task"],"task":"Revise for the exam","mine":true,"reminder":"Exam","due":"2026-12-03"}]}`)
 	if _, err := r.step(r.tagger(m, Options{})); err != nil {
 		t.Fatal(err)
 	}
@@ -586,7 +586,7 @@ func TestANewTaskThatRepeatsAnOpenOneIsNotAddedAndTheModelSeesTheList(t *testing
 	r.say(msg{body: "send the deck to rahul and the invoice too"})
 	m := (&model{locality: llm.Local}).script(`{"tagged":[
 		{"line":1,"tags":["reminder"],"task":"","reminder":"Asad (drizz) today 3pm","due":"2026-11-26 15:00"},
-		{"line":2,"tags":["task"],"task":"Send the deck to Rahul","reminder":"","due":""},
+		{"line":2,"tags":["task"],"task":"Send the deck to Rahul","mine":true,"reminder":"","due":""},
 		{"line":2,"tags":["task"],"task":"","reminder":"","due":""}]}`)
 	tg := r.tagger(m, Options{})
 	if found, err := r.step(tg); !found || err != nil {
@@ -608,7 +608,7 @@ func TestANewTaskThatRepeatsAnOpenOneIsNotAddedAndTheModelSeesTheList(t *testing
 	}
 
 	r.say(msg{body: "and send rahul the invoice"})
-	m.script(`{"tagged":[{"line":1,"tags":["task"],"task":"Send Rahul the invoice","reminder":"","due":""}]}`)
+	m.script(`{"tagged":[{"line":1,"tags":["task"],"task":"Send Rahul the invoice","mine":true,"reminder":"","due":""}]}`)
 	if found, err := r.step(tg); !found || err != nil {
 		t.Fatalf("found %v, err %v", found, err)
 	}
@@ -667,5 +667,25 @@ func TestAReminderThatRestatesItsTaskBecomesItsDeadline(t *testing.T) {
 	got = kinds(found{tags: []string{KindTask, KindReminder}, task: "Revise for the exam", reminder: "Exam", due: &due})
 	if len(got) != 2 || got[0].kind != KindReminder || got[1].due != nil {
 		t.Fatalf("an event and its task were merged: %+v", got)
+	}
+}
+
+func TestATaskThatIsSomeoneElsesJobIsNotKept(t *testing.T) {
+	r := newRig(t)
+	r.say(msg{fromMe: true, body: "Approve the payment yaar"})
+	r.say(msg{body: "can you send me the deck?"})
+	m := (&model{locality: llm.Local}).script(`{"tagged":[
+		{"line":1,"tags":["task"],"task":"Approve the payment","mine":false,"reminder":"","due":""},
+		{"line":2,"tags":["task"],"task":"Send Rahul the deck","mine":true,"reminder":"","due":""}]}`)
+	if found, err := r.step(r.tagger(m, Options{})); !found || err != nil {
+		t.Fatalf("found %v, err %v", found, err)
+	}
+	open, err := NewTasks(r.core, func() time.Time { return today }).Open(bg, 10)
+	if err != nil || len(open) != 1 || open[0].Title != "Send Rahul the deck" {
+		t.Fatalf("open %+v, %v", open, err)
+	}
+	same(t, r.tags(), []string{"Approve the payment yaar: task", "can you send me the deck?: task"})
+	if system := m.requests()[0].Messages[0].Content; !strings.Contains(system, "mine says whose job it is") {
+		t.Fatal("the prompt does not ask whose job a task is")
 	}
 }
