@@ -141,7 +141,7 @@ func draftTool() *agent.Registry {
 	return r
 }
 
-func TestAProposedActionAlwaysStartsWithTheExactQuestion(t *testing.T) {
+func TestOnlyAFinishedAnswerAsksToConfirmADraft(t *testing.T) {
 	var stored []actions.Proposal
 	propose := func(_ context.Context, p actions.Proposal) (actions.Action, error) {
 		stored = append(stored, p)
@@ -164,8 +164,8 @@ func TestAProposedActionAlwaysStartsWithTheExactQuestion(t *testing.T) {
 		return llm.Completion{ToolCalls: []llm.ToolCall{{ID: "c", Name: "send_message", Arguments: `{"text":"again"}`}}, FinishReason: llm.FinishToolCalls}, nil
 	}}
 	got = reply(t, newChat(t, Options{LLM: looping, Tools: draftTool(), Propose: propose, ActionTTL: 10 * time.Minute}), "keep going")
-	if !strings.HasPrefix(got.Text, "*Send to Rahul:") || !strings.HasSuffix(got.Text, goingInCircles) || !got.Remember || got.ActionID == "" {
-		t.Fatalf("a canned answer hid the proposal: %+v", got)
+	if got.Text != goingInCircles || got.ActionID != "" || got.Remember {
+		t.Fatalf("a canned answer asked to confirm a draft: %+v", got)
 	}
 }
 
@@ -186,5 +186,17 @@ func TestTheModelsNoteUnderAProposalIsKeptShort(t *testing.T) {
 	note := got.Text[strings.Index(got.Text, "(within 10 min).")+len("(within 10 min).\n\n"):]
 	if !strings.HasPrefix(got.Text, "*Send to Rahul:\nhi*") || len([]rune(note)) > maxProposalNote+1 {
 		t.Fatalf("got %d runes of note: %q", len([]rune(note)), got.Text)
+	}
+}
+
+func TestTheOwnersWordsAreHisRecentQuestionsNeverAnAlert(t *testing.T) {
+	history := []memory.Exchange{
+		{Question: "tell anmol testing kaya", Answer: "drafted", At: now.Add(-5 * time.Minute)},
+		{Question: "(Nothing from them here: ...)", Answer: "*Heads up*\nFrom Abhishek: call me", At: now.Add(-2 * time.Minute), Unasked: true},
+		{Question: "what did priya say last week", Answer: "x", At: now.Add(-2 * time.Hour)},
+	}
+	got := ownerWords(Question{Text: "again"}, history, now)
+	if got != "again\ntell anmol testing kaya" {
+		t.Fatalf("got %q", got)
 	}
 }
