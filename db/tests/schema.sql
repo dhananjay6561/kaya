@@ -319,6 +319,11 @@ BEGIN
     AND NOT has_table_privilege('kaya_core', 'tagging', 'DELETE'), 'core moves tagging''s state but cannot add or remove it';
   ASSERT NOT has_table_privilege('kaya_gateway', 'tasks', 'SELECT')
     AND NOT has_table_privilege('kaya_gateway', 'message_tags', 'SELECT'), 'the gateway cannot read tags or tasks';
+  ASSERT has_table_privilege('kaya_core', 'alerts', 'SELECT, INSERT, UPDATE')
+    AND NOT has_table_privilege('kaya_core', 'alerts', 'DELETE'), 'core queues and sends alerts but keeps them';
+  ASSERT has_table_privilege('kaya_core', 'alerting', 'SELECT, UPDATE')
+    AND NOT has_table_privilege('kaya_core', 'alerting', 'INSERT'), 'core switches alerts but cannot add the switch';
+  ASSERT NOT has_table_privilege('kaya_gateway', 'alerts', 'SELECT'), 'the gateway cannot read alerts';
   ASSERT has_table_privilege('kaya_core', 'fact_learning', 'SELECT, UPDATE')
     AND NOT has_table_privilege('kaya_core', 'fact_learning', 'INSERT')
     AND NOT has_table_privilege('kaya_core', 'fact_learning', 'DELETE'), 'core moves the learning cursor but cannot add or remove it';
@@ -564,6 +569,15 @@ BEGIN
   PERFORM pg_temp.expect_error($q$INSERT INTO tasks (message_id, chat_id, kind, title) VALUES (900200, 1, 'task', 'again')$q$, '23505');
   PERFORM pg_temp.expect_error($q$INSERT INTO tasks (message_id, chat_id, kind, title, state) VALUES (900203, 1, 'task', 'x', 'done')$q$, '23514');
   PERFORM pg_temp.expect_error($q$INSERT INTO tasks (message_id, chat_id, kind, title, due_has_time) VALUES (900204, 1, 'reminder', 'x', true)$q$, '23514');
+  PERFORM 1 FROM alerting WHERE enabled;
+  ASSERT FOUND, 'alerts start switched on';
+  PERFORM pg_temp.expect_error('INSERT INTO alerting (enabled) VALUES (false)', '23505');
+  INSERT INTO alerts (message_id, chat_id, note) VALUES (900200, 1, 'Rahul needs the deck tonight');
+  PERFORM pg_temp.expect_error($q$INSERT INTO alerts (message_id, chat_id, note) VALUES (900200, 1, 'again')$q$, '23505');
+  PERFORM pg_temp.expect_error($q$INSERT INTO alerts (chat_id, note) VALUES (1, 'about nothing')$q$, '23514');
+  PERFORM pg_temp.expect_error($q$INSERT INTO alerts (message_id, task_id, chat_id, note) VALUES (900205, 1, 1, 'both')$q$, '23514');
+  PERFORM pg_temp.expect_error($q$INSERT INTO alerts (message_id, chat_id, note) VALUES (900206, 1, ' ')$q$, '23514');
+  PERFORM pg_temp.expect_error($q$INSERT INTO alerts (message_id, chat_id, note, sent_at) VALUES (900207, 1, 'x', now())$q$, '23514');
   INSERT INTO chunks (chat_id, first_sent_at, last_sent_at, message_count, text_hash, model, embedding)
   VALUES (1, now(), now(), 1, 'h', 'm', array_fill(0.1, ARRAY[1024])::halfvec(1024));
   INSERT INTO chunks (chat_id, first_sent_at, last_sent_at, message_count, text_hash, model, skipped)
