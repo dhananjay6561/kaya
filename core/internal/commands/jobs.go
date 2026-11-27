@@ -6,6 +6,7 @@ import (
 	"strconv"
 	"strings"
 	"time"
+	"unicode"
 
 	"github.com/dhananjay6561/kaya/core/internal/jobs"
 )
@@ -45,7 +46,7 @@ func cancelJob(ctx context.Context, book JobBook, args string) (string, error) {
 		return "Reminders are not set up here.", nil
 	}
 	var ids []int64
-	for _, f := range strings.FieldsFunc(args, func(r rune) bool { return r == ',' || r == ' ' || r == '#' }) {
+	for _, f := range strings.FieldsFunc(args, func(r rune) bool { return r == ',' || r == '#' || unicode.IsSpace(r) }) {
 		id, err := strconv.ParseInt(f, 10, 64)
 		if err != nil || id < 1 {
 			return cancelUsage, nil
@@ -63,8 +64,16 @@ func cancelJob(ctx context.Context, book JobBook, args string) (string, error) {
 		return "No reminder with that number is set. Send /jobs to see them.", nil
 	}
 	names := make([]string, len(gone))
+	found := map[int64]bool{}
 	for i, j := range gone {
 		names[i] = j.Text
+		found[j.ID] = true
 	}
-	return "Cancelled: " + strings.Join(names, "; ") + ".", nil
+	answer := "Cancelled: " + strings.Join(names, "; ") + "."
+	for _, id := range ids {
+		if !found[id] {
+			answer += fmt.Sprintf(" No reminder %d is set.", id)
+		}
+	}
+	return answer, nil
 }

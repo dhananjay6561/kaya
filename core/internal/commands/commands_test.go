@@ -970,7 +970,7 @@ func TestJobsListsRemindersAndCancelStopsThem(t *testing.T) {
 	}}
 	r := newRig(t, rigOptions{jobs: book})
 	same(t, r.answers("/jobs", now), []string{"*Reminders*\n3. Sat 28 Nov, 18:00: Call Shaurya\n4. Sun 29 Nov, 09:00, then every weekday: send me my open tasks (I do it)"})
-	same(t, r.answers("/cancel 3", now), []string{"Cancelled: Call Shaurya."})
+	same(t, r.answers("/cancel 3\n99", now), []string{"Cancelled: Call Shaurya. No reminder 99 is set."})
 	same(t, r.answers("/cancel 3", now), []string{"No reminder with that number is set. Send /jobs to see them."})
 	same(t, r.answers("/cancel soon", now), []string{cancelUsage})
 	none := newRig(t, rigOptions{})
