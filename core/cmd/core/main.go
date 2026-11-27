@@ -18,7 +18,10 @@ import (
 	"time"
 	_ "time/tzdata"
 
+	"github.com/jackc/pgx/v5"
+
 	"github.com/dhananjay6561/kaya/contracts"
+	"github.com/dhananjay6561/kaya/core/internal/actions"
 	"github.com/dhananjay6561/kaya/core/internal/agent"
 	"github.com/dhananjay6561/kaya/core/internal/alerts"
 	"github.com/dhananjay6561/kaya/core/internal/channel"
@@ -171,10 +174,14 @@ func run(cfg config.Config, logger *slog.Logger) error {
 			return err
 		}
 	}
-	registry, err := agent.NewRegistry(
-		tools.Clock(zone, time.Now),
-		tools.OpenTasks(tasks, zone, time.Now),
-	)
+	actionStore := actions.NewStore(db, time.Now, 10*time.Minute)
+	toolset := []agent.Tool{tools.Clock(zone, time.Now), tools.OpenTasks(tasks, zone, time.Now)}
+	runner := &actions.Runner{Store: actionStore, Logger: logger, Executors: map[string]actions.Executor{}, MessageID: ownMessageID(db)}
+	if cfg.SendsPerHour > 0 {
+		toolset = append(toolset, tools.SendMessage(searcher, db))
+		runner.Executors[tools.SendKind] = tools.SendExecutor(ch, actionStore, cfg.SendsPerHour, time.Now)
+	}
+	registry, err := agent.NewRegistry(toolset...)
 	if err != nil {
 		return err
 	}
@@ -218,6 +225,8 @@ func run(cfg config.Config, logger *slog.Logger) error {
 		DatabaseAway:   databaseAway,
 		NewMaskSession: func() chat.MaskSession { return masking.NewSession() },
 		Tools:          registry,
+		Propose:        actionStore.Propose,
+		ActionTTL:      actionStore.TTL(),
 	})
 	if err != nil {
 		return err
@@ -274,6 +283,9 @@ func run(cfg config.Config, logger *slog.Logger) error {
 		},
 		DatabaseAway: databaseAway,
 		Alerts:       alertsCommand(alerter, alertSwitch),
+		Decide: func(ctx context.Context, m channel.IncomingMessage) (string, bool, error) {
+			return runner.Handle(ctx, m.ID, m.Text)
+		},
 	})
 	defer stopCommands()
 
@@ -450,5 +462,17 @@ func alertsStatus(alerter *alerts.Alerter, sw *alerts.Switch) func(context.Conte
 		}
 		waiting, err := sw.Waiting(ctx)
 		return on, waiting, err
+	}
+}
+
+// ownMessageID finds the row of a message DJ sent by its WhatsApp id.
+func ownMessageID(db *store.DB) func(context.Context, string) (int64, error) {
+	return func(ctx context.Context, waID string) (int64, error) {
+		var id int64
+		err := db.QueryRow(ctx, "SELECT id FROM messages WHERE wa_id = $1 AND from_me ORDER BY id DESC LIMIT 1", waID).Scan(&id)
+		if errors.Is(err, pgx.ErrNoRows) {
+			return 0, nil
+		}
+		return id, err
 	}
 }
