@@ -30,6 +30,8 @@ type Question struct {
 type Answer struct {
 	Text     string
 	Remember bool
+	// ActionID is the action the answer asks DJ to confirm; it waits until the answer is sent.
+	ActionID string
 }
 
 // MaskSession hides private details in text bound for a cloud model and puts them back in its
@@ -92,6 +94,7 @@ const (
 	maxAnswerTokens = 3072
 	cutShort        = "\n\n(Cut short here. Ask for less, or for the rest.)"
 	goingInCircles  = "I went round in circles with my tools on that one. Try asking another way."
+	maxProposalNote = 300
 )
 
 // New checks the options and returns a Chat.
@@ -399,14 +402,17 @@ func (c *Chat) complete(ctx context.Context, r llm.Request, privacy MaskSession)
 	}, r)
 }
 
-// withProposal puts the exact question for DJ under an answer that proposed an action, whatever
-// the model wrote, so he never says yes to something he did not see; the answer is then always
-// remembered, so his yes or no makes sense in the conversation.
+// withProposal puts the exact question for DJ at the top of an answer that proposed an action,
+// with only a short note from the model under it, so what a yes does is always the first thing he
+// reads, whatever the model wrote; the answer is then always remembered, so his yes or no makes
+// sense in the conversation.
 func (c *Chat) withProposal(a Answer, proposed *actions.Action) Answer {
 	if proposed == nil {
 		return a
 	}
-	a.Text = strings.TrimSpace(a.Text) + "\n\n" + actions.ConfirmLine(*proposed, c.o.ActionTTL)
-	a.Remember = true
-	return a
+	text := actions.ConfirmLine(*proposed, c.o.ActionTTL)
+	if note := ClipTo(strings.TrimSpace(a.Text), maxProposalNote); note != "" {
+		text += "\n\n" + note
+	}
+	return Answer{Text: text, Remember: true, ActionID: proposed.ID}
 }
