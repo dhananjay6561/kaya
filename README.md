@@ -79,7 +79,8 @@ contact, and it works with everything your WhatsApp account can see.
   `/pause` stops every answer until `/resume`. The pause is kept in the database, so it holds
   across restarts, and while paused Kaya still answers its slash commands. `/facts`, `/remember`
   and `/forget` show and change what Kaya knows about you; `/tasks` and `/done` show and close
-  the tasks found in your chats; `/summary` sums up today or one chat; `/alerts` switches alerts.
+  the tasks found in your chats; `/summary` sums up today or one chat; `/alerts` switches alerts;
+  `/jobs` and `/cancel` show and stop reminders.
 - **Answers from Groq, with lasting memory.** Anything else you type in your own chat is answered by
   Groq's `openai/gpt-oss-120b`, in your language and style, with today's date in your time zone.
   Kaya builds the context itself: facts about you, your conversation with it (kept for good) and
@@ -161,6 +162,15 @@ contact, and it works with everything your WhatsApp account can see.
   anyone else's messages, and when it can't tell, nothing is sent. The gateway sends it only if your yes
   is in your own chat, after Kaya asked, for that same chat and that same text, and only once;
   `SENDS_PER_HOUR` (20) caps them.
+- **Reminders and scheduled messages.** "6 baje shaurya ko call yaad dilana", "20 min baad chai",
+  "every weekday at 9 send me my open tasks", "har mahine 1 tareekh ko rent": Kaya sets it and puts
+  the exact time under her answer (⏰ Sat 28 Nov, 18:00: Call Shaurya), worked out by code in your
+  time zone, so what you read is when it fires. A reminder arrives on the minute; one that repeats
+  moves on to its next time; an "ask" job (your tasks every morning) is answered fresh each time.
+  "10 min baad" right after a reminder works, `/jobs` lists them, and `/cancel 3` or "gym wala
+  cancel kar do" stops one. If Kaya was off when one was due, it still comes, saying so. The
+  scheduler sleeps until the next one is due and wakes when you set one, so it costs nothing while
+  waiting, and a plain reminder needs no model call when it fires.
 - **Least-privilege database logins.** The gateway and core each have their own Postgres role.
   Core, the part that will talk to an LLM, can read chats but cannot see the WhatsApp session, its
   encryption keys, or the keys needed to fetch media.
@@ -181,7 +191,6 @@ In build order. Status for each stage is in the [roadmap](#project-status-and-ro
 - Web search with SearXNG, reading pages, and research answers with links
 - Gmail, Google Calendar and Google Drive
 - PPT and PDF decks made from a topic or a chat, uploaded to Drive, with the link sent back
-- Scheduled jobs, reminders and a morning brief
 - Acting on websites you are logged into, and ordering with spending caps
 - Phone calls from Kaya's own number, with a transcript and summary sent to you
 - Kaya as its own WhatsApp contact on a spare number
@@ -419,6 +428,7 @@ erDiagram
     messages ||..o{ tasks : "gave, no FK"
     messages ||..o| alerts : "needs DJ, no FK"
     tasks ||..o| alerts : "comes up in, no FK"
+    jobs ||--o{ job_runs : "fired as"
 
     commands {
         bigint id PK
@@ -513,6 +523,23 @@ erDiagram
         bigint decided_by "DJ's yes or no, no FK"
         text result
     }
+    jobs {
+        bigint id PK
+        text text "what to remind of, or to do"
+        boolean ask "answer it when it fires"
+        text repeat "none, hourly, daily, weekdays, weekly, monthly"
+        int every
+        smallint_array weekdays
+        text local_time "HH:MM in DJ's zone"
+        timestamptz next_at "when it fires next"
+        text state "active, done, cancelled"
+    }
+    job_runs {
+        bigint job_id PK "jobs.id"
+        timestamptz due_at PK
+        timestamptz sent_at
+        text text "what was sent"
+    }
     alerting {
         smallint id PK "always one row"
         boolean enabled "/alerts on, /alerts off"
@@ -556,7 +583,8 @@ transaction as the facts each exchange gave. `message_tags` has a row for every 
 has read, `tasks` the tasks and reminders it found, and `tagging` where it started and what it spent
 today. `alerts` are heads-ups for DJ: a message tagging found needs him, or a reminder coming up;
 `alerting` is the `/alerts` switch. `pending_actions` holds what Kaya would do outside your own chat
-until you say yes or no. `pause_state` holds `/pause`. `gateway_events` and
+until you say yes or no. `jobs` are reminders and scheduled messages, and `job_runs` each time one
+fired, so a time never fires twice. `pause_state` holds `/pause`. `gateway_events` and
 `send_requests` are the queues between the services; handled and finished rows are deleted after 7
 days.*
 
@@ -588,7 +616,7 @@ kaya/
 │                       llm (Groq, stub, o200k token counter), memory, chat, masking, text,
 │                       embeddings (Voyage, stub), search (index, search, excerpts), facts,
 │                       tagging (tags and tasks), summary, agent (tool registry and loop), tools,
-│                       alerts, actions (confirm-before-act)
+│                       alerts, actions (confirm-before-act), jobs (reminders, scheduler)
 ├── gateway/            Go WhatsApp gateway (its own Go module)
 │   ├── cmd/gateway/    main package: serve, pair, media, healthcheck
 │   └── internal/       config, whatsapp, ingest, events, send, media, testdb
@@ -801,7 +829,7 @@ Status key: ✅ done · 🟨 in progress · ⬜ not started
 | 7. Web | Search, page reading, research answers with sources | ⬜ |
 | 8. Google | OAuth, Drive, Gmail, Calendar | ⬜ |
 | 9. Documents | PPT and PDF from a topic or chat, uploaded to Drive | ⬜ |
-| 10. Scheduler | Persistent jobs, plain-language schedules, reminders, morning brief | ⬜ |
+| 10. Scheduler | Persistent jobs, plain-language schedules, reminders (built); morning brief | 🟨 |
 | 11. Browser | Logged-in browser profile, browser tools, guardrails | ⬜ |
 | 12. Ordering | Cart up to checkout, pay on "yes" with spending caps, order status | ⬜ |
 | 13. Phone calls | Outbound calls with AI disclosure, transcript and summary | ⬜ |
