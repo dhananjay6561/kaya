@@ -73,6 +73,7 @@ type rigOptions struct {
 	facts   FactBook
 	tasks   TaskBook
 	summary func(context.Context, string) (string, error)
+	alerts  AlertSwitch
 }
 
 // errAway is the rig's database outage; every other error is a handler's own.
@@ -91,7 +92,7 @@ func newRig(t *testing.T, o rigOptions) *rig {
 			return ChatAnswer{Text: "You said: " + Clip(m.Text), Remember: true}, nil
 		}
 	}
-	r.stop = Start(Options{Channel: r.ch, Logger: quiet, Pause: r.pause, Status: o.status, Chat: o.chat, Now: o.now, DatabaseAway: isAway, Facts: o.facts, Tasks: o.tasks, Zone: kolkata, Summary: o.summary})
+	r.stop = Start(Options{Channel: r.ch, Logger: quiet, Pause: r.pause, Status: o.status, Chat: o.chat, Now: o.now, DatabaseAway: isAway, Facts: o.facts, Tasks: o.tasks, Zone: kolkata, Summary: o.summary, Alerts: o.alerts})
 	if err := r.ch.Start(bg); err != nil {
 		t.Fatal(err)
 	}
@@ -529,6 +530,7 @@ func TestSendsTheTypeScriptCoresTexts(t *testing.T) {
 		"/resume: start answering again\n/facts: what I know about you\n/remember <fact>: keep a fact about you\n" +
 		"/forget <number>: drop a fact, by its number in /facts\n/tasks: open tasks and reminders found in your chats\n" +
 		"/done <number>: close a task, by its number in /tasks\n/summary: what came in today; /summary <chat>: one chat's last day\n" +
+		"/alerts: whether I message you when something needs you; /alerts on, /alerts off\n" +
 		"Anything else you send here goes to an AI model, " +
 		"which answers with what it knows about you, your conversation and what a search of your other chats finds."
 	same(t, r.answers("/help", now), []string{help})
@@ -857,4 +859,30 @@ func TestASummaryTheModelCannotWriteGetsTheUsualNotice(t *testing.T) {
 	if err == nil || len(out) != 1 || !strings.Contains(out[0], "limit") {
 		t.Fatalf("got %q, %v", out, err)
 	}
+}
+
+type alertSwitch struct {
+	on      bool
+	waiting int
+}
+
+func (a *alertSwitch) Enabled(context.Context) (bool, error) { return a.on, nil }
+func (a *alertSwitch) Waiting(context.Context) (int, error)  { return a.waiting, nil }
+func (a *alertSwitch) Set(_ context.Context, on bool) (bool, error) {
+	changed := a.on != on
+	a.on = on
+	return changed, nil
+}
+
+func TestAlertsAreSwitchedOnAndOff(t *testing.T) {
+	sw := &alertSwitch{on: true, waiting: 2}
+	r := newRig(t, rigOptions{alerts: sw})
+	same(t, r.answers("/alerts", now), []string{"Alerts are on: I message you here when something in your chats needs you, and before reminders. 2 waiting to go out with the next one. Send /alerts off to stop them."})
+	same(t, r.answers("/alerts off", now), []string{"Alerts off. Any waiting were dropped; send /alerts on to start again."})
+	same(t, r.answers("/Alerts OFF.", now), []string{"Alerts were already off."})
+	same(t, r.answers("/alerts", now), []string{"Alerts are off. Send /alerts on and I will message you here when something in your chats needs you, and before reminders."})
+	same(t, r.answers("/alerts on", now), []string{"Alerts on. I will message you here when something needs you."})
+	same(t, r.answers("/alerts maybe", now), []string{alertsUsage})
+	none := newRig(t, rigOptions{})
+	same(t, none.answers("/alerts", now), []string{"Alerts are not set up here."})
 }
