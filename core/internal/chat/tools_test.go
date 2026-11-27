@@ -223,3 +223,24 @@ func TestAToolsNoteShowsUnderTheAnswerAsWritten(t *testing.T) {
 		t.Fatalf("got %+v", got)
 	}
 }
+
+func TestAGarbledAnswerIsNeverShown(t *testing.T) {
+	junk := "Call the ... ... ...... ...…… ...…\n\n... ……...…......"
+	model := &scripted{responses: func(llm.Request) (llm.Completion, error) {
+		return llm.Completion{Text: junk, FinishReason: llm.FinishStop}, nil
+	}}
+	if got := reply(t, newChat(t, Options{LLM: model}), "hi"); got.Text != "My answer came out garbled. Ask me again." || got.Remember {
+		t.Fatalf("got %+v", got)
+	}
+	for _, fine := range []string{"Okay... 6 baje 👍", "Haan!", "ठीक है, कल 7 बजे।", "...", "Done: ⏰"} {
+		if garbled(fine) {
+			t.Errorf("%q was taken as garbled", fine)
+		}
+	}
+	clean := &scripted{responses: func(llm.Request) (llm.Completion, error) {
+		return llm.Completion{Text: "Your​ set​ is done", FinishReason: llm.FinishStop}, nil
+	}}
+	if got := reply(t, newChat(t, Options{LLM: clean}), "hi"); got.Text != "Your set is done" {
+		t.Fatalf("invisible characters were kept: %q", got.Text)
+	}
+}
