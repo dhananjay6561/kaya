@@ -164,3 +164,18 @@ func TestReadConversationOutlivesTheCommandsItCameFrom(t *testing.T) {
 	c.exec("DELETE FROM commands")
 	same(t, c.questions(0), []string{"old question"})
 }
+
+func TestAVoiceQuestionStaysInTheConversationByItsTranscript(t *testing.T) {
+	c := newConversation(t)
+	c.ask("placeholder", c.now.Add(-time.Minute), asked{})
+	c.exec("UPDATE messages SET kind = 'voice', body = NULL WHERE wa_id = '3EB0ASK1'")
+	got, err := ReadConversation(bg, c.core, 0)
+	if err != nil || len(got) != 0 {
+		t.Fatalf("an untranscribed voice question was read: %+v, %v", got, err)
+	}
+	c.exec("INSERT INTO transcripts (message_id, state, text) SELECT id, 'done', 'Rahul ko bolo late ho jaunga' FROM messages WHERE wa_id = '3EB0ASK1'")
+	got, err = ReadConversation(bg, c.core, 0)
+	if err != nil || len(got) != 1 || got[0].Question != "Rahul ko bolo late ho jaunga" {
+		t.Fatalf("got %+v, %v", got, err)
+	}
+}

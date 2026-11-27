@@ -15,12 +15,13 @@ import (
 const DefaultExchanges = 50
 
 const conversationSQL = `
-SELECT q.id, q.body AS question, a.body AS answer, q.sent_at
+SELECT q.id, coalesce(nullif(btrim(q.body), ''), (SELECT t.text FROM transcripts t WHERE t.message_id = q.id AND t.state = 'done')) AS question,
+       a.body AS answer, q.sent_at
 FROM (SELECT * FROM exchanges ORDER BY id DESC LIMIT $1 * 2) e
 JOIN messages q ON q.id = e.question_message_id
 JOIN messages a ON a.chat_id = q.chat_id AND a.wa_id = e.answer_wa_id AND a.from_me
 WHERE q.deleted_at IS NULL AND a.deleted_at IS NULL
-  AND q.body IS NOT NULL AND a.body IS NOT NULL
+  AND (q.body IS NOT NULL OR EXISTS (SELECT 1 FROM transcripts t WHERE t.message_id = q.id AND t.state = 'done')) AND a.body IS NOT NULL
   AND (q.edited_at IS NULL OR q.edited_at <= e.created_at)
 ORDER BY e.id DESC
 LIMIT $1`
