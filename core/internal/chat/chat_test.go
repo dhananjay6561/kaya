@@ -179,7 +179,7 @@ func TestSystemPromptSaysWhatKayaCannotDoYet(t *testing.T) {
 	for _, want := range []string{
 		"never offer them, promise them or suggest you will: notes",
 		"Reminders and scheduled messages are set with your tools",
-		"opening links or files, and searching the web unless a web search tool is offered",
+		"opening files, and searching the web or opening links unless a tool for it is offered",
 		"search the web if a web search tool is offered",
 		"call the send tool straight away",
 		"rather than guess",
