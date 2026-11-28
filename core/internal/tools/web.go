@@ -57,6 +57,7 @@ func WebSearch(s WebSearcher, private func(string) bool, zone *time.Location) ag
 		}`),
 		Untrusted: true,
 		Public:    true,
+		MaxCalls:  2,
 		Run: func(ctx context.Context, raw json.RawMessage) (string, error) {
 			var args struct {
 				Query  string `json:"query"`
