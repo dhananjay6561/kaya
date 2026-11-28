@@ -5,6 +5,7 @@ import (
 	"errors"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/dhananjay6561/kaya/core/internal/agent"
 	"github.com/dhananjay6561/kaya/core/internal/llm"
@@ -90,5 +91,15 @@ func TestReadPageNeverSendsAPrivateDetail(t *testing.T) {
 	var problem *agent.Problem
 	if !errors.As(err, &problem) || f.asked != "" {
 		t.Fatalf("fetched %q, err %v", f.asked, err)
+	}
+}
+
+func TestReadPageSaysWhenThePageWasPublished(t *testing.T) {
+	old := menu
+	old.Published = time.Date(2024, 2, 3, 10, 0, 0, 0, time.UTC)
+	model := llm.NewStub(llm.StubOptions{Reply: func(llm.Request) string { return "Dal Makhani Bowl ₹99" }})
+	got, err := ReadPage(&fetcher{page: old}, model, private).Run(context.Background(), []byte(`{"url":"https://magicpin.in/x","looking_for":"menu"}`))
+	if err != nil || !strings.HasPrefix(got, "[1] Truth Bowl, HSR - magicpin (magicpin.in, published 3 Feb 2024)\n") {
+		t.Fatalf("got %q %v", got, err)
 	}
 }
