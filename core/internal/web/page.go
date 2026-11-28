@@ -53,6 +53,8 @@ type FetchOptions struct {
 const (
 	maxPageText  = 60_000
 	articleFloor = 800
+	// minPageText is less text than any real page has: a page built by scripts gives only its menus.
+	minPageText = 200
 	userAgent    = "Mozilla/5.0 (compatible; Kaya/1.0; personal assistant)"
 )
 
@@ -148,7 +150,7 @@ func (f *Fetcher) Fetch(ctx context.Context, raw string) (Page, error) {
 	} else {
 		page.Title, page.Text = readable(content, resp.Request.URL)
 	}
-	if strings.TrimSpace(page.Text) == "" {
+	if len([]rune(page.Text)) < minPageText {
 		return Page{}, ErrNoText
 	}
 	if r := []rune(page.Text); len(r) > maxPageText {

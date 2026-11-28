@@ -43,7 +43,9 @@ func TestAnArticleIsReadWithoutItsChrome(t *testing.T) {
 func TestAMenuPageKeepsItsItemsAndPrices(t *testing.T) {
 	u := site(t, page("text/html", `<html><head><title>Truth Bowl, HSR - magicpin</title></head><body><nav>Sign in</nav>
 		<div class="menu"><div><span>Dal Makhani Bowl</span><span>₹99</span></div><div><span>Paneer Rice Bowl</span><span>₹149</span></div>
-		<div>Delivery in 90-95 min</div></div><button>Add</button></body></html>`))
+		<div>Delivery in 90-95 min</div><p>Truth Bowl serves North Indian rice bowls across HSR Layout, Koramangala and BTM, with
+		vegetarian and non-vegetarian options, combos and desserts. Orders above 199 get free delivery.</p></div>
+		<button>Add</button></body></html>`))
 	got, err := local.Fetch(context.Background(), u)
 	if err != nil {
 		t.Fatal(err)
@@ -59,12 +61,13 @@ func TestAMenuPageKeepsItsItemsAndPrices(t *testing.T) {
 }
 
 func TestOtherCharsetsAndPlainTextAreRead(t *testing.T) {
-	u := site(t, page("text/html; charset=iso-8859-1", "<html><body><p>Caf\xe9 menu</p></body></html>"))
+	u := site(t, page("text/html; charset=iso-8859-1", "<html><body><p>Caf\xe9 menu</p><p>"+strings.Repeat("Espresso, cappuccino and filter coffee all day. ", 6)+"</p></body></html>"))
 	if got, err := local.Fetch(context.Background(), u); err != nil || !strings.Contains(got.Text, "Café menu") {
 		t.Fatalf("latin-1: %q %v", got.Text, err)
 	}
-	u = site(t, page("text/plain", "line one\n\n\nline two\nline two"))
-	if got, err := local.Fetch(context.Background(), u); err != nil || got.Text != "line one\nline two" {
+	long := strings.Repeat("x", 200)
+	u = site(t, page("text/plain", "line one\n\n\n"+long+"\n"+long))
+	if got, err := local.Fetch(context.Background(), u); err != nil || got.Text != "line one\n"+long {
 		t.Fatalf("plain: %q %v", got.Text, err)
 	}
 }
@@ -74,9 +77,10 @@ func TestPagesThatCannotBeReadSayWhy(t *testing.T) {
 		h    http.HandlerFunc
 		want func(error) bool
 	}{
-		"a pdf":     {page("application/pdf", "%PDF"), func(err error) bool { return errors.Is(err, ErrNotAPage) }},
-		"no text":   {page("text/html", "<html><body><script>render()</script></body></html>"), func(err error) bool { return errors.Is(err, ErrNoText) }},
-		"a refusal": {func(w http.ResponseWriter, _ *http.Request) { w.WriteHeader(http.StatusForbidden) }, func(err error) bool { var p *PageError; return errors.As(err, &p) && p.Status == 403 }},
+		"a pdf":      {page("application/pdf", "%PDF"), func(err error) bool { return errors.Is(err, ErrNotAPage) }},
+		"no text":    {page("text/html", "<html><body><script>render()</script></body></html>"), func(err error) bool { return errors.Is(err, ErrNoText) }},
+		"only menus": {page("text/html", "<html><body><div>Orders</div><div>Cart</div><div>Wishlist</div></body></html>"), func(err error) bool { return errors.Is(err, ErrNoText) }},
+		"a refusal":  {func(w http.ResponseWriter, _ *http.Request) { w.WriteHeader(http.StatusForbidden) }, func(err error) bool { var p *PageError; return errors.As(err, &p) && p.Status == 403 }},
 	}
 	for name, c := range cases {
 		if _, err := local.Fetch(context.Background(), site(t, c.h)); !c.want(err) {
@@ -100,10 +104,10 @@ func TestLocalAndPrivateAddressesAreNeverFetched(t *testing.T) {
 }
 
 func TestARedirectToAPrivateAddressIsBlocked(t *testing.T) {
-	inner := site(t, page("text/plain", "router admin"))
+	inner := site(t, page("text/plain", "router admin "+strings.Repeat(".", 200)))
 	outer := site(t, func(w http.ResponseWriter, r *http.Request) { http.Redirect(w, r, inner, http.StatusFound) })
 	f := NewFetcher(FetchOptions{AllowPrivate: true})
-	if got, err := f.Fetch(context.Background(), outer); err != nil || got.Text != "router admin" {
+	if got, err := f.Fetch(context.Background(), outer); err != nil || !strings.HasPrefix(got.Text, "router admin") {
 		t.Fatalf("redirects are followed: %q %v", got.Text, err)
 	}
 	if _, err := NewFetcher(FetchOptions{}).Fetch(context.Background(), outer); !errors.Is(err, ErrBlocked) {
