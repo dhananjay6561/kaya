@@ -574,3 +574,61 @@ func TestLiveGroundingKeepsTheReplyNatural(t *testing.T) {
 		}
 	}
 }
+
+// TestLiveReadPage asks the real Groq about a pasted link and about a place only a page can
+// answer, through a real SearXNG and real pages: it must open the page, give only what the page
+// says, and put its link under the answer.
+func TestLiveReadPage(t *testing.T) {
+	key := os.Getenv("GROQ_API_KEY")
+	if key == "" {
+		t.Skip("GROQ_API_KEY not set")
+	}
+	base := os.Getenv("KAYA_SEARXNG_URL")
+	if base == "" {
+		base = "http://127.0.0.1:8888"
+	}
+	ist := zone(t, "Asia/Kolkata")
+	now := time.Now()
+	groq, err := llm.NewGroq(config.Groq{APIKey: key, HeavyModel: "openai/gpt-oss-120b", RoutineModel: "openai/gpt-oss-20b", ContextTokens: 4000}, llm.ClientOptions{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	private := func(s string) bool { return realMasking().Mask(s, "") != s }
+	for _, question := range []string{
+		"is link pe sabse sasta paneer bowl kaunsa hai? https://magicpin.in/Bangalore/Hsr/Restaurant/Truth-Bowl/store/1732629/delivery",
+		"truth bowl hsr ka menu dekh ke bata 150 ke andar kya mil jayega",
+	} {
+		time.Sleep(30 * time.Second)
+		s := &liveSearcher{s: web.NewSearcher(web.SearchOptions{BaseURL: base})}
+		var opened []string
+		read := tools.ReadPage(web.NewFetcher(web.FetchOptions{}), groq, private)
+		run := read.Run
+		read.Run = func(ctx context.Context, args json.RawMessage) (string, error) {
+			opened = append(opened, string(args))
+			return run(ctx, args)
+		}
+		registry, err := agent.NewRegistry(tools.WebSearch(s, private, ist), read)
+		if err != nil {
+			t.Fatal(err)
+		}
+		chat, err := New(Options{
+			LLM: groq, Logger: slog.New(slog.NewJSONHandler(io.Discard, nil)), Zone: ist,
+			Now: func() time.Time { return now }, DatabaseAway: func(error) bool { return false },
+			NewMaskSession: realMasking, Tools: registry,
+		})
+		if err != nil {
+			t.Fatal(err)
+		}
+		answer, err := chat.Reply(bg, Question{ID: "3EB0LIVE", Text: question, SentAt: now})
+		if err != nil {
+			t.Fatal(err)
+		}
+		t.Logf("%q -> %q (searched %q, opened %q)", question, answer.Text, s.queries, opened)
+		if len(opened) == 0 {
+			t.Errorf("%q: no page was opened", question)
+		}
+		if !strings.Contains(answer.Text, "magicpin.in") || strings.ContainsAny(answer.Text, "[]【】") {
+			t.Errorf("%q: want the magicpin link and no citation marks: %q", question, answer.Text)
+		}
+	}
+}
