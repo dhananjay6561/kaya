@@ -36,7 +36,10 @@ func WebSearch(s WebSearcher, private func(string) bool, zone *time.Location) ag
 			"practical tip when it matters (\"checkout pe delivery fee dekh lena\"). Use only what the results say: never " +
 			"name a place, shop, product, price, number, date or result that is not written in them, even if it sounds " +
 			"likely. If they are only listing pages with no names or prices, say so plainly and tell them what the page " +
-			"has. If read_page is offered and the specifics they want are missing, open the most promising result first. " +
+			"has. If read_page is offered and the specifics they want are missing, open the most promising result first: " +
+			"for where to buy, order, eat or go, or for a price, when the snippets name no places and prices, you must " +
+			"open the best listing or shop page (Zomato, Swiggy, Magicpin, the shop's own site) with read_page before " +
+			"answering, and never answer such a question from snippets alone. " +
 			"For a question that needs comparing or a pick (best X under a budget, A vs B, which one to buy), open the two " +
 			"most useful results from different sites with read_page, combine what they say, say where they disagree, " +
 			"and end with your own pick and why in a line. " +
