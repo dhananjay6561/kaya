@@ -87,6 +87,8 @@ type Result struct {
 	Notes []string
 	// Sources are the links tools numbered with Cite; source n is Sources[n-1].
 	Sources []string
+	// Evidence is the public text tools showed the model, kept with Witness.
+	Evidence []string
 }
 
 // ErrTooManyRounds is a model that kept calling tools after it was told to answer.
@@ -136,7 +138,7 @@ func Run(ctx context.Context, o Options, r llm.Request) (res Result, err error) 
 	r.Messages = append([]llm.Message(nil), r.Messages...)
 	ctx, noted := withNotes(ctx)
 	ctx, cited := withSources(ctx)
-	defer func() { res.Notes, res.Sources = noted.all(), cited.all() }()
+	defer func() { res.Notes, res.Sources, res.Evidence = noted.all(), cited.all(), cited.witnessed() }()
 	tag := "data-" + strings.ToLower(rand.Text()[:10])
 	specs := o.Tools.Tokens(o.LLM.CountTokens)
 	retried := false

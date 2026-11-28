@@ -656,4 +656,20 @@ func TestCitedLinksAreNumberedOnceForTheWholeRun(t *testing.T) {
 	if Cite(bg, "https://a.example/") != 0 {
 		t.Fatal("a link was numbered outside a run")
 	}
+	Witness(bg, "outside a run")
+}
+
+func TestWhatToolsShowedIsKeptAsEvidence(t *testing.T) {
+	show := Tool{
+		Name: "show", Description: "Shows.", Parameters: json.RawMessage(`{"type":"object"}`),
+		Run: func(ctx context.Context, _ json.RawMessage) (string, error) {
+			Witness(ctx, "Truth Bowl dal makhani ₹99")
+			return "ok", nil
+		},
+	}
+	m := &model{locality: llm.Local, steps: []step{calls(call("a", "show", `{}`)), answer("ok")}}
+	res, err := Run(bg, Options{LLM: m, Tools: registry(t, show), Logger: quiet}, question)
+	if err != nil || !slices.Equal(res.Evidence, []string{"Truth Bowl dal makhani ₹99"}) {
+		t.Fatalf("evidence %q, %v", res.Evidence, err)
+	}
 }
