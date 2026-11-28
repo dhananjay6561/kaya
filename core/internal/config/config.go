@@ -2,6 +2,7 @@
 package config
 
 import (
+	"net"
 	"net/url"
 	"path/filepath"
 	"slices"
@@ -33,10 +34,38 @@ type Embeddings struct {
 	Voyage   Voyage
 }
 
+// Compatible is any provider with an OpenAI-compatible API (OpenAI, Gemini, OpenRouter, Ollama,
+// and Groq itself), set entirely from .env. Kind is "groq" for Groq's own defaults (address,
+// gpt-oss models and their exact token counts), or "compatible".
+type Compatible struct {
+	Kind          string
+	BaseURL       string
+	APIKey        string
+	HeavyModel    string
+	RoutineModel  string
+	ContextTokens int
+	// Local says the provider runs on DJ's own machine or network, so nothing is masked for it.
+	Local bool
+	// Effort says whether the provider takes reasoning_effort.
+	Effort bool
+	// TokenFactor multiplies Kaya's token counts, which are exact only for gpt-oss and OpenAI's
+	// o200k models, so other models' requests still fit.
+	TokenFactor float64
+}
+
 // LLM names the LLM provider and its settings.
 type LLM struct {
-	Provider string
-	Groq     Groq
+	Provider   string
+	Groq       Groq
+	Compatible Compatible
+	// Routine, when set, answers the routine tier instead: tagging, facts, planning and judging.
+	Routine *Compatible
+}
+
+// Transcribe is the OpenAI-compatible speech-to-text service voice notes go to.
+type Transcribe struct {
+	BaseURL string
+	APIKey  string
 }
 
 // Config holds core's settings, already validated.
@@ -64,6 +93,8 @@ type Config struct {
 	MediaDir string
 	// WebSearchURL is the SearXNG core searches the web through; "" turns web search off.
 	WebSearchURL string
+	// Transcribe is where voice notes are turned into text; no key turns transcription off.
+	Transcribe Transcribe
 }
 
 // Error lists every problem found in the config. It never includes the values themselves.
@@ -100,7 +131,7 @@ func Load(getenv func(string) string, baseDir string) (Config, error) {
 		Port:       3000,
 		TimeZone:   orDefault(getenv("TIMEZONE"), "UTC"),
 		LLM: LLM{
-			Provider: oneOf("LLM_PROVIDER", "groq", "groq", "stub"),
+			Provider: oneOf("LLM_PROVIDER", "groq", "groq", "compatible", "stub"),
 			Groq: Groq{
 				APIKey:        getenv("GROQ_API_KEY"),
 				HeavyModel:    orDefault(getenv("GROQ_MODEL_HEAVY"), "openai/gpt-oss-120b"),
@@ -203,6 +234,25 @@ func Load(getenv func(string) string, baseDir string) (Config, error) {
 	if cfg.LLM.Provider == "groq" && cfg.LLM.Groq.APIKey == "" {
 		fail("GROQ_API_KEY", "required")
 	}
+	if cfg.LLM.Provider == "compatible" {
+		cfg.LLM.Compatible = compatible("LLM_", "compatible", getenv, fail)
+	}
+	if kind := strings.TrimSpace(getenv("ROUTINE_LLM_PROVIDER")); kind != "" {
+		switch kind {
+		case "groq", "compatible":
+			r := compatible("ROUTINE_LLM_", kind, getenv, fail)
+			cfg.LLM.Routine = &r
+		default:
+			fail("ROUTINE_LLM_PROVIDER", "must be groq or compatible, or empty to use LLM_PROVIDER for everything")
+		}
+	}
+	cfg.Transcribe = Transcribe{
+		BaseURL: orDefault(strings.TrimSpace(getenv("TRANSCRIBE_BASE_URL")), "https://api.groq.com/openai/v1"),
+		APIKey:  orDefault(strings.TrimSpace(getenv("TRANSCRIBE_API_KEY")), cfg.LLM.Groq.APIKey),
+	}
+	if !webURL(cfg.Transcribe.BaseURL) {
+		fail("TRANSCRIBE_BASE_URL", "must be an http:// or https:// URL")
+	}
 	if cfg.Embeddings.Provider == "voyage" && cfg.Embeddings.Voyage.APIKey == "" {
 		fail("VOYAGE_API_KEY", "required")
 	}
@@ -279,4 +329,98 @@ func orDefault(value, fallback string) string {
 		return fallback
 	}
 	return value
+}
+
+// compatible reads one OpenAI-compatible provider from the settings that start with prefix, such
+// as LLM_BASE_URL or ROUTINE_LLM_BASE_URL. A routine provider has one model, ROUTINE_LLM_MODEL.
+func compatible(prefix, kind string, getenv func(string) string, fail func(key, reason string)) Compatible {
+	get := func(name string) string { return strings.TrimSpace(getenv(prefix + name)) }
+	c := Compatible{Kind: kind, BaseURL: get("BASE_URL"), APIKey: get("API_KEY"), ContextTokens: 4000, TokenFactor: 1.25}
+	if kind == "groq" {
+		c.BaseURL = orDefault(c.BaseURL, "https://api.groq.com/openai/v1")
+		c.TokenFactor, c.Effort = 1, true
+	}
+	if prefix == "ROUTINE_LLM_" {
+		model := get("MODEL")
+		if kind == "groq" {
+			model = orDefault(model, "openai/gpt-oss-20b")
+		}
+		c.HeavyModel, c.RoutineModel = model, model
+	} else {
+		c.HeavyModel = get("MODEL_HEAVY")
+		c.RoutineModel = orDefault(get("MODEL_ROUTINE"), c.HeavyModel)
+	}
+	switch {
+	case c.BaseURL == "":
+		fail(prefix+"BASE_URL", "required, such as https://api.openai.com/v1")
+	case !webURL(c.BaseURL):
+		fail(prefix+"BASE_URL", "must be an http:// or https:// URL")
+	}
+	if c.HeavyModel == "" {
+		if prefix == "ROUTINE_LLM_" {
+			fail(prefix+"MODEL", "required")
+		} else {
+			fail(prefix+"MODEL_HEAVY", "required")
+		}
+	}
+	switch get("LOCALITY") {
+	case "", "cloud":
+	case "local":
+		if !onThisNetwork(c.BaseURL) {
+			fail(prefix+"LOCALITY", "local is only for a model on this machine or network (localhost, host.docker.internal, a Compose service or a private address); this one would get chats unmasked")
+		} else {
+			c.Local = true
+		}
+	default:
+		fail(prefix+"LOCALITY", "must be cloud or local")
+	}
+	if c.APIKey == "" && !c.Local {
+		fail(prefix+"API_KEY", "required for a cloud provider")
+	}
+	switch get("REASONING_EFFORT") {
+	case "":
+	case "true":
+		c.Effort = true
+	case "false":
+		c.Effort = false
+	default:
+		fail(prefix+"REASONING_EFFORT", "must be true or false")
+	}
+	if raw := get("CONTEXT_TOKENS"); raw != "" {
+		n, err := strconv.Atoi(raw)
+		if err != nil || n < 500 {
+			fail(prefix+"CONTEXT_TOKENS", "must be a whole number of at least 500")
+		} else {
+			c.ContextTokens = n
+		}
+	}
+	if raw := get("TOKEN_FACTOR"); raw != "" {
+		f, err := strconv.ParseFloat(raw, 64)
+		if err != nil || f < 1 || f > 3 {
+			fail(prefix+"TOKEN_FACTOR", "must be a number from 1 to 3")
+		} else {
+			c.TokenFactor = f
+		}
+	}
+	return c
+}
+
+func webURL(raw string) bool {
+	u, err := url.Parse(raw)
+	return err == nil && (u.Scheme == "http" || u.Scheme == "https") && u.Host != "" && u.User == nil
+}
+
+// onThisNetwork says whether a URL's host is this machine, the Docker host, a Compose service
+// (a name with no dots) or a private address.
+func onThisNetwork(raw string) bool {
+	u, err := url.Parse(raw)
+	if err != nil {
+		return false
+	}
+	host := u.Hostname()
+	if host == "localhost" || host == "host.docker.internal" || (host != "" && !strings.Contains(host, ".") && !strings.Contains(host, ":")) {
+		return true
+	}
+	ip := net.ParseIP(host)
+	return ip != nil && (ip.IsLoopback() || ip.IsPrivate())
 }
