@@ -82,6 +82,7 @@ func WebSearch(s WebSearcher, private func(string) bool, zone *time.Location) ag
 			}
 			var b strings.Builder
 			for i, r := range found {
+				agent.Witness(ctx, r.Title+"\n"+r.Snippet+"\n"+site(r.URL))
 				n := agent.Cite(ctx, r.URL)
 				if n == 0 {
 					n = i + 1
