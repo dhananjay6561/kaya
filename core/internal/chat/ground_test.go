@@ -53,15 +53,20 @@ func TestPlainCapitalisedNamesAreChecked(t *testing.T) {
 	}
 }
 
-func TestAnUncitedAnswerGetsTheBestMatchingLink(t *testing.T) {
+func TestAnUncitedAnswerGetsTheLinkOfTheSiteItNames(t *testing.T) {
 	shown := []agent.Shown{
-		{Link: "https://courier.example/", Text: "DHL courier service in HSR Layout"},
-		{Link: "https://zomato.example/", Text: "Dal Makhani in Sector 6 - Zomato\nView all restaurants serving Dal Makhani"},
+		{Link: "https://www.magicbricks.com/sobha-daffodil-hsr-layout", Text: "Sobha Daffodil HSR Layout flats"},
+		{Link: "https://www.zomato.com/bangalore/delivery-in-hsr/dish-dal-makhani", Text: "Dal Makhani in HSR Layout - Zomato"},
+		{Link: "https://www.amazon.co.in/earbuds", Text: "Earbuds"},
 	}
-	if _, link := cite("Zomato pe Sector 6 ke dal makhani restaurants ki list hai.", []string{"https://courier.example/", "https://zomato.example/"}, shown); len(link) != 1 || link[0] != "https://zomato.example/" {
+	sources := []string{shown[0].Link, shown[1].Link, shown[2].Link}
+	if _, link := cite("HSR Layout mein Zomato pe dal makhani combo dekh lo.", sources, shown); len(link) != 1 || link[0] != shown[1].Link {
 		t.Fatalf("link %q", link)
 	}
-	if _, link := cite("Main theek hoon.", []string{"https://courier.example/"}, shown); link != nil {
-		t.Fatalf("an unrelated answer got %q", link)
+	if _, link := cite("Amazon pe 2,999 ka mil raha hai.", sources, shown); len(link) != 1 || link[0] != shown[2].Link {
+		t.Fatalf("amazon.co.in: %q", link)
+	}
+	if _, link := cite("HSR Layout mein dal makhani ke combos milte hain.", sources, shown); link != nil {
+		t.Fatalf("an answer naming no site got %q", link)
 	}
 }
