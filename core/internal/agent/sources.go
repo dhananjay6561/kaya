@@ -11,8 +11,12 @@ type sourcesKey struct{}
 type sources struct {
 	mu       sync.Mutex
 	links    []string
-	evidence []string
+	evidence []Shown
 }
+
+// Shown is public text a tool showed the model, such as a search result's title and snippet, and
+// the link it came from.
+type Shown struct{ Link, Text string }
 
 // Cite numbers a link for this run, so a tool can label a result [n] and the answer can cite it
 // by that number: the same link always gets the same number, and results of two calls never share
@@ -32,16 +36,16 @@ func Cite(ctx context.Context, link string) int {
 }
 
 // Witness keeps public text a tool showed the model, such as a search result's title and
-// snippet, so the answer can be checked against it: a name or a price the model gives that no
-// tool showed it was made up. Outside a run it does nothing.
-func Witness(ctx context.Context, text string) {
+// snippet, with the link it came from, so the answer can be checked against it: a name or a
+// price the model gives that no tool showed it was made up. Outside a run it does nothing.
+func Witness(ctx context.Context, link, text string) {
 	s, ok := ctx.Value(sourcesKey{}).(*sources)
 	if !ok {
 		return
 	}
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	s.evidence = append(s.evidence, text)
+	s.evidence = append(s.evidence, Shown{Link: link, Text: text})
 }
 
 func withSources(ctx context.Context) (context.Context, *sources) {
@@ -55,7 +59,7 @@ func (s *sources) all() []string {
 	return slices.Clone(s.links)
 }
 
-func (s *sources) witnessed() []string {
+func (s *sources) witnessed() []Shown {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	return slices.Clone(s.evidence)
