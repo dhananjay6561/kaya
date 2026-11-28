@@ -777,8 +777,10 @@ func TestOldConversationGivesWayToToolResults(t *testing.T) {
 	old := strings.Repeat("purani baat ", 60)
 	req := llm.Request{Messages: []llm.Message{
 		{Role: llm.System, Content: "system"},
-		{Role: llm.User, Content: old}, {Role: llm.Assistant, Content: old},
-		{Role: llm.User, Content: old}, {Role: llm.Assistant, Content: "newest answer"},
+		{Role: llm.User, Content: old},
+		{Role: llm.Assistant, Content: old},
+		{Role: llm.User, Content: old},
+		{Role: llm.Assistant, Content: "newest answer"},
 		{Role: llm.User, Content: "dal makhani kitne ki hai?"},
 	}}
 	m := &model{locality: llm.Local, steps: []step{calls(call("a", "read", `{}`)), answer("₹99")}}
