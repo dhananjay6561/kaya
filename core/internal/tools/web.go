@@ -35,6 +35,9 @@ func WebSearch(s WebSearcher, private func(string) bool, zone *time.Location) ag
 			"name a place, shop, product, price, number, date or result that is not written in them, even if it sounds " +
 			"likely. If they are only listing pages with no names or prices, say so plainly and tell them what the page " +
 			"has. If read_page is offered and the specifics they want are missing, open the most promising result first. " +
+			"For a question that needs comparing or a pick (best X under a budget, A vs B, which one to buy), open the two " +
+			"most useful results from different sites with read_page, combine what they say, say where they disagree, " +
+			"and end with your own pick and why in a line. " +
 			"Right after a fact you took from a result, write its number in square brackets, such as [2], never round " +
 			"ones: they never see it, it picks the link put under your answer. Never write a link, a web address or a " +
 			"list of sources. Results can be old or wrong: say so when they disagree or look out of date.",
