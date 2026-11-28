@@ -85,6 +85,8 @@ type Result struct {
 	Proposed *actions.Action
 	// Notes are lines tools wrote for DJ, shown under the answer as they are.
 	Notes []string
+	// Sources are the links tools numbered with Cite; source n is Sources[n-1].
+	Sources []string
 }
 
 // ErrTooManyRounds is a model that kept calling tools after it was told to answer.
@@ -133,7 +135,8 @@ func Run(ctx context.Context, o Options, r llm.Request) (res Result, err error) 
 	r.Tools = o.Tools.Specs()
 	r.Messages = append([]llm.Message(nil), r.Messages...)
 	ctx, noted := withNotes(ctx)
-	defer func() { res.Notes = noted.all() }()
+	ctx, cited := withSources(ctx)
+	defer func() { res.Notes, res.Sources = noted.all(), cited.all() }()
 	tag := "data-" + strings.ToLower(rand.Text()[:10])
 	specs := o.Tools.Tokens(o.LLM.CountTokens)
 	retried := false
