@@ -399,9 +399,15 @@ func (in *Inbox) step(ctx context.Context, lock *lockHolder, deliver Deliver, re
 		}
 		code := failureCode(err)
 		in.o.Logger.Error("a command failed", "command_id", row.id, "error_code", code, logging.Err(err))
-		return true, in.finish(db, row, code, "")
+		done, cancel := context.WithTimeout(context.WithoutCancel(ctx), dbWork)
+		defer cancel()
+		return true, in.finish(done, row, code, "")
 	}
-	return true, in.finish(db, row, "", handled.AnswerID)
+	// Answering can take a minute (searches, pages, waits on the model's rate limit), longer than
+	// db's window, so the command is finished in a window of its own.
+	done, cancel := context.WithTimeout(context.WithoutCancel(ctx), dbWork)
+	defer cancel()
+	return true, in.finish(done, row, "", handled.AnswerID)
 }
 
 // DatabaseAway reports whether a handler failed because the database is down, not because of its
