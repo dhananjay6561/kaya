@@ -459,7 +459,7 @@ Folders appear when a phase needs them; empty placeholders are not committed.
   each result's text with its link; the run returns them as `Result.Sources` and `Result.Evidence`.
   Chat takes every citation out of the answer (`[n]`, `【n】`, `【n†source】`, a round-bracket list
   ending a sentence) and puts one bare link under it: the first result cited, else the result
-  sharing the most words with the answer, else none. Before that, a grounding check: every price,
+  whose site the answer names ("Zomato pe …"), else none (decision 107). Before that, a grounding check: every price,
   percentage, number of three digits or more and name (bold, or a run of Capitalised Words) must be
   in the evidence or DJ's words; failures go to one small rewrite request, and what still fails is
   dropped line by line (decision 100); the fix stays quiet and in Latin letters, and
