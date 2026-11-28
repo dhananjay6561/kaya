@@ -12,6 +12,7 @@ import (
 	"slices"
 	"sort"
 	"strings"
+	"time"
 
 	"github.com/santhosh-tekuri/jsonschema/v6"
 	"golang.org/x/text/language"
@@ -47,6 +48,12 @@ type Tool struct {
 	// MaxCalls is the most times the tool runs while answering one message; 0 means no limit
 	// beyond the loop's own.
 	MaxCalls int
+	// Timeout bounds one call of this tool instead of the loop's ToolTimeout.
+	Timeout time.Duration
+	// Links names arguments that must be a link DJ wrote himself or one a tool returned while
+	// answering this message, so text in a page or a chat can never send Kaya to a link of its
+	// own making, such as one carrying his details out.
+	Links []string
 }
 
 // Problem is a failure the model is told about in the tool's own words, so it can try another way.
