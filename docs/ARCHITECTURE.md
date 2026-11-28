@@ -31,7 +31,9 @@ kaya/
 │       ├── channel/        DJ's own chat: the command inbox and sends through send_requests
 │       ├── commands/       slash commands and the rules for late and failed commands
 │       ├── pause/, status/ /pause and /resume, and /status
-│       ├── llm/            the Provider interface, Groq, the stub; o200k/ counts gpt-oss tokens
+│       ├── llm/            the Provider interface; one OpenAI-compatible Client (Groq by default),
+│       │                   a tiered provider for a separate routine tier, the stub; o200k/ counts
+│       │                   gpt-oss tokens
 │       ├── memory/         the conversation (exchanges) and the context package
 │       ├── chat/           system prompt, replies, WhatsApp formatting
 │       ├── agent/          tool calling: the registry of tools and the loop that runs their calls
@@ -465,6 +467,18 @@ Folders appear when a phase needs them; empty placeholders are not committed.
   (`services/searxng/settings.yml`) list the engines, Google, DuckDuckGo and Yahoo (decisions 95,
   98). On a Mac it runs outside Docker as a login item and core reaches it through
   `host.docker.internal` (decision 96).
+- **Model providers.** `llm.Client` speaks the OpenAI-compatible chat completions API; providers
+  differ only in settings. `LLM_PROVIDER=groq` keeps Groq's defaults (its address, gpt-oss models
+  checked, exact o200k token counts, `reasoning_effort` and `include_reasoning`); `compatible` takes
+  `LLM_BASE_URL`, `LLM_API_KEY`, the models and `LLM_CONTEXT_TOKENS`, sends `reasoning_effort` only
+  when `LLM_REASONING_EFFORT=true`, multiplies token counts by `LLM_TOKEN_FACTOR` (default 1.25)
+  since other models tokenize differently, sends no `Authorization` header without a key, and is
+  named in logs and errors by its host. `LLM_LOCALITY=local` (no masking) is refused unless the
+  address is this machine, `host.docker.internal`, a Compose service name or a private address.
+  `ROUTINE_LLM_*` gives the routine tier its own provider: a `tiered` provider sends each request by
+  tier, counts tokens as the larger of the two, takes the smaller context, and is cloud if either
+  is. Voice notes use `TRANSCRIBE_BASE_URL` and `TRANSCRIBE_API_KEY` (Groq and `GROQ_API_KEY` by
+  default); with no key, voice notes are not transcribed (decision 103).
 - **Rate limits.** Groq's `Retry-After` is waited out whenever the call still fits its 45-second
   deadline; a longer one fails at once with the "limit" notice, and the error says how long Groq
   asked to wait (decisions 99, 102).
