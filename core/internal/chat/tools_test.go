@@ -281,3 +281,56 @@ func TestReplyPutsTheLinksItCitedUnderTheAnswer(t *testing.T) {
 		t.Fatalf("got %q", got.Text)
 	}
 }
+
+func groundedSearch(t *testing.T) *agent.Registry {
+	t.Helper()
+	r, err := agent.NewRegistry(agent.Tool{
+		Name: "search", Description: "Searches.", Parameters: json.RawMessage(`{"type":"object"}`),
+		Run: func(ctx context.Context, _ json.RawMessage) (string, error) {
+			agent.Witness(ctx, "Truth Bowl HSR\nDal Makhani Bowl ₹99\nmagicpin.in")
+			agent.Cite(ctx, "https://magicpin.in/truth-bowl")
+			return "[1] Truth Bowl HSR (magicpin.in)\nDal Makhani Bowl ₹99", nil
+		},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	return r
+}
+
+func searchThenInvent(fix func(r llm.Request) (llm.Completion, error)) func(r llm.Request) (llm.Completion, error) {
+	return func(r llm.Request) (llm.Completion, error) {
+		switch {
+		case r.Messages[0].Content == groundPrompt:
+			return fix(r)
+		case toolMessage(r) == "":
+			return llm.Completion{ToolCalls: []llm.ToolCall{{ID: "c1", Name: "search", Arguments: `{}`}}, FinishReason: llm.FinishToolCalls}, nil
+		}
+		return llm.Completion{Text: "Do options:\n\n- **Truth Bowl** ka bowl ₹99 [1]\n- **Shree Krishna Dhaba** ₹120", FinishReason: llm.FinishStop}, nil
+	}
+}
+
+func TestReplyTakesOutWhatTheSearchDidNotShow(t *testing.T) {
+	var asked string
+	model := &scripted{responses: searchThenInvent(func(r llm.Request) (llm.Completion, error) {
+		asked = r.Messages[1].Content
+		return llm.Completion{Text: "Do options:\n\n- **Truth Bowl** ka bowl ₹99\n\nBaaki jagah ke naam search mein nahi dikhe.", FinishReason: llm.FinishStop}, nil
+	})}
+	got := reply(t, newChat(t, Options{LLM: model, Tools: groundedSearch(t)}), "dal makhani kahan se?")
+	if !strings.HasSuffix(asked, "Not in the search results: ₹120; Shree Krishna Dhaba") || strings.Contains(asked, "[1]") {
+		t.Fatalf("asked %q", asked)
+	}
+	if want := "Do options:\n\n- *Truth Bowl* ka bowl ₹99\n\nBaaki jagah ke naam search mein nahi dikhe.\n\nhttps://magicpin.in/truth-bowl"; got.Text != want {
+		t.Fatalf("got %q", got.Text)
+	}
+}
+
+func TestReplyDropsMadeUpLinesWhenTheFixFails(t *testing.T) {
+	model := &scripted{responses: searchThenInvent(func(llm.Request) (llm.Completion, error) {
+		return llm.Completion{}, &llm.Error{Provider: "groq", Code: llm.RateLimited}
+	})}
+	got := reply(t, newChat(t, Options{LLM: model, Tools: groundedSearch(t)}), "dal makhani kahan se?")
+	if want := "Do options:\n\n- *Truth Bowl* ka bowl ₹99\n\nhttps://magicpin.in/truth-bowl"; got.Text != want {
+		t.Fatalf("got %q", got.Text)
+	}
+}
