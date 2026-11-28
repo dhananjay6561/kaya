@@ -334,3 +334,24 @@ func TestReplyDropsMadeUpLinesWhenTheFixFails(t *testing.T) {
 		t.Fatalf("got %q", got.Text)
 	}
 }
+
+func TestReplyRewritesDevanagariWhenTheOwnerWritesInLatin(t *testing.T) {
+	var rewrite llm.Request
+	model := &scripted{responses: func(r llm.Request) (llm.Completion, error) {
+		if r.Messages[0].Content == latinPrompt {
+			rewrite = r
+			return llm.Completion{Text: "Zomato pe dekh lo, inka combo sasta hai.", FinishReason: llm.FinishStop}, nil
+		}
+		return llm.Completion{Text: "Zomato pe dekh lo, इनका combo sasta hai.", FinishReason: llm.FinishStop}, nil
+	}}
+	got := reply(t, newChat(t, Options{LLM: model}), "dal makhani kahan se mangau")
+	if got.Text != "Zomato pe dekh lo, inka combo sasta hai." || rewrite.Tier != llm.Routine {
+		t.Fatalf("got %q, rewrite %+v", got.Text, rewrite)
+	}
+	hindi := &scripted{responses: func(llm.Request) (llm.Completion, error) {
+		return llm.Completion{Text: "ठीक है, कल मिलते हैं।", FinishReason: llm.FinishStop}, nil
+	}}
+	if got := reply(t, newChat(t, Options{LLM: hindi}), "कल मिलते हैं?"); got.Text != "ठीक है, कल मिलते हैं।" || len(hindi.requests) != 1 {
+		t.Fatalf("a Devanagari question's answer was rewritten: %q", got.Text)
+	}
+}
