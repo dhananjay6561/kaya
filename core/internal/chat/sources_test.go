@@ -1,50 +1,27 @@
 package chat
 
-import (
-	"slices"
-	"testing"
-)
+import "testing"
 
-func TestCitationsBecomeLinksUnderTheAnswer(t *testing.T) {
+func TestCitationsAreHiddenAndOneLinkGoesUnderTheAnswer(t *testing.T) {
 	sources := []string{"https://a.example/", "https://b.example/", "https://c.example/"}
-	cases := []struct {
-		name, text, want string
-		links            []string
-	}{
-		{
-			"renumbered in the order they appear",
-			"Base model is ₹82,900 [3]. Pro is ₹1,34,900 [1].",
-			"Base model is ₹82,900 [1]. Pro is ₹1,34,900 [2].",
-			[]string{"[1] https://c.example/", "[2] https://a.example/"},
-		},
-		{
-			"one source cited twice and a list",
-			"Price [2], offers [2, 3] [2][3].",
-			"Price [1], offers [1][2] [1][2].",
-			[]string{"[1] https://b.example/", "[2] https://c.example/"},
-		},
-		{
-			"numbers that name no source are dropped",
-			"Made up [7]. Real [1] [0].",
-			"Made up. Real [1].",
-			[]string{"[1] https://a.example/"},
-		},
-		{
-			"gpt-oss's own brackets",
-			"Base ₹82,900【3】, Air ₹94,990【1†source】.",
-			"Base ₹82,900[1], Air ₹94,990[2].",
-			[]string{"[1] https://c.example/", "[2] https://a.example/"},
-		},
-		{"nothing cited gets the first source", "RCB won.", "RCB won.", []string{"Source: https://a.example/"}},
-		{"only made-up numbers", "RCB won [8].", "RCB won.", []string{"Source: https://a.example/"}},
+	cases := []struct{ name, text, want, link string }{
+		{"the first cited source", "Magicpin pe ₹99 dikh raha hai [3]. Swiggy pe ₹120 [1].", "Magicpin pe ₹99 dikh raha hai. Swiggy pe ₹120.", "https://c.example/"},
+		{"a list of numbers", "Abhi ₹39,999 se mil raha hai [2, 3].", "Abhi ₹39,999 se mil raha hai.", "https://b.example/"},
+		{"gpt-oss's own brackets", "Base ₹82,900【3】, Air ₹94,990【1†source】.", "Base ₹82,900, Air ₹94,990.", "https://c.example/"},
+		{"numbers that name no source", "Made up [7], real [2].", "Made up, real.", "https://b.example/"},
+		{"round brackets at the end", "Pro Max ₹1,34,900 tak jaata hai. (2,\u202f3)\n\nAur kuch?", "Pro Max ₹1,34,900 tak jaata hai.\n\nAur kuch?", "https://b.example/"},
+		{"round brackets closing a sentence", "Sab mila ke ₹150 (1).", "Sab mila ke ₹150.", "https://a.example/"},
+		{"round brackets mid-sentence stay", "Step (2) mein checkout karo.", "Step (2) mein checkout karo.", "https://a.example/"},
+		{"a round number that names no source stays", "Pack of (12)", "Pack of (12)", "https://a.example/"},
+		{"nothing cited gets the top result", "RCB jeeti.", "RCB jeeti.", "https://a.example/"},
 	}
 	for _, c := range cases {
-		got, links := cite(c.text, sources)
-		if got != c.want || !slices.Equal(links, c.links) {
-			t.Errorf("%s: got %q %q, want %q %q", c.name, got, links, c.want, c.links)
+		got, link := cite(c.text, sources)
+		if got != c.want || link != c.link {
+			t.Errorf("%s: got %q %q, want %q %q", c.name, got, link, c.want, c.link)
 		}
 	}
-	if got, links := cite("Step [1] then [2].", nil); got != "Step [1] then [2]." || links != nil {
-		t.Errorf("without sources: %q %q", got, links)
+	if got, link := cite("Step [1] then [2].", nil); got != "Step [1] then [2]." || link != "" {
+		t.Errorf("without sources: %q %q", got, link)
 	}
 }
