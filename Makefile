@@ -1,7 +1,7 @@
 .DEFAULT_GOAL := help
 .PHONY: help install dev dev-core dev-gateway lint lint-core lint-gateway lint-kit format test test-core \
 	test-gateway test-kit build build-core build-gateway check clean \
-	up down db logs ps pair pair-dev media send data-dirs migrate rollback migration test-db check-network
+	up down db logs ps pair pair-dev media send data-dirs migrate rollback migration test-db check-network searxng-mac searxng-mac-stop
 
 GOLANGCI_LINT_VERSION := v2.15.0
 GOLANGCI_LINT := go run github.com/golangci/golangci-lint/v2/cmd/golangci-lint@$(GOLANGCI_LINT_VERSION)
@@ -90,6 +90,12 @@ logs: ## follow logs from every service
 
 ps: ## show the status of every service
 	$(COMPOSE) ps
+
+searxng-mac: ## on a Mac: install and run SearXNG outside Docker, as a login item (web search)
+	@./scripts/searxng-mac.sh start
+
+searxng-mac-stop: ## on a Mac: stop SearXNG and remove it from login items
+	@./scripts/searxng-mac.sh stop
 
 check-network: ## warn when this machine sends bigger packets than the internet link carries (HOST= to probe another address)
 	@./scripts/check-network.sh
