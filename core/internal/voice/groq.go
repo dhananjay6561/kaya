@@ -43,7 +43,8 @@ func (e *Error) Error() string { return "transcription failed: " + e.Code }
 // rather than in Devanagari.
 const hint = "Haan bhai, kal milte hain. Main office mein hoon, meeting ke baad call karta hoon. OK, sounds good."
 
-// Groq transcribes with a Whisper model on Groq.
+// Groq transcribes with a Whisper model on Groq, or on any service with an OpenAI-compatible
+// /audio/transcriptions endpoint.
 type Groq struct {
 	apiKey, model, baseURL string
 	client                 *http.Client
