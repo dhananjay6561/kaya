@@ -178,10 +178,12 @@ contact, and it works with everything your WhatsApp account can see, plus the we
   masked; the text it gives back is masked like any message before a model sees it. Older voice
   notes from before this was switched on are left alone.
 - **Web search.** Ask about anything recent or changing, "iphone 17 ka price kya hai abhi?" or
-  "who won the IPL final?", and Kaya searches the web and answers from what it found, marking each
-  fact with a number like [1]. The links come under the answer, put there by Kaya's code from the
-  search results, so they are never made up; an answer that cites nothing still gets the top
-  result. Small talk and things it already knows never trigger a search. Search runs through
+  "who won the IPL final?", and Kaya searches the web and answers the way a friend who just checked
+  would ("Reliance Digital pe ₹82,900 se start ho raha hai"), with the one link it used under the
+  answer. That link is put there by Kaya's code from the search results, so it is never made up.
+  Every price, number and name in an answer is checked against what the search actually showed, and
+  anything it did not show is taken out before you see it. Small talk and things it already knows
+  never trigger a search. Search runs through
   [SearXNG](https://github.com/searxng/searxng), a search engine you host yourself that asks
   Google, DuckDuckGo and Yahoo at once, so there is no search account or API key, and no single
   company gets all your queries.
