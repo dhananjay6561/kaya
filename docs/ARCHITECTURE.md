@@ -452,11 +452,17 @@ Folders appear when a phase needs them; empty placeholders are not committed.
   line and clipped. Before a query leaves, the restored query is run through masking: if anything
   would be masked (a phone number, email, address or code), the tool refuses and tells the model
   to search without it. A search no engine answered, or SearXNG being down, is told to the model
-  as "web search is not working", never as an empty result. The tool asks the model to end its
-  answer with the bare links it relied on, only links from the results (decision 94). SearXNG needs
-  no account or key; its settings (`services/searxng/settings.yml`) list the engines (decision 95).
-  On a Mac it runs outside Docker as a login item and core reaches it through
+  as "web search is not working", never as an empty result. Results are labelled `[n] Title
+  (site, day)` with no link: `agent.Cite` numbers each link once per run and the run returns them
+  as `Result.Sources`. Chat renumbers the answer's citations (`[n]`, or gpt-oss's `【n】` and
+  `【n†source】`) in order of appearance, drops numbers that name no result, and puts the cited
+  links under the answer after clipping; an answer that cites none gets the top result as
+  `Source: link` (decision 98). SearXNG needs no account or key; its settings
+  (`services/searxng/settings.yml`) list the engines, Google, DuckDuckGo and Yahoo (decisions 95,
+  98). On a Mac it runs outside Docker as a login item and core reaches it through
   `host.docker.internal` (decision 96).
+- **Rate limits.** Groq's `Retry-After` is waited out when it is 30 seconds or less and fits in
+  the call's 45-second deadline; a longer one fails at once with the "limit" notice (decision 99).
 - **History sync.** Each history chunk WhatsApp announces becomes a row in `history_jobs`, stored
   in the transaction that acknowledges the announcement. A single worker downloads the chunk,
   stores it in batches of at most 200 messages (a savepoint per message, so one bad message
