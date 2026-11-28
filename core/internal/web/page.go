@@ -55,7 +55,7 @@ const (
 	articleFloor = 800
 	// minPageText is less text than any real page has: a page built by scripts gives only its menus.
 	minPageText = 200
-	userAgent    = "Mozilla/5.0 (compatible; Kaya/1.0; personal assistant)"
+	userAgent   = "Mozilla/5.0 (compatible; Kaya/1.0; personal assistant)"
 )
 
 // Fetcher reads public web pages.
