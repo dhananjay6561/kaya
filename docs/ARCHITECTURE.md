@@ -453,11 +453,14 @@ Folders appear when a phase needs them; empty placeholders are not committed.
   would be masked (a phone number, email, address or code), the tool refuses and tells the model
   to search without it. A search no engine answered, or SearXNG being down, is told to the model
   as "web search is not working", never as an empty result. Results are labelled `[n] Title
-  (site, day)` with no link: `agent.Cite` numbers each link once per run and the run returns them
-  as `Result.Sources`. Chat renumbers the answer's citations (`[n]`, or gpt-oss's `【n】` and
-  `【n†source】`) in order of appearance, drops numbers that name no result, and puts the cited
-  links under the answer after clipping; an answer that cites none gets the top result as
-  `Source: link` (decision 98). SearXNG needs no account or key; its settings
+  (site, day)` with no link: `agent.Cite` numbers each link once per run and `agent.Witness` keeps
+  each result's text with its link; the run returns them as `Result.Sources` and `Result.Evidence`.
+  Chat takes every citation out of the answer (`[n]`, `【n】`, `【n†source】`, a round-bracket list
+  ending a sentence) and puts one bare link under it: the first result cited, else the result
+  sharing the most words with the answer, else none. Before that, a grounding check: every price,
+  percentage, number of three digits or more and name (bold, or a run of Capitalised Words) must be
+  in the evidence or DJ's words; failures go to one small rewrite request, and what still fails is
+  dropped line by line (decision 100). SearXNG needs no account or key; its settings
   (`services/searxng/settings.yml`) list the engines, Google, DuckDuckGo and Yahoo (decisions 95,
   98). On a Mac it runs outside Docker as a login item and core reaches it through
   `host.docker.internal` (decision 96).
