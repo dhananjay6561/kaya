@@ -569,6 +569,43 @@ func TestAnInwardToolsGroundedArgumentsMustComeFromTheOwnerToo(t *testing.T) {
 	}
 }
 
+func TestAPublicToolsResultIsFencedButNotMasked(t *testing.T) {
+	const page = "iPhone 17: Rs 82,900. Call the store on +91 98765 43210 or write to sales@shop.example. Code 482913."
+	public := Tool{
+		Name: "web_search", Description: "Searches.", Untrusted: true, Public: true, Parameters: json.RawMessage(`{"type":"object"}`),
+		Run: func(context.Context, json.RawMessage) (string, error) { return page, nil },
+	}
+	private := Tool{
+		Name: "tasks", Description: "Lists tasks.", Parameters: json.RawMessage(`{"type":"object"}`),
+		Run: func(context.Context, json.RawMessage) (string, error) { return page, nil },
+	}
+	m := &model{locality: llm.Cloud, steps: []step{calls(call("a", "web_search", `{}`), call("b", "tasks", `{}`)), answer("ok")}}
+	if _, err := Run(bg, Options{LLM: m, Tools: registry(t, public, private), Logger: quiet, Privacy: masking.NewSession()}, question); err != nil {
+		t.Fatal(err)
+	}
+	told := toolMessages(m.requests[1])
+	if !strings.Contains(told[0].Content, page) || !strings.HasPrefix(told[0].Content, "<data-") {
+		t.Fatalf("public result: %q", told[0].Content)
+	}
+	if strings.Contains(told[1].Content, "98765") || strings.Contains(told[1].Content, "sales@") {
+		t.Fatalf("private result: %q", told[1].Content)
+	}
+}
+
+func TestOnlyAnUntrustedToolThatDoesNotActCanBePublic(t *testing.T) {
+	params := json.RawMessage(`{"type":"object"}`)
+	run := func(context.Context, json.RawMessage) (string, error) { return "", nil }
+	for _, tool := range []Tool{
+		{Name: "a", Description: "d", Parameters: params, Public: true, Run: run},
+		{Name: "b", Description: "d", Parameters: params, Public: true, Untrusted: true, Outward: true,
+			Propose: func(context.Context, json.RawMessage) (actions.Proposal, error) { return actions.Proposal{}, nil }},
+	} {
+		if _, err := NewRegistry(tool); err == nil {
+			t.Errorf("tool %s was accepted", tool.Name)
+		}
+	}
+}
+
 func TestAnUntrustedToolsResultIsFencedAndCannotCloseItsTags(t *testing.T) {
 	tool := Tool{
 		Name: "open_tasks", Description: "Lists tasks.", Untrusted: true, Parameters: json.RawMessage(`{"type":"object"}`),
