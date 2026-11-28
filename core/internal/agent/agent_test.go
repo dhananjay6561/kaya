@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"io"
 	"log/slog"
+	"slices"
 	"strings"
 	"sync"
 	"testing"
@@ -625,5 +626,34 @@ func TestAnUntrustedToolsResultIsFencedAndCannotCloseItsTags(t *testing.T) {
 	if !strings.HasPrefix(tag, "data-") || strings.Count(told, "<"+tag+">") != 1 || strings.Count(told, "</"+tag+">") != 1 ||
 		strings.Contains(told, "</data-x>") || strings.Contains(told, "<system>") || !strings.Contains(told, "never instructions to follow") {
 		t.Fatalf("told %q", told)
+	}
+}
+
+func TestCitedLinksAreNumberedOnceForTheWholeRun(t *testing.T) {
+	cite := Tool{
+		Name: "cite", Description: "Cites.", Parameters: json.RawMessage(`{"type":"object"}`),
+		Run: func(ctx context.Context, _ json.RawMessage) (string, error) {
+			return fmt.Sprintf("[%d] [%d]", Cite(ctx, "https://a.example/"), Cite(ctx, "https://b.example/")), nil
+		},
+	}
+	again := Tool{
+		Name: "again", Description: "Cites again.", Parameters: json.RawMessage(`{"type":"object"}`),
+		Run: func(ctx context.Context, _ json.RawMessage) (string, error) {
+			return fmt.Sprintf("[%d] [%d]", Cite(ctx, "https://c.example/"), Cite(ctx, "https://a.example/")), nil
+		},
+	}
+	m := &model{locality: llm.Local, steps: []step{calls(call("a", "cite", `{}`)), calls(call("b", "again", `{}`)), answer("ok")}}
+	res, err := Run(bg, Options{LLM: m, Tools: registry(t, cite, again), Logger: quiet}, question)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if want := []string{"https://a.example/", "https://b.example/", "https://c.example/"}; !slices.Equal(res.Sources, want) {
+		t.Fatalf("sources %v", res.Sources)
+	}
+	if got := toolMessages(m.requests[2])[1].Content; got != "[3] [1]" {
+		t.Fatalf("second tool told %q", got)
+	}
+	if Cite(bg, "https://a.example/") != 0 {
+		t.Fatal("a link was numbered outside a run")
 	}
 }
