@@ -13,6 +13,7 @@ kept outside this repository.
 | `services/docs` (later) | Python | PPT and PDF generation, Drive upload |
 | `services/voice` (later) | Python (Pipecat) | Live phone calls |
 | `db` | Postgres + pgvector | All shared data |
+| `searxng` | Python ([SearXNG](https://github.com/searxng/searxng), the official image pinned by digest) | Web search: asks several engines, answers core in JSON. On a Mac it runs outside Docker (`scripts/searxng-mac.sh`) |
 
 Each service does one job in the language with the best libraries for it, and can be restarted,
 updated or replaced on its own. Replacing WhatsApp's transport (for example with the official API)
@@ -34,7 +35,9 @@ kaya/
 │       ├── memory/         the conversation (exchanges) and the context package
 │       ├── chat/           system prompt, replies, WhatsApp formatting
 │       ├── agent/          tool calling: the registry of tools and the loop that runs their calls
-│       ├── tools/          the tools the chat model can call (world_clock, open_tasks)
+│       ├── tools/          the tools the chat model can call (world_clock, open_tasks, reminders,
+│       │                   send_message, web_search)
+│       ├── web/            the public web: the SearXNG client
 │       ├── alerts/         heads-ups in DJ's own chat: the alerter and the /alerts switch
 │       ├── actions/        confirm-before-act: pending actions, DJ's yes or no, running them
 │       ├── jobs/           reminders and scheduled jobs: the schedule maths, the store, the scheduler
@@ -52,13 +55,13 @@ kaya/
 │   └── internal/           config, whatsapp, ingest, events, send, media, testdb
 ├── kit/                    Go code both services share (its own module): logging, httpapi (the
 │                           /health server), envfile, store (the Postgres pool), testdb
-├── services/               Python services (docs, voice), added in their stages
+├── services/               searxng/settings.yml now; Python services (docs, voice) in their stages
 ├── contracts/              JSON Schemas for every message between services, and the Go types and
 │                           validator for them (its own module)
 ├── db/migrations/          plain SQL migrations (dbmate)
 ├── deploy/                 Victus host setup, compose override, backups, hosting checklist
 ├── docs/                   spec, architecture, infra, decisions, phases
-├── scripts/                host checks run through make (check-network: link MTU)
+├── scripts/                host scripts run through make (check-network: link MTU; searxng-mac)
 ├── compose.yml             base stack; compose.mac.yml / deploy/compose.victus.yml per machine
 ├── Makefile                one entry point for dev, lint, test and build across languages
 └── .env.example            every setting for every service
@@ -345,8 +348,11 @@ Folders appear when a phase needs them; empty placeholders are not committed.
   again once. The tools' schemas and an eighth of the budget for results come off what the context
   package may fill, and every later request stays within the budget too: results share the room it
   leaves (500 tokens each at most), and a call with too little room is answered "not run". Only the answer joins the conversation, not the
-  calls. Today's tools only read: `world_clock` (the time in IANA zones, now or at a given time, and
-  how far each is from DJ's zone) and `open_tasks` (what `/tasks` shows, task text marked as data).
+  calls. The reading tools are `world_clock` (the time in IANA zones, now or at a given time, and
+  how far each is from DJ's zone), `open_tasks` (what `/tasks` shows, task text marked as data),
+  the reminder tools, and `web_search`. A tool marked `Public` (only `web_search`) gives public
+  text: its results skip masking, so prices and years stay readable, but they are fenced as data
+  like any untrusted result; only an untrusted tool that does not act may be public.
 - **Alerts.** Tagging's answer gives each message an alert level (`now`, `later` or `none`) and, for
   an alert, a one-line note for DJ, which gets placeholders put back and is queued in `alerts` in
   the batch's transaction; DJ's own messages never are, an edit updates an alert not yet sent, and
@@ -441,6 +447,14 @@ Folders appear when a phase needs them; empty placeholders are not committed.
   transcript (the worker wakes it), then hands the transcript on as the command, or a note that it
   could not be heard. Search, tagging and summaries share one rule for a readable message,
   `search.Readable`, under which a voice note with a transcript counts and reads "(voice note) …".
+- **Web search.** `web_search` asks SearXNG's JSON API (`WEB_SEARCH_URL`; empty turns the tool
+  off) for up to 6 results, each link once, http and https only, titles and snippets put on one
+  line and clipped. Before a query leaves, the restored query is run through masking: if anything
+  would be masked (a phone number, email, address or code), the tool refuses and tells the model
+  to search without it. A search no engine answered, or SearXNG being down, is told to the model
+  as "web search is not working", never as an empty result. The tool asks the model to end its
+  answer with the bare links it relied on, only links from the results. SearXNG keeps no account
+  and sends no tracking; its settings (`services/searxng/settings.yml`) list the engines.
 - **History sync.** Each history chunk WhatsApp announces becomes a row in `history_jobs`, stored
   in the transaction that acknowledges the announcement. A single worker downloads the chunk,
   stores it in batches of at most 200 messages (a savepoint per message, so one bad message

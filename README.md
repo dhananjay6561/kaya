@@ -177,6 +177,14 @@ contact, and it works with everything your WhatsApp account can see.
   letters the way your chats are written. The audio goes to Groq as it is, since audio cannot be
   masked; the text it gives back is masked like any message before a model sees it. Older voice
   notes from before this was switched on are left alone.
+- **Web search.** Ask about anything recent or changing, "iphone 17 ka price kya hai abhi?" or
+  "who won the IPL final?", and Kaya searches the web, answers from what it found, and ends with
+  the links it relied on. Search runs through [SearXNG](https://github.com/searxng/searxng), a
+  self-hosted search engine that asks Google, Bing, DuckDuckGo and others, so there is no search
+  account or API key and no single company sees all your queries. Results are public text, so
+  prices and numbers reach the model as they are; they are still marked as data, never
+  instructions. A query that would carry a private detail (a phone number, email, address or code)
+  is refused before it leaves your machine. Small talk never triggers a search.
 - **Least-privilege database logins.** The gateway and core each have their own Postgres role.
   Core, the part that will talk to an LLM, can read chats but cannot see the WhatsApp session, its
   encryption keys, or the keys needed to fetch media.
@@ -192,7 +200,7 @@ contact, and it works with everything your WhatsApp account can see.
 
 In build order. Status for each stage is in the [roadmap](#project-status-and-roadmap).
 
-- Web search with SearXNG, reading pages, and research answers with links
+- Reading a page from a link, and research answers that read a few pages and cite them
 - Gmail, Google Calendar and Google Drive
 - PPT and PDF decks made from a topic or a chat, uploaded to Drive, with the link sent back
 - Acting on websites you are logged into, and ordering with spending caps
@@ -247,6 +255,7 @@ language with the best libraries for it, and they talk only through versioned co
 | `core` | Go | The agent: commands, LLM calls, tools, safety rules, confirmations, scheduler |
 | `db` | Postgres 18 + pgvector | All shared data, including the WhatsApp session |
 | `migrate` | dbmate | Applies `db/migrations/` once before the services start |
+| `searxng` | Python ([SearXNG](https://github.com/searxng/searxng)) | Web search: asks several search engines and returns their results as JSON to core. A Compose service on Linux; on a Mac it runs outside Docker (`make searxng-mac`) |
 
 ### System overview
 
@@ -256,13 +265,14 @@ flowchart LR
     llm["LLM provider<br/>Groq"]
     embed["Embeddings<br/>Voyage"]
     stt["Transcription<br/>Groq Whisper"]
+    searxng["searxng<br/>web search"]
+    engines["Search engines<br/>Google, Bing, DuckDuckGo"]
 
     subgraph host["Your machine, Docker Compose"]
         gateway["gateway<br/>Go, whatsmeow"]
         core["core<br/>Go agent"]
         db[("db<br/>Postgres 18, pgvector")]
         migrate["migrate<br/>dbmate, one-shot"]
-        searxng["searxng<br/>web search"]
         docs["docs<br/>PPT and PDF"]
         browser["browser<br/>Playwright, noVNC"]
         voice["voice<br/>phone calls"]
@@ -278,19 +288,21 @@ flowchart LR
     core -->|"masked context"| llm
     core -->|"masked chunks"| embed
     core -->|"voice notes"| stt
-    core -.-> searxng
+    core -->|"queries"| searxng
+    searxng --> engines
     core -.-> docs
     core -.-> browser
     core -.-> voice
 
     classDef planned stroke-dasharray: 5 5
-    class searxng,docs,browser,voice planned
+    class docs,browser,voice planned
 ```
 
 *Figure 1. System architecture. Solid boxes and lines are built today: the gateway, core, Postgres,
 the migration step, events from the gateway to core, send requests from core to the gateway, and
-core asking Groq with masked context, Groq Whisper for voice note transcripts and Voyage for vectors of masked chunks. Dashed boxes and
-lines are planned: the search, docs, browser and voice services.*
+core asking Groq with masked context, Groq Whisper for voice note transcripts, Voyage for vectors of masked chunks, and SearXNG for
+web searches. SearXNG is drawn outside the Compose stack because on a Mac it runs on the Mac itself; on Linux it is a Compose
+service. Dashed boxes and lines are planned: the docs, browser and voice services.*
 
 ### How the gateway and core talk
 
@@ -614,6 +626,7 @@ target instead of adding rows.
 | Contracts | JSON Schema 2020-12, validated with santhosh-tekuri/jsonschema in a shared Go module |
 | LLM | Groq behind a provider interface (`openai/gpt-oss-120b` and `openai/gpt-oss-20b`) |
 | Embeddings | Voyage `voyage-4` behind a provider interface, 1024 dimensions, stored as `halfvec` with an HNSW index |
+| Web search | Self-hosted SearXNG (Google, Bing, DuckDuckGo, Startpage, Wikipedia), pinned by digest |
 | Runtime | Docker Compose, distroless images, non-root, read-only root filesystem |
 | Quality | golangci-lint, `go test -race`, golden files from the TypeScript core, SQL schema tests, GitHub Actions |
 
@@ -628,7 +641,7 @@ kaya/
 │                       embeddings (Voyage, stub), search (index, search, excerpts), facts,
 │                       tagging (tags and tasks), summary, agent (tool registry and loop), tools,
 │                       alerts, actions (confirm-before-act), jobs (reminders, scheduler),
-│                       voice (transcription)
+│                       voice (transcription), web (SearXNG client)
 ├── gateway/            Go WhatsApp gateway (its own Go module)
 │   ├── cmd/gateway/    main package: serve, pair, media, healthcheck
 │   └── internal/       config, whatsapp, ingest, events, send, media, testdb
@@ -638,15 +651,16 @@ kaya/
 │   ├── migrations/     plain SQL migrations (dbmate)
 │   └── tests/          SQL schema tests
 ├── docs/               spec, architecture, infra, decisions, phases
-├── scripts/            host checks run through make (check-network)
+├── services/searxng/   SearXNG settings, shared by the container and the Mac install
+├── scripts/            host scripts run through make (check-network, searxng-mac)
 ├── compose.yml         base stack
-├── compose.mac.yml     per-machine override (ports on 127.0.0.1)
+├── compose.mac.yml     per-machine override (ports on 127.0.0.1, SearXNG outside Docker)
 ├── Makefile            one entry point for dev, lint, test and build
 └── .env.example        every setting for every service
 ```
 
-Folders such as `services/` (Python docs and voice services) and `deploy/` (home-server kit) appear
-in the phases that need them.
+Folders such as `deploy/` (home-server kit) and the Python docs and voice services under
+`services/` appear in the phases that need them.
 
 ## Getting started
 
@@ -673,6 +687,8 @@ Fill in the required values in `.env`. Every setting is documented in the file. 
   real chats go in (and the matching `*_DATABASE_URL` values if you run a service from source).
 - `GROQ_API_KEY`, or set `LLM_PROVIDER=stub` until you need a real model. Core refuses to start
   with `LLM_PROVIDER=groq` and no key.
+- `SEARXNG_SECRET`: any long random string (`openssl rand -hex 32`). Set `WEB_SEARCH_URL=` (empty)
+  to run without web search.
 
 ### 2. Start the stack
 
@@ -682,6 +698,19 @@ make up
 
 This builds the images, starts Postgres, applies the migrations, starts the gateway and core, and
 waits until all of them are healthy. Data stays in `DATA_DIR` (`./data` by default) across restarts.
+On Linux it starts SearXNG too.
+
+On a Mac, SearXNG runs outside Docker, because from inside a Docker Desktop container most search
+engines time out ([curl_cffi#915](https://github.com/lexiforest/curl_cffi/issues/915)). Once, before
+or after `make up`:
+
+```sh
+make searxng-mac
+```
+
+It installs the same SearXNG version as the pinned image into `DATA_DIR/searxng` (needs Python 3.10
+or newer and git), runs it on `127.0.0.1:8888` as a login item, and core reaches it through
+`host.docker.internal`. `make searxng-mac-stop` removes it.
 
 ### 3. Check health
 
@@ -838,7 +867,7 @@ Status key: ✅ done · 🟨 in progress · ⬜ not started
 | 4. Agent loop and safety | Tool calling, confirm-before-act, prompt-injection guard and alerts (built); alerts wait for their first real heads-up | 🟨 |
 | 5. Voice notes | Transcription, spoken commands (built) | 🟨 |
 | 6. Sending as you | Messages to contacts and groups after confirmation, with rate limits (built); auto-reply in chosen chats | 🟨 |
-| 7. Web | Search, page reading, research answers with sources | ⬜ |
+| 7. Web | Web search through SearXNG with links (built); page reading, research answers with sources | 🟨 |
 | 8. Google | OAuth, Drive, Gmail, Calendar | ⬜ |
 | 9. Documents | PPT and PDF from a topic or chat, uploaded to Drive | ⬜ |
 | 10. Scheduler | Persistent jobs, plain-language schedules, reminders (built); morning brief | 🟨 |
