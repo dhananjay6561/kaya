@@ -478,6 +478,7 @@ func TestLiveWebSearch(t *testing.T) {
 	}{
 		{"iphone 17 ka price kya hai india mein abhi?", true},
 		{"who won the most recent IPL final?", true},
+		{"hsr layout sector 6 mein 150 ke andar dal makhani kahan se mangau?", true},
 		{"hi kaise ho", false},
 		{"search karo ye kiska number hai +91 98765 43210", false},
 	} {
@@ -522,6 +523,9 @@ func TestLiveWebSearch(t *testing.T) {
 		}
 		if !slices.ContainsFunc(s.links, func(l string) bool { return strings.Contains(answer.Text, l) }) {
 			t.Errorf("%q: the answer gives none of the links it was shown", c.question)
+		}
+		if n := strings.Count(answer.Text, "http"); n != 1 || strings.ContainsAny(answer.Text, "[]【】") || strings.Contains(answer.Text, "Source:") {
+			t.Errorf("%q: want one bare link and no citation marks, got %q", c.question, answer.Text)
 		}
 	}
 }
