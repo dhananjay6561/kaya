@@ -196,8 +196,14 @@ contact, and it works with everything your WhatsApp account can see, plus the we
   encryption keys, or the keys needed to fetch media.
 - **Versioned service contracts.** JSON Schemas for every message between the gateway and core,
   validated by one shared Go module against shared sample payloads.
-- **Swappable providers.** Interfaces in core for the LLM, the chat channel and telephony, each with
-  a `stub` implementation. Groq is the configured LLM provider.
+- **Any model, chosen in `.env`.** Kaya talks to models through one OpenAI-compatible client, so
+  switching from Groq to OpenAI, Gemini, OpenRouter, Anthropic's compatible endpoint or a local
+  Ollama is a change of settings, not code (`LLM_PROVIDER=compatible`, `LLM_BASE_URL`,
+  `LLM_API_KEY`, the models). The background work (tagging, facts, planning) can run on a provider
+  or key of its own (`ROUTINE_LLM_*`), so it never uses up the allowance your answers need, and voice
+  notes can go to any OpenAI-compatible transcription service. A provider marked local only works
+  at a local or private address, so chats are never sent unmasked to a cloud by mistake. The chat
+  channel and telephony also sit behind interfaces with a `stub`.
 - **Production basics.** Structured JSON logs with request ids, a `/health` endpoint with a database
   check in both services, clean shutdown on SIGTERM, and distroless, non-root, read-only containers
   pinned by digest.
@@ -274,7 +280,7 @@ language with the best libraries for it, and they talk only through versioned co
 ```mermaid
 flowchart LR
     phone["Your phone<br/>WhatsApp"]
-    llm["LLM provider<br/>Groq"]
+    llm["LLM provider<br/>Groq, or any OpenAI-compatible"]
     embed["Embeddings<br/>Voyage"]
     stt["Transcription<br/>Groq Whisper"]
     searxng["searxng<br/>web search"]
@@ -636,7 +642,7 @@ target instead of adding rows.
 | Agent | Go 1.26, `log/slog`, pgx; Groq over plain `net/http`, its own o200k token counter |
 | Database | Postgres 18 with pgvector, migrations with dbmate |
 | Contracts | JSON Schema 2020-12, validated with santhosh-tekuri/jsonschema in a shared Go module |
-| LLM | Groq behind a provider interface (`openai/gpt-oss-120b` and `openai/gpt-oss-20b`) |
+| LLM | One OpenAI-compatible client; Groq (`openai/gpt-oss-120b`, `openai/gpt-oss-20b`) by default, any compatible provider by settings |
 | Embeddings | Voyage `voyage-4` behind a provider interface, 1024 dimensions, stored as `halfvec` with an HNSW index |
 | Web search | Self-hosted SearXNG (Google, DuckDuckGo, Yahoo), pinned by digest |
 | Runtime | Docker Compose, distroless images, non-root, read-only root filesystem |
@@ -698,7 +704,8 @@ Fill in the required values in `.env`. Every setting is documented in the file. 
   in to Postgres with their own limited role; change all three from the development values before
   real chats go in (and the matching `*_DATABASE_URL` values if you run a service from source).
 - `GROQ_API_KEY`, or set `LLM_PROVIDER=stub` until you need a real model. Core refuses to start
-  with `LLM_PROVIDER=groq` and no key.
+  with `LLM_PROVIDER=groq` and no key. To use another model, set `LLM_PROVIDER=compatible` and the
+  `LLM_*` settings described in `.env.example`.
 - `SEARXNG_SECRET`: any long random string (`openssl rand -hex 32`). Set `WEB_SEARCH_URL=` (empty)
   to run without web search.
 
@@ -904,7 +911,7 @@ Status key: ✅ done · 🟨 in progress · ⬜ not started
 | 1. WhatsApp gateway | Contracts, pairing, live ingest, history sync, media, connection health, delivery to core and sending. Checked end to end against a real WhatsApp account. | ✅ |
 | 2. Talking to Kaya | Self-chat command channel and built-in commands `/help`, `/status`, `/pause`, `/resume`. Checked on a real account. | ✅ |
 | 3. Brain | Groq replies, lasting conversation memory, masking for cloud models, embeddings, search, answers from your chats, facts about you, tags and tasks, summaries. Checked on a real account. | ✅ |
-| 4. Agent loop and safety | Tool calling, confirm-before-act, prompt-injection guard and alerts (built); alerts wait for their first real heads-up | 🟨 |
+| 4. Agent loop and safety | Tool calling, confirm-before-act, prompt-injection guard, alerts, any model by settings (built); alerts wait for their first real heads-up | 🟨 |
 | 5. Voice notes | Transcription, spoken commands (built) | 🟨 |
 | 6. Sending as you | Messages to contacts and groups after confirmation, with rate limits (built); auto-reply in chosen chats | 🟨 |
 | 7. Web | Web search through SearXNG with links (built); page reading, research answers with sources | 🟨 |
