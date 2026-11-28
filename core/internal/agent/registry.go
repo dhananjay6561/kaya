@@ -50,6 +50,10 @@ type Tool struct {
 	MaxCalls int
 	// Timeout bounds one call of this tool instead of the loop's ToolTimeout.
 	Timeout time.Duration
+	// Guide is how to answer from the tool's results. It is given with a result, after any data
+	// tags, instead of in the description, so it costs nothing on the many requests that never
+	// use the tool.
+	Guide string
 	// Links names arguments that must be a link DJ wrote himself or one a tool returned while
 	// answering this message, so text in a page or a chat can never send Kaya to a link of its
 	// own making, such as one carrying his details out.
