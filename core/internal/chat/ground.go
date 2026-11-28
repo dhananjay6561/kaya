@@ -124,28 +124,34 @@ func wordsOf(s string) []string {
 	return strings.FieldsFunc(s, func(r rune) bool { return !unicode.IsLetter(r) && !unicode.IsNumber(r) })
 }
 
-// bestMatch is the link whose shown text shares the most words of four letters or more with the
-// answer, at least two; "" when none does.
+// bestMatch is the first shown link whose site the answer names, such as "Zomato pe …" for a
+// zomato.com page; "" when it names none, since a link chosen by shared words is often unrelated
+// (every result of a search shares the place it was about).
 func bestMatch(answer string, shown []agent.Shown) string {
 	said := map[string]bool{}
 	for _, w := range wordsOf(plain(answer)) {
-		if len([]rune(w)) >= 4 {
-			said[w] = true
-		}
+		said[w] = true
 	}
-	best, link := 1, ""
 	for _, s := range shown {
-		seen := map[string]bool{}
-		for _, w := range wordsOf(plain(s.Text)) {
-			if said[w] {
-				seen[w] = true
-			}
-		}
-		if len(seen) > best {
-			best, link = len(seen), s.Link
+		if name := siteName(s.Link); len([]rune(name)) >= 3 && said[name] {
+			return s.Link
 		}
 	}
-	return link
+	return ""
+}
+
+// siteName is the name part of a link's host: "zomato" for www.zomato.com, "magicpin" for
+// magicpin.in, "91mobiles" for www.91mobiles.com.
+func siteName(link string) string {
+	parts := strings.Split(siteOf(link), ".")
+	if len(parts) < 2 {
+		return ""
+	}
+	name := parts[len(parts)-2]
+	if (name == "co" || name == "com" || name == "org" || name == "net") && len(parts) >= 3 {
+		name = parts[len(parts)-3]
+	}
+	return strings.ToLower(name)
 }
 
 func texts(shown []agent.Shown) []string {
