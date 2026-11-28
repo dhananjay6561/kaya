@@ -513,6 +513,13 @@ func TestLiveWebSearch(t *testing.T) {
 			t.Errorf("%q: did not search", c.question)
 			continue
 		}
+		if len(s.links) == 0 {
+			t.Logf("%q: no engine answered this time; the answer must not invent links", c.question)
+			if strings.Contains(answer.Text, "http") {
+				t.Errorf("%q: links with no results: %q", c.question, answer.Text)
+			}
+			continue
+		}
 		if !slices.ContainsFunc(s.links, func(l string) bool { return strings.Contains(answer.Text, l) }) {
 			t.Errorf("%q: the answer gives none of the links it was shown", c.question)
 		}
