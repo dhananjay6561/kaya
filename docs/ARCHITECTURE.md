@@ -460,7 +460,8 @@ Folders appear when a phase needs them; empty placeholders are not committed.
   sharing the most words with the answer, else none. Before that, a grounding check: every price,
   percentage, number of three digits or more and name (bold, or a run of Capitalised Words) must be
   in the evidence or DJ's words; failures go to one small rewrite request, and what still fails is
-  dropped line by line (decision 100). SearXNG needs no account or key; its settings
+  dropped line by line (decision 100); the fix stays quiet and in Latin letters, and
+  `web_search` runs at most twice per message (`Tool.MaxCalls`, decision 101). SearXNG needs no account or key; its settings
   (`services/searxng/settings.yml`) list the engines, Google, DuckDuckGo and Yahoo (decisions 95,
   98). On a Mac it runs outside Docker as a login item and core reaches it through
   `host.docker.internal` (decision 96).
