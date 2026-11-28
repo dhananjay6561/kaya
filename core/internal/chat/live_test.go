@@ -14,6 +14,7 @@ import (
 	"sync"
 	"testing"
 	"time"
+	"unicode"
 
 	"github.com/dhananjay6561/kaya/core/internal/actions"
 	"github.com/dhananjay6561/kaya/core/internal/agent"
@@ -531,6 +532,45 @@ func TestLiveWebSearch(t *testing.T) {
 		}
 		if n := strings.Count(answer.Text, "http"); n > 1 || strings.ContainsAny(answer.Text, "[]【】") || strings.Contains(answer.Text, "Source:") {
 			t.Errorf("%q: want at most one bare link and no citation marks, got %q", c.question, answer.Text)
+		}
+	}
+}
+
+// TestLiveGroundingKeepsTheReplyNatural sends replies with made-up places and prices through the
+// real fix request: they must come back without them, in Latin letters, still saying the rest.
+func TestLiveGroundingKeepsTheReplyNatural(t *testing.T) {
+	key := os.Getenv("GROQ_API_KEY")
+	if key == "" {
+		t.Skip("GROQ_API_KEY not set")
+	}
+	groq, err := llm.NewGroq(config.Groq{APIKey: key, HeavyModel: "openai/gpt-oss-120b", RoutineModel: "openai/gpt-oss-20b", ContextTokens: 4000}, llm.GroqOptions{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	c, err := New(Options{
+		LLM: groq, Logger: slog.New(slog.NewJSONHandler(io.Discard, nil)), Zone: zone(t, "Asia/Kolkata"),
+		DatabaseAway: func(error) bool { return false }, NewMaskSession: realMasking,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	shown := []string{"Dal Makhani in Sector 6 - Zomato\nView all restaurants serving Dal Makhani in Sector 6.\nzomato.com", "hsr mein 150 ke andar dal makhani kahan se mangau"}
+	for _, reply := range []string{
+		"HSR Layout mein 150 ke andar dal makhani ke liye Zomato pe kaafi options hain. *Shree Krishna Dhaba* pe ₹120 ki dal makhani milti hai, aur Biryani Zone ka combo ₹145 ka hai. Delivery fee check kar lena!",
+		"Zomato pe Sector 6 ki list dekh lo 😄\n\n- *Shree Krishna Dhaba* – ₹120\n- *Biryani Zone* – ₹145\n\nCheckout pe total 150 ke andar hai ya nahi, dekh lena.",
+	} {
+		time.Sleep(10 * time.Second)
+		claims := ungrounded(reply, shown)
+		fixed := c.ground(bg, reply, claims, shown, realMasking())
+		t.Logf("%q\n -> %q", reply, fixed)
+		if left := ungrounded(fixed, shown); len(left) > 0 {
+			t.Errorf("still made up: %q", left)
+		}
+		if strings.IndexFunc(fixed, func(r rune) bool { return unicode.In(r, unicode.Devanagari) }) >= 0 {
+			t.Errorf("Devanagari in %q", fixed)
+		}
+		if !strings.Contains(strings.ToLower(fixed), "zomato") {
+			t.Errorf("the grounded part was lost: %q", fixed)
 		}
 	}
 }
