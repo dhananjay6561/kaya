@@ -3,9 +3,8 @@ use_default_settings:
     keep_only:
       - google
       - bing
-      - brave
       - duckduckgo
-      - qwant
+      - startpage
       - wikipedia
 
 general:
@@ -15,6 +14,9 @@ server:
   limiter: false
   public_instance: false
   image_proxy: false
+
+outgoing:
+  request_timeout: 5.0
 
 search:
   safe_search: 0
@@ -27,11 +29,9 @@ engines:
     disabled: false
   - name: bing
     disabled: false
-  - name: brave
-    disabled: false
   - name: duckduckgo
     disabled: false
-  - name: qwant
+  - name: startpage
     disabled: false
   - name: wikipedia
     disabled: false
