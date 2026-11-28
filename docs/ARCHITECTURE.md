@@ -465,8 +465,9 @@ Folders appear when a phase needs them; empty placeholders are not committed.
   (`services/searxng/settings.yml`) list the engines, Google, DuckDuckGo and Yahoo (decisions 95,
   98). On a Mac it runs outside Docker as a login item and core reaches it through
   `host.docker.internal` (decision 96).
-- **Rate limits.** Groq's `Retry-After` is waited out when it is 30 seconds or less and fits in
-  the call's 45-second deadline; a longer one fails at once with the "limit" notice (decision 99).
+- **Rate limits.** Groq's `Retry-After` is waited out whenever the call still fits its 45-second
+  deadline; a longer one fails at once with the "limit" notice, and the error says how long Groq
+  asked to wait (decisions 99, 102).
 - **History sync.** Each history chunk WhatsApp announces becomes a row in `history_jobs`, stored
   in the transaction that acknowledges the announcement. A single worker downloads the chunk,
   stores it in batches of at most 200 messages (a savepoint per message, so one bad message
