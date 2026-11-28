@@ -280,13 +280,13 @@ func run(cfg config.Config, logger *slog.Logger) error {
 		return err
 	}
 	var transcriber *voice.Worker
-	if cfg.LLM.Provider == "groq" {
+	if cfg.Transcribe.APIKey != "" {
 		var heard func()
 		if waker, ok := ch.(interface{ Wake() }); ok {
 			heard = waker.Wake
 		}
 		transcriber, err = voice.NewWorker(voice.Options{
-			DB: db, Transcriber: voice.NewGroq(cfg.LLM.Groq.APIKey, cfg.TranscribeModel, ""), Pause: switches,
+			DB: db, Transcriber: voice.NewGroq(cfg.Transcribe.APIKey, cfg.TranscribeModel, cfg.Transcribe.BaseURL), Pause: switches,
 			Logger: logger, MediaDir: cfg.MediaDir, Heard: heard,
 		})
 		if err != nil {
