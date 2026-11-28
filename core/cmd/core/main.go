@@ -42,6 +42,7 @@ import (
 	"github.com/dhananjay6561/kaya/core/internal/tagging"
 	"github.com/dhananjay6561/kaya/core/internal/tools"
 	"github.com/dhananjay6561/kaya/core/internal/voice"
+	"github.com/dhananjay6561/kaya/core/internal/web"
 	"github.com/dhananjay6561/kaya/kit/envfile"
 	"github.com/dhananjay6561/kaya/kit/httpapi"
 	"github.com/dhananjay6561/kaya/kit/logging"
@@ -185,6 +186,10 @@ func run(cfg config.Config, logger *slog.Logger) error {
 	runner := &actions.Runner{
 		Store: actionStore, Logger: logger, Executors: map[string]actions.Executor{}, MessageID: ownMessageID(db),
 		Judge: actions.NewJudge(model, func() actions.Masker { return masking.NewSession() }, logger),
+	}
+	if cfg.WebSearchURL != "" {
+		private := func(s string) bool { return masking.NewSession().Mask(s, "") != s }
+		toolset = append(toolset, tools.WebSearch(web.NewSearcher(web.SearchOptions{BaseURL: cfg.WebSearchURL}), private, zone))
 	}
 	if cfg.SendsPerHour > 0 {
 		toolset = append(toolset, tools.SendMessage(searcher, db))
