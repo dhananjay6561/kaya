@@ -165,7 +165,8 @@ func (c *Chat) Reply(ctx context.Context, q Question) (Answer, error) {
 	}
 	var proposed *actions.Action
 	var notes []string
-	var sources, evidence []string
+	var sources []string
+	var evidence []agent.Shown
 	var owner string
 	ask := func(history, recalled []memory.Exchange, effort llm.Effort) (llm.Completion, error) {
 		built := memory.Build(input(history, recalled))
@@ -301,9 +302,9 @@ func (c *Chat) Reply(ctx context.Context, q Question) (Answer, error) {
 		}
 		reply = privacy.Restore(reply)
 	}
-	reply, link := cite(reply, sources)
+	reply, link := cite(reply, sources, evidence)
 	if len(evidence) > 0 {
-		shown := append(slices.Clone(evidence), owner)
+		shown := append(texts(evidence), owner)
 		if claims := ungrounded(reply, shown); len(claims) > 0 {
 			reply = c.ground(ctx, reply, claims, shown, privacy)
 		}

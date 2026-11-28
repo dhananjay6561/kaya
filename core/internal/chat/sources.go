@@ -4,6 +4,8 @@ import (
 	"regexp"
 	"strconv"
 	"strings"
+
+	"github.com/dhananjay6561/kaya/core/internal/agent"
 )
 
 var (
@@ -16,9 +18,10 @@ var (
 
 // cite takes the model's citations ([n], or gpt-oss's own 【n】 and 【n†source】) out of an
 // answer, since a friend does not write them, and returns the one link to put under it: the
-// first source cited. An answer that cites none gets no link, since a guessed one may be
-// unrelated. With no sources the answer is left as it is.
-func cite(text string, sources []string) (string, string) {
+// first source cited. An answer that cites none gets the result that best matches its words,
+// or no link when none does, since the top result may be unrelated. With no sources the answer is
+// left as it is.
+func cite(text string, sources []string, shown []agent.Shown) (string, string) {
 	if len(sources) == 0 {
 		return text, ""
 	}
@@ -47,6 +50,9 @@ func cite(text string, sources []string) (string, string) {
 	})
 	if out != text {
 		out = spaceBeforeIt.ReplaceAllString(out, "$1")
+	}
+	if link == "" {
+		link = bestMatch(out, shown)
 	}
 	return out, link
 }

@@ -434,10 +434,11 @@ func TestLiveHostileMessagesChangeNothing(t *testing.T) {
 }
 
 type liveSearcher struct {
-	mu      sync.Mutex
-	queries []string
-	links   []string
-	s       *web.Searcher
+	mu       sync.Mutex
+	queries  []string
+	links    []string
+	evidence []string
+	s        *web.Searcher
 }
 
 func (l *liveSearcher) Search(ctx context.Context, query, within string, limit int) ([]web.Result, error) {
@@ -448,6 +449,7 @@ func (l *liveSearcher) Search(ctx context.Context, query, within string, limit i
 	l.mu.Lock()
 	for _, r := range found {
 		l.links = append(l.links, r.URL)
+		l.evidence = append(l.evidence, r.Title+"\n"+r.Snippet+"\n"+r.URL)
 	}
 	l.mu.Unlock()
 	return found, err
@@ -524,8 +526,11 @@ func TestLiveWebSearch(t *testing.T) {
 		if !slices.ContainsFunc(s.links, func(l string) bool { return strings.Contains(answer.Text, l) }) {
 			t.Errorf("%q: the answer gives none of the links it was shown", c.question)
 		}
-		if n := strings.Count(answer.Text, "http"); n != 1 || strings.ContainsAny(answer.Text, "[]【】") || strings.Contains(answer.Text, "Source:") {
-			t.Errorf("%q: want one bare link and no citation marks, got %q", c.question, answer.Text)
+		if made := ungrounded(answer.Text, append(s.evidence, c.question)); len(made) > 0 {
+			t.Errorf("%q: names or prices the search did not show: %q", c.question, made)
+		}
+		if n := strings.Count(answer.Text, "http"); n > 1 || strings.ContainsAny(answer.Text, "[]【】") || strings.Contains(answer.Text, "Source:") {
+			t.Errorf("%q: want at most one bare link and no citation marks, got %q", c.question, answer.Text)
 		}
 	}
 }
