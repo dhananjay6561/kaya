@@ -479,6 +479,15 @@ Folders appear when a phase needs them; empty placeholders are not committed.
   tier, counts tokens as the larger of the two, takes the smaller context, and is cloud if either
   is. Voice notes use `TRANSCRIBE_BASE_URL` and `TRANSCRIBE_API_KEY` (Groq and `GROQ_API_KEY` by
   default); with no key, voice notes are not transcribed (decision 103).
+- **Reading pages.** `read_page` (`url`, `looking_for`) fetches with `web.Fetcher`: public
+  addresses only, checked in the dialer on every connection so redirects and DNS cannot reach this
+  machine or the home network, at most 5 redirects, 12 seconds and 3 MB, web pages and plain text in
+  any charset. The article (readability) when it has 800 characters or more, otherwise every visible
+  text, a line per block, without scripts, navigation, forms or footers; under 200 characters is
+  "needs a browser". The routine model shrinks the page to what answers `looking_for`; the full text
+  is witnessed as evidence and the link cited. `Tool.Links` makes `url` a link DJ wrote or a tool
+  returned this message; `Tool.Timeout` gives it 60 seconds; `Tool.Guide` carries how to answer
+  from results, given after the data tags only when the tool ran (decision 104).
 - **Rate limits.** Groq's `Retry-After` is waited out whenever the call still fits its 45-second
   deadline; a longer one fails at once with the "limit" notice, and the error says how long Groq
   asked to wait (decisions 99, 102).
