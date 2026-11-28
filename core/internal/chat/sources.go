@@ -9,12 +9,12 @@ import (
 )
 
 var (
-	citation      = regexp.MustCompile(`\[(\d{1,3}(?:\s*,\s*\d{1,3})*)\]`)
+	citation      = regexp.MustCompile(`[\[【](\d{1,3}(?:\s*,\s*\d{1,3})*)(?:†[^\]】]*)?[\]】]`)
 	spaceBeforeIt = regexp.MustCompile(`[ \t]+([.,;:!?)])`)
 	doubleSpace   = regexp.MustCompile(`[ \t]{2,}`)
 )
 
-// cite turns an answer's [n] citations into links under it: the sources it cites are numbered
+// cite turns an answer's [n] citations (or gpt-oss's own 【n】 and 【n†source】) into links under it: the sources it cites are numbered
 // again in the order they first appear, numbers that name no source are dropped, and the links
 // are returned as "[n] link" lines. An answer that cites none gets the first source as
 // "Source: link", since a tool found it for this answer. With no sources the answer is left as
@@ -27,7 +27,7 @@ func cite(text string, sources []string) (string, []string) {
 	var lines []string
 	out := citation.ReplaceAllStringFunc(text, func(m string) string {
 		var kept []string
-		for _, part := range strings.Split(strings.Trim(m, "[]"), ",") {
+		for _, part := range strings.Split(citation.FindStringSubmatch(m)[1], ",") {
 			n, err := strconv.Atoi(strings.TrimSpace(part))
 			if err != nil || n < 1 || n > len(sources) {
 				continue
