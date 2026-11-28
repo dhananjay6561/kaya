@@ -40,6 +40,9 @@ func (e *Error) Error() string {
 	if e.Detail != "" {
 		msg += ", " + e.Detail
 	}
+	if e.RetryAfter != nil {
+		msg += fmt.Sprintf(", asked to wait %s", e.RetryAfter.Round(time.Second))
+	}
 	return msg
 }
 
