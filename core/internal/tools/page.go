@@ -40,7 +40,8 @@ func ReadPage(f PageFetcher, model llm.Provider, private func(string) bool) agen
 			"web_search result; at most two. looking_for says what you need from it.",
 		Guide: "Above are the parts of the page that answer looking_for, labelled with its number. Answer from them as " +
 			"from search results: casual and short, only what the page says, and its number in square brackets right " +
-			"after a fact you took from it. If the page did not have it, say so.",
+			"after a fact you took from it. If the page did not have it, say so. When you read two pages, say where they " +
+			"agree or disagree. If a page is old for the question (a price or a review from a year back), say how old.",
 		Parameters: json.RawMessage(`{
 			"type": "object",
 			"properties": {
