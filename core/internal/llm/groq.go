@@ -73,7 +73,7 @@ func NewGroq(cfg config.Groq, o GroqOptions) (*Groq, error) {
 	o.Timeout = orDuration(o.Timeout, 30*time.Second)
 	o.Deadline = orDuration(o.Deadline, 45*time.Second)
 	o.RetryBase = orDuration(o.RetryBase, time.Second)
-	o.MaxRetryWait = orDuration(o.MaxRetryWait, 10*time.Second)
+	o.MaxRetryWait = orDuration(o.MaxRetryWait, 30*time.Second)
 	switch {
 	case o.MaxRetries == 0:
 		o.MaxRetries = 2
