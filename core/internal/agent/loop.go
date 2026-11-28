@@ -7,6 +7,7 @@ import (
 	"errors"
 	"fmt"
 	"log/slog"
+	"slices"
 	"strings"
 	"time"
 	"unicode"
@@ -143,6 +144,9 @@ func Run(ctx context.Context, o Options, r llm.Request) (res Result, err error) 
 	specs := o.Tools.Tokens(o.LLM.CountTokens)
 	retried := false
 	used := map[string]int{}
+	// question is where DJ's message sits; the pairs before it, but never the message right
+	// before it, can give way to tool results.
+	question := len(r.Messages) - 1
 	for round := 0; ; round++ {
 		c, err := o.LLM.Complete(ctx, r)
 		var failed *llm.Error
@@ -170,6 +174,9 @@ func Run(ctx context.Context, o Options, r llm.Request) (res Result, err error) 
 			var content string
 			var done Call
 			limit := o.room(r.Messages, specs, len(c.ToolCalls)-i)
+			if dropped := o.makeRoom(&r.Messages, &question, specs, len(c.ToolCalls)-i, &limit); dropped > 0 {
+				o.Logger.Info("older conversation left out to make room for tool results", "messages", dropped)
+			}
 			switch {
 			case round == o.MaxRounds:
 				content, done = limitReached, Call{Tool: call.Name, Outcome: NotRun}
@@ -462,4 +469,23 @@ func withGuide(content, guide string) string {
 		return content
 	}
 	return content + "\n\n" + guide
+}
+
+// makeRoom leaves out the oldest pairs of the conversation, earliest first, while a result has
+// less than ResultTokens of room: once tools run, their results matter more than old exchanges.
+// The system prompt, the message right before the question (the newest exchange's answer or the
+// chat excerpts) and the question itself always stay. It returns how many messages it removed.
+func (o *Options) makeRoom(messages *[]llm.Message, question *int, specs, calls int, limit *int) int {
+	if o.Budget == 0 {
+		return 0
+	}
+	dropped := 0
+	for *limit < o.ResultTokens && *question-1 > 2 &&
+		(*messages)[1].Role == llm.User && (*messages)[2].Role == llm.Assistant && len((*messages)[2].ToolCalls) == 0 {
+		*messages = slices.Delete(*messages, 1, 3)
+		*question -= 2
+		dropped += 2
+		*limit = o.room(*messages, specs, calls)
+	}
+	return dropped
 }
