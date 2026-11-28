@@ -10,3 +10,10 @@ services:
   core:
     ports:
       - 127.0.0.1:${CORE_PORT:-3000}:${CORE_PORT:-3000}
+    environment:
+      WEB_SEARCH_URL: ${WEB_SEARCH_URL-http://host.docker.internal:8888}
+
+  # On Docker Desktop for macOS most search engines time out from inside a container, so SearXNG
+  # runs on the Mac itself: make searxng-mac. This keeps the container from starting.
+  searxng:
+    profiles: ["searxng-in-docker"]
