@@ -632,3 +632,60 @@ func TestLiveReadPage(t *testing.T) {
 		}
 	}
 }
+
+// TestLiveResearch asks the real Groq a question that needs comparing: it must search, open at
+// least one page, invent nothing and give one or two links with no citation marks.
+func TestLiveResearch(t *testing.T) {
+	key := os.Getenv("GROQ_API_KEY")
+	if key == "" {
+		t.Skip("GROQ_API_KEY not set")
+	}
+	base := os.Getenv("KAYA_SEARXNG_URL")
+	if base == "" {
+		base = "http://127.0.0.1:8888"
+	}
+	ist := zone(t, "Asia/Kolkata")
+	now := time.Now()
+	groq, err := llm.NewGroq(config.Groq{APIKey: key, HeavyModel: "openai/gpt-oss-120b", RoutineModel: "openai/gpt-oss-20b", ContextTokens: 4000}, llm.ClientOptions{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	private := func(s string) bool { return realMasking().Mask(s, "") != s }
+	s := &liveSearcher{s: web.NewSearcher(web.SearchOptions{BaseURL: base})}
+	var pages []string
+	read := tools.ReadPage(web.NewFetcher(web.FetchOptions{}), groq, private)
+	run := read.Run
+	read.Run = func(ctx context.Context, args json.RawMessage) (string, error) {
+		out, err := run(ctx, args)
+		pages = append(pages, out)
+		return out, err
+	}
+	registry, err := agent.NewRegistry(tools.WebSearch(s, private, ist), read)
+	if err != nil {
+		t.Fatal(err)
+	}
+	chat, err := New(Options{
+		LLM: groq, Logger: slog.New(slog.NewJSONHandler(io.Discard, nil)), Zone: ist,
+		Now: func() time.Time { return now }, DatabaseAway: func(error) bool { return false },
+		NewMaskSession: realMasking, Tools: registry,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	question := "3000 ke andar abhi best TWS earbuds kaunse hain, ek pick bata"
+	answer, err := chat.Reply(bg, Question{ID: "3EB0LIVE", Text: question, SentAt: now})
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Logf("%q -> %q (searched %q, read %d pages)", question, answer.Text, s.queries, len(pages))
+	if len(s.queries) == 0 || len(pages) == 0 {
+		t.Errorf("searched %d times, read %d pages", len(s.queries), len(pages))
+	}
+	evidence := append(append([]string{}, s.evidence...), pages...)
+	if made := ungrounded(answer.Text, append(evidence, question)); len(made) > 0 {
+		t.Errorf("names or prices nothing showed: %q", made)
+	}
+	if n := strings.Count(answer.Text, "http"); n < 1 || n > 2 || strings.ContainsAny(answer.Text, "[]【】") {
+		t.Errorf("want one or two bare links and no citation marks: %q", answer.Text)
+	}
+}
