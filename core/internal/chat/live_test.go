@@ -57,7 +57,7 @@ func TestLiveGroq(t *testing.T) {
 		t.Fatalf("set KAYA_LIVE_CASE to 0..%d", len(live.Cases)-1)
 	}
 	c := live.Cases[i]
-	groq, err := llm.NewGroq(config.Groq{APIKey: key, HeavyModel: "openai/gpt-oss-120b", RoutineModel: "openai/gpt-oss-20b", ContextTokens: 2000}, llm.GroqOptions{})
+	groq, err := llm.NewGroq(config.Groq{APIKey: key, HeavyModel: "openai/gpt-oss-120b", RoutineModel: "openai/gpt-oss-20b", ContextTokens: 2000}, llm.ClientOptions{})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -117,7 +117,7 @@ func TestLiveTools(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	groq, err := llm.NewGroq(config.Groq{APIKey: key, HeavyModel: "openai/gpt-oss-120b", RoutineModel: "openai/gpt-oss-20b", ContextTokens: 4000}, llm.GroqOptions{})
+	groq, err := llm.NewGroq(config.Groq{APIKey: key, HeavyModel: "openai/gpt-oss-120b", RoutineModel: "openai/gpt-oss-20b", ContextTokens: 4000}, llm.ClientOptions{})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -181,7 +181,7 @@ func TestLiveDrafting(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	groq, err := llm.NewGroq(config.Groq{APIKey: key, HeavyModel: "openai/gpt-oss-120b", RoutineModel: "openai/gpt-oss-20b", ContextTokens: 4000}, llm.GroqOptions{})
+	groq, err := llm.NewGroq(config.Groq{APIKey: key, HeavyModel: "openai/gpt-oss-120b", RoutineModel: "openai/gpt-oss-20b", ContextTokens: 4000}, llm.ClientOptions{})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -245,7 +245,7 @@ func TestLiveAgainAfterASend(t *testing.T) {
 		if err != nil {
 			t.Fatal(err)
 		}
-		groq, err := llm.NewGroq(config.Groq{APIKey: key, HeavyModel: "openai/gpt-oss-120b", RoutineModel: "openai/gpt-oss-20b", ContextTokens: 4000}, llm.GroqOptions{})
+		groq, err := llm.NewGroq(config.Groq{APIKey: key, HeavyModel: "openai/gpt-oss-120b", RoutineModel: "openai/gpt-oss-20b", ContextTokens: 4000}, llm.ClientOptions{})
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -318,7 +318,7 @@ func TestLiveReminders(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	groq, err := llm.NewGroq(config.Groq{APIKey: key, HeavyModel: "openai/gpt-oss-120b", RoutineModel: "openai/gpt-oss-20b", ContextTokens: 4000}, llm.GroqOptions{})
+	groq, err := llm.NewGroq(config.Groq{APIKey: key, HeavyModel: "openai/gpt-oss-120b", RoutineModel: "openai/gpt-oss-20b", ContextTokens: 4000}, llm.ClientOptions{})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -389,7 +389,7 @@ func TestLiveHostileMessagesChangeNothing(t *testing.T) {
 		if err != nil {
 			t.Fatal(err)
 		}
-		groq, err := llm.NewGroq(config.Groq{APIKey: key, HeavyModel: "openai/gpt-oss-120b", RoutineModel: "openai/gpt-oss-20b", ContextTokens: 4000}, llm.GroqOptions{})
+		groq, err := llm.NewGroq(config.Groq{APIKey: key, HeavyModel: "openai/gpt-oss-120b", RoutineModel: "openai/gpt-oss-20b", ContextTokens: 4000}, llm.ClientOptions{})
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -470,7 +470,7 @@ func TestLiveWebSearch(t *testing.T) {
 	}
 	ist := zone(t, "Asia/Kolkata")
 	now := time.Now()
-	groq, err := llm.NewGroq(config.Groq{APIKey: key, HeavyModel: "openai/gpt-oss-120b", RoutineModel: "openai/gpt-oss-20b", ContextTokens: 4000}, llm.GroqOptions{})
+	groq, err := llm.NewGroq(config.Groq{APIKey: key, HeavyModel: "openai/gpt-oss-120b", RoutineModel: "openai/gpt-oss-20b", ContextTokens: 4000}, llm.ClientOptions{})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -543,7 +543,7 @@ func TestLiveGroundingKeepsTheReplyNatural(t *testing.T) {
 	if key == "" {
 		t.Skip("GROQ_API_KEY not set")
 	}
-	groq, err := llm.NewGroq(config.Groq{APIKey: key, HeavyModel: "openai/gpt-oss-120b", RoutineModel: "openai/gpt-oss-20b", ContextTokens: 4000}, llm.GroqOptions{})
+	groq, err := llm.NewGroq(config.Groq{APIKey: key, HeavyModel: "openai/gpt-oss-120b", RoutineModel: "openai/gpt-oss-20b", ContextTokens: 4000}, llm.ClientOptions{})
 	if err != nil {
 		t.Fatal(err)
 	}

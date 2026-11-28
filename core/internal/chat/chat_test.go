@@ -476,7 +476,7 @@ func TestReplyKeepsTheConversationOutOfTheLowEffortRetryOnceItWasTooLong(t *test
 }
 
 func TestReplyStillAnswersWhenARememberedAnswerLooksLikeASpecialToken(t *testing.T) {
-	groq, err := llm.NewGroq(config.Groq{HeavyModel: "openai/gpt-oss-120b", RoutineModel: "openai/gpt-oss-20b", ContextTokens: 2000}, llm.GroqOptions{})
+	groq, err := llm.NewGroq(config.Groq{HeavyModel: "openai/gpt-oss-120b", RoutineModel: "openai/gpt-oss-20b", ContextTokens: 2000}, llm.ClientOptions{})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -543,7 +543,7 @@ func TestReplySendsGroqTheSameRequestAsTheTypeScriptCore(t *testing.T) {
 		groq, err := llm.NewGroq(config.Groq{
 			APIKey: "not-a-real-key", HeavyModel: "openai/gpt-oss-120b",
 			RoutineModel: "openai/gpt-oss-20b", ContextTokens: 2000,
-		}, llm.GroqOptions{BaseURL: server.URL})
+		}, llm.ClientOptions{BaseURL: server.URL})
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -1053,7 +1053,7 @@ func realFacts(n int) []string {
 }
 
 func TestFactsNeverPushTheRecentConversationOutAtTheDefaultBudget(t *testing.T) {
-	groq, err := llm.NewGroq(config.Groq{HeavyModel: "openai/gpt-oss-120b", RoutineModel: "openai/gpt-oss-20b", ContextTokens: 2000}, llm.GroqOptions{})
+	groq, err := llm.NewGroq(config.Groq{HeavyModel: "openai/gpt-oss-120b", RoutineModel: "openai/gpt-oss-20b", ContextTokens: 2000}, llm.ClientOptions{})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -1081,7 +1081,7 @@ func TestFactsNeverPushTheRecentConversationOutAtTheDefaultBudget(t *testing.T) 
 }
 
 func TestFittingFactsStaysFast(t *testing.T) {
-	groq, err := llm.NewGroq(config.Groq{HeavyModel: "openai/gpt-oss-120b", RoutineModel: "openai/gpt-oss-20b", ContextTokens: 30000}, llm.GroqOptions{})
+	groq, err := llm.NewGroq(config.Groq{HeavyModel: "openai/gpt-oss-120b", RoutineModel: "openai/gpt-oss-20b", ContextTokens: 30000}, llm.ClientOptions{})
 	if err != nil {
 		t.Fatal(err)
 	}

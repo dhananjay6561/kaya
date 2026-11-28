@@ -169,16 +169,29 @@ func checkRequest(r Request) error {
 	return nil
 }
 
-// New builds the provider config names.
+// New builds the provider config names, and gives the routine tier its own provider when one
+// is set.
 func New(cfg config.LLM) (Provider, error) {
+	var main Provider
+	var err error
 	switch cfg.Provider {
 	case "groq":
-		return NewGroq(cfg.Groq, GroqOptions{})
+		main, err = NewGroq(cfg.Groq, ClientOptions{})
+	case "compatible":
+		main, err = NewCompatible(cfg.Compatible, ClientOptions{})
 	case "stub":
-		return NewStub(StubOptions{}), nil
+		main = NewStub(StubOptions{})
 	default:
 		return nil, fmt.Errorf("unknown llm provider %q", cfg.Provider)
 	}
+	if err != nil || cfg.Routine == nil {
+		return main, err
+	}
+	routine, err := NewCompatible(*cfg.Routine, ClientOptions{})
+	if err != nil {
+		return nil, fmt.Errorf("routine provider: %w", err)
+	}
+	return tiered{heavy: main, routine: routine}, nil
 }
 
 func checkModels(models ...string) error {

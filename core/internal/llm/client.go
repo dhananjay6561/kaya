@@ -5,10 +5,12 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"io"
 	"math"
 	"net"
 	"net/http"
+	"net/url"
 	"regexp"
 	"slices"
 	"strconv"
@@ -21,8 +23,8 @@ import (
 	"github.com/dhananjay6561/kaya/core/internal/text"
 )
 
-// GroqOptions tune the Groq client. Zero values take the defaults.
-type GroqOptions struct {
+// ClientOptions tune the client. Zero values take the defaults.
+type ClientOptions struct {
 	BaseURL string
 	// Timeout bounds one attempt; Deadline bounds a whole Complete call, retries included.
 	Timeout  time.Duration
@@ -52,23 +54,59 @@ var (
 	tooLongDetail    = regexp.MustCompile(`context_length|too_large|too_long|max_tokens`)
 )
 
-// Groq asks gpt-oss models on Groq through its OpenAI-compatible API.
-type Groq struct {
+// Client asks a model through an OpenAI-compatible chat completions API: Groq, OpenAI, Gemini,
+// OpenRouter, Ollama and others differ only in their settings.
+type Client struct {
+	name          string
 	apiKey        string
 	models        map[Tier]string
 	contextTokens int
-	o             GroqOptions
+	locality      Locality
+	// effort sends reasoning_effort; groqReasoning also sends Groq's include_reasoning.
+	effort, groqReasoning bool
+	tokenFactor           float64
+	o                     ClientOptions
 }
 
-// NewGroq returns a Groq provider. Both models must be gpt-oss models, since tokens are counted
+// NewGroq returns a client for Groq. Both models must be gpt-oss models, since tokens are counted
 // with their tokenizer.
-func NewGroq(cfg config.Groq, o GroqOptions) (*Groq, error) {
+func NewGroq(cfg config.Groq, o ClientOptions) (*Client, error) {
 	if err := checkModels(cfg.HeavyModel, cfg.RoutineModel); err != nil {
 		return nil, err
 	}
 	if o.BaseURL == "" {
 		o.BaseURL = "https://api.groq.com/openai/v1"
 	}
+	g := newClient("groq", cfg.APIKey, cfg.HeavyModel, cfg.RoutineModel, cfg.ContextTokens, o)
+	g.effort, g.groqReasoning = true, true
+	return g, nil
+}
+
+// NewCompatible returns a client for any OpenAI-compatible provider set in .env. Groq's kind
+// keeps its own defaults and the gpt-oss check; any other provider is named by its host.
+func NewCompatible(c config.Compatible, o ClientOptions) (*Client, error) {
+	if o.BaseURL == "" {
+		o.BaseURL = c.BaseURL
+	}
+	name := "groq"
+	if c.Kind == "groq" {
+		if err := checkModels(c.HeavyModel, c.RoutineModel); err != nil {
+			return nil, err
+		}
+	} else if u, err := url.Parse(c.BaseURL); err == nil && u.Hostname() != "" {
+		name = u.Hostname()
+	} else {
+		return nil, fmt.Errorf("llm base url %q has no host", c.BaseURL)
+	}
+	g := newClient(name, c.APIKey, c.HeavyModel, c.RoutineModel, c.ContextTokens, o)
+	g.effort, g.groqReasoning, g.tokenFactor = c.Effort, c.Kind == "groq", max(c.TokenFactor, 1)
+	if c.Local {
+		g.locality = Local
+	}
+	return g, nil
+}
+
+func newClient(name, apiKey, heavy, routine string, contextTokens int, o ClientOptions) *Client {
 	o.BaseURL = strings.TrimRight(o.BaseURL, "/")
 	o.Timeout = orDuration(o.Timeout, 30*time.Second)
 	o.Deadline = orDuration(o.Deadline, 45*time.Second)
@@ -87,12 +125,15 @@ func NewGroq(cfg config.Groq, o GroqOptions) (*Groq, error) {
 		o.Now = time.Now
 	}
 	o200k.Load()
-	return &Groq{
-		apiKey:        cfg.APIKey,
-		models:        map[Tier]string{Routine: cfg.RoutineModel, Heavy: cfg.HeavyModel},
-		contextTokens: cfg.ContextTokens,
+	return &Client{
+		name:          name,
+		apiKey:        apiKey,
+		models:        map[Tier]string{Routine: routine, Heavy: heavy},
+		contextTokens: contextTokens,
+		locality:      Cloud,
+		tokenFactor:   1,
 		o:             o,
-	}, nil
+	}
 }
 
 func orDuration(d, fallback time.Duration) time.Duration {
@@ -102,25 +143,33 @@ func orDuration(d, fallback time.Duration) time.Duration {
 	return d
 }
 
-// Name is "groq".
-func (g *Groq) Name() string { return "groq" }
+// Name is "groq", or the provider's host.
+func (g *Client) Name() string { return g.name }
 
-// Locality is cloud: what is sent leaves the machine.
-func (g *Groq) Locality() Locality { return Cloud }
+// Locality is cloud unless the provider was set as local: what is sent to a cloud one leaves the
+// machine.
+func (g *Client) Locality() Locality { return g.locality }
 
-// ContextTokens is GROQ_CONTEXT_TOKENS.
-func (g *Groq) ContextTokens() int { return g.contextTokens }
+// ContextTokens is GROQ_CONTEXT_TOKENS or LLM_CONTEXT_TOKENS.
+func (g *Client) ContextTokens() int { return g.contextTokens }
 
-// CountTokens counts text with the gpt-oss tokenizer, plus the tokens its chat framing adds.
-func (g *Groq) CountTokens(text string) int { return o200k.Count(text) + framingTokens }
+// CountTokens counts text with the o200k tokenizer (exact for gpt-oss), plus the tokens its chat
+// framing adds, scaled by the token factor for models whose tokenizer differs.
+func (g *Client) CountTokens(text string) int {
+	n := o200k.Count(text) + framingTokens
+	if g.tokenFactor > 1 {
+		n = int(math.Ceil(float64(n) * g.tokenFactor))
+	}
+	return n
+}
 
-type groqRequest struct {
+type chatRequest struct {
 	Model            string     `json:"model"`
 	Messages         []Message  `json:"messages"`
 	MaxTokens        int        `json:"max_completion_tokens"`
 	Temperature      *float64   `json:"temperature,omitempty"`
-	ReasoningEffort  Effort     `json:"reasoning_effort"`
-	IncludeReasoning bool       `json:"include_reasoning"`
+	ReasoningEffort  *Effort    `json:"reasoning_effort,omitempty"`
+	IncludeReasoning *bool      `json:"include_reasoning,omitempty"`
 	ResponseFormat   *format    `json:"response_format,omitempty"`
 	Tools            []ToolSpec `json:"tools,omitempty"`
 }
@@ -136,23 +185,30 @@ type jsonSchema struct {
 	Schema json.RawMessage `json:"schema"`
 }
 
-func (g *Groq) body(r Request) ([]byte, error) {
-	req := groqRequest{
-		Model:           g.models[r.Tier],
-		Messages:        r.Messages,
-		MaxTokens:       r.MaxTokens,
-		Temperature:     r.Temperature,
-		ReasoningEffort: r.Effort,
-		Tools:           r.Tools,
+func (g *Client) body(r Request) ([]byte, error) {
+	req := chatRequest{
+		Model:       g.models[r.Tier],
+		Messages:    r.Messages,
+		MaxTokens:   r.MaxTokens,
+		Temperature: r.Temperature,
+		Tools:       r.Tools,
+	}
+	if g.effort {
+		effort := r.Effort
+		if effort == "" {
+			effort = defaultEffort[r.Tier]
+		}
+		req.ReasoningEffort = &effort
+	}
+	if g.groqReasoning {
+		hidden := false
+		req.IncludeReasoning = &hidden
 	}
 	if r.Schema != nil {
 		req.ResponseFormat = &format{Type: "json_schema", JSONSchema: jsonSchema{Name: r.Schema.Name, Strict: true, Schema: r.Schema.Schema}}
 	}
 	if req.MaxTokens == 0 {
 		req.MaxTokens = defaultMaxTokens[r.Tier]
-	}
-	if req.ReasoningEffort == "" {
-		req.ReasoningEffort = defaultEffort[r.Tier]
 	}
 	var b bytes.Buffer
 	enc := json.NewEncoder(&b)
@@ -165,7 +221,7 @@ func (g *Groq) body(r Request) ([]byte, error) {
 
 // Complete asks the model, trying again while Groq is busy, down or slow, within the deadline.
 // When ctx ends first, its cause is returned.
-func (g *Groq) Complete(ctx context.Context, r Request) (Completion, error) {
+func (g *Client) Complete(ctx context.Context, r Request) (Completion, error) {
 	if err := ctx.Err(); err != nil {
 		return Completion{}, context.Cause(ctx)
 	}
@@ -210,7 +266,7 @@ func wait(ctx context.Context, d time.Duration) error {
 	}
 }
 
-func (g *Groq) once(ctx context.Context, body []byte, budget time.Duration) (Completion, error) {
+func (g *Client) once(ctx context.Context, body []byte, budget time.Duration) (Completion, error) {
 	attempt, cancel := context.WithTimeout(ctx, min(g.o.Timeout, budget))
 	defer cancel()
 	stopped := func() error {
@@ -218,7 +274,7 @@ func (g *Groq) once(ctx context.Context, body []byte, budget time.Duration) (Com
 			return context.Cause(ctx)
 		}
 		if attempt.Err() != nil {
-			return &Error{Provider: "groq", Code: Timeout}
+			return &Error{Provider: g.name, Code: Timeout}
 		}
 		return nil
 	}
@@ -227,14 +283,16 @@ func (g *Groq) once(ctx context.Context, body []byte, budget time.Duration) (Com
 	if err != nil {
 		return Completion{}, err
 	}
-	req.Header.Set("Authorization", "Bearer "+g.apiKey)
+	if g.apiKey != "" {
+		req.Header.Set("Authorization", "Bearer "+g.apiKey)
+	}
 	req.Header.Set("Content-Type", "application/json")
 	resp, err := g.o.Client.Do(req)
 	if err != nil {
 		if reason := stopped(); reason != nil {
 			return Completion{}, reason
 		}
-		return Completion{}, &Error{Provider: "groq", Code: Unavailable, Detail: networkDetail(err)}
+		return Completion{}, &Error{Provider: g.name, Code: Unavailable, Detail: networkDetail(err)}
 	}
 	defer func() {
 		_, _ = io.Copy(io.Discard, io.LimitReader(resp.Body, maxProblemBytes))
@@ -259,19 +317,19 @@ func (g *Groq) once(ctx context.Context, body []byte, budget time.Duration) (Com
 	}
 	completion, ok := decodeAnswer(raw)
 	if !ok {
-		return Completion{}, &Error{Provider: "groq", Code: BadResponse, Status: resp.StatusCode}
+		return Completion{}, &Error{Provider: g.name, Code: BadResponse, Status: resp.StatusCode}
 	}
 	return completion, nil
 }
 
 // problem names what went wrong from the status and Groq's error code, never its message.
-func (g *Groq) problem(resp *http.Response, raw []byte) *Error {
+func (g *Client) problem(resp *http.Response, raw []byte) *Error {
 	var answer struct {
 		Error *struct {
 			Code any `json:"code"`
 		} `json:"error"`
 	}
-	e := &Error{Provider: "groq", Status: resp.StatusCode}
+	e := &Error{Provider: g.name, Status: resp.StatusCode}
 	if json.Unmarshal(bytes.TrimPrefix(raw, utf8BOM), &answer) == nil && answer.Error != nil {
 		if code, ok := answer.Error.Code.(string); ok && safeDetail.MatchString(code) {
 			e.Detail = code
@@ -298,7 +356,7 @@ func (g *Groq) problem(resp *http.Response, raw []byte) *Error {
 }
 
 // retryAfter reads Retry-After as seconds or as a date, as JavaScript's Number and Date.parse did.
-func (g *Groq) retryAfter(header string) *time.Duration {
+func (g *Client) retryAfter(header string) *time.Duration {
 	if header == "" {
 		return nil
 	}
