@@ -40,6 +40,10 @@ type Tool struct {
 	// Untrusted marks a tool whose results carry other people's words, such as tasks found in
 	// chats: they reach the model fenced in data tags and escaped, never as plain text.
 	Untrusted bool
+	// Public marks a tool whose results are public text, such as web search results: they reach a
+	// cloud model unmasked, so prices, years and numbers stay readable. Only an Untrusted tool can
+	// be Public.
+	Public bool
 }
 
 // Problem is a failure the model is told about in the tool's own words, so it can try another way.
@@ -86,6 +90,8 @@ func (r *Registry) add(t Tool) error {
 		return ErrOutward
 	case !t.Outward && (t.Run == nil || t.Propose != nil):
 		return errors.New("a tool needs Run, and only an outward tool proposes")
+	case t.Public && (!t.Untrusted || t.Outward):
+		return errors.New("a public tool's results are strangers' words: it must be Untrusted, and it cannot act")
 	}
 	var shape struct {
 		Type string `json:"type"`

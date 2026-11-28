@@ -323,12 +323,12 @@ func (o *Options) room(messages []llm.Message, specs, calls int) int {
 
 // out masks a result for a cloud model, then fits it to limit tokens, so a cut never splits a
 // private detail. Results are masked as if a code were mentioned, since a task or a message in
-// one may hold a bare code.
+// one may hold a bare code. A public tool's results are not masked.
 func (o *Options) out(text string, call llm.ToolCall, limit int) string {
 	if strings.TrimSpace(text) == "" {
 		return nothing
 	}
-	if o.Privacy != nil {
+	if o.Privacy != nil && !o.Tools.tools[call.Name].Public {
 		text = o.Privacy.Mask(text, call.Arguments+"\notp")
 	}
 	return fit(text, limit, o.LLM.CountTokens)
