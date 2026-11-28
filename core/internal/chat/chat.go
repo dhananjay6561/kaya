@@ -165,6 +165,7 @@ func (c *Chat) Reply(ctx context.Context, q Question) (Answer, error) {
 	}
 	var proposed *actions.Action
 	var notes []string
+	var sources []string
 	var owner string
 	ask := func(history, recalled []memory.Exchange, effort llm.Effort) (llm.Completion, error) {
 		built := memory.Build(input(history, recalled))
@@ -181,6 +182,7 @@ func (c *Chat) Reply(ctx context.Context, q Question) (Answer, error) {
 				notes = append(notes, n)
 			}
 		}
+		sources = res.Sources
 		if err != nil {
 			return completion, err
 		}
@@ -320,10 +322,14 @@ func (c *Chat) Reply(ctx context.Context, q Question) (Answer, error) {
 		}
 		return withNotes(Answer{Text: "I had no answer to that. Try asking another way."}, notes), nil
 	}
+	answer, links := cite(answer, sources)
 	cut := utf8.RuneCountInString(answer) > o.MaxReplyLength
 	answer = ClipTo(answer, o.MaxReplyLength)
 	if ranOut || cut {
 		answer += cutShort
+	}
+	if len(links) > 0 {
+		answer += "\n\n" + strings.Join(links, "\n")
 	}
 	return withNotes(c.withProposal(Answer{Text: answer, Remember: true}, proposed), notes), nil
 }

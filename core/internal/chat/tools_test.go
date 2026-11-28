@@ -257,3 +257,27 @@ func TestTheModelKnowsTheNameTheOwnerGoesBy(t *testing.T) {
 		t.Fatalf("system ends %q", system[len(system)-200:])
 	}
 }
+
+func TestReplyPutsTheLinksItCitedUnderTheAnswer(t *testing.T) {
+	r, err := agent.NewRegistry(agent.Tool{
+		Name: "search", Description: "Searches.", Parameters: json.RawMessage(`{"type":"object"}`),
+		Run: func(ctx context.Context, _ json.RawMessage) (string, error) {
+			agent.Cite(ctx, "https://shop.example/a")
+			agent.Cite(ctx, "https://news.example/b")
+			return "[1] A\n[2] B", nil
+		},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	model := &scripted{responses: func(r llm.Request) (llm.Completion, error) {
+		if toolMessage(r) == "" {
+			return llm.Completion{ToolCalls: []llm.ToolCall{{ID: "c1", Name: "search", Arguments: `{}`}}, FinishReason: llm.FinishToolCalls}, nil
+		}
+		return llm.Completion{Text: "It starts at **₹82,900** [2], and [9] is made up.", FinishReason: llm.FinishStop}, nil
+	}}
+	got := reply(t, newChat(t, Options{LLM: model, Tools: r}), "iphone price?")
+	if want := "It starts at *₹82,900* [1], and is made up.\n\n[1] https://news.example/b"; got.Text != want || !got.Remember {
+		t.Fatalf("got %q", got.Text)
+	}
+}
