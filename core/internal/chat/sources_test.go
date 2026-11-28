@@ -11,9 +11,9 @@ func TestCitationsAreHiddenAndOneLinkGoesUnderTheAnswer(t *testing.T) {
 		{"numbers that name no source", "Made up [7], real [2].", "Made up, real.", "https://b.example/"},
 		{"round brackets at the end", "Pro Max ₹1,34,900 tak jaata hai. (2,\u202f3)\n\nAur kuch?", "Pro Max ₹1,34,900 tak jaata hai.\n\nAur kuch?", "https://b.example/"},
 		{"round brackets closing a sentence", "Sab mila ke ₹150 (1).", "Sab mila ke ₹150.", "https://a.example/"},
-		{"round brackets mid-sentence stay", "Step (2) mein checkout karo.", "Step (2) mein checkout karo.", "https://a.example/"},
-		{"a round number that names no source stays", "Pack of (12)", "Pack of (12)", "https://a.example/"},
-		{"nothing cited gets the top result", "RCB jeeti.", "RCB jeeti.", "https://a.example/"},
+		{"round brackets mid-sentence stay", "Step (2) mein checkout karo.", "Step (2) mein checkout karo.", ""},
+		{"a round number that names no source stays", "Pack of (12)", "Pack of (12)", ""},
+		{"nothing cited gets no link", "RCB jeeti.", "RCB jeeti.", ""},
 	}
 	for _, c := range cases {
 		got, link := cite(c.text, sources)
