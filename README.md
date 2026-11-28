@@ -186,7 +186,8 @@ contact, and it works with everything your WhatsApp account can see, plus the we
   never trigger a search. Search runs through
   [SearXNG](https://github.com/searxng/searxng), a search engine you host yourself that asks
   Google, DuckDuckGo and Yahoo at once, so there is no search account or API key, and no single
-  company gets all your queries.
+  company gets all your queries. Anything about where to buy, order or go always starts with a
+  search, never with Kaya's memory.
   Kaya can limit a search to the last day, week, month or year when freshness matters. If no engine
   answers, Kaya says web search is not working right now instead of guessing. A query that would
   carry a private detail (a phone number, email, address or code) is refused before it leaves your
