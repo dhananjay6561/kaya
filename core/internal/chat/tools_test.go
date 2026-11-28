@@ -277,7 +277,7 @@ func TestReplyPutsTheLinksItCitedUnderTheAnswer(t *testing.T) {
 		return llm.Completion{Text: "It starts at **₹82,900** [2], and [9] is made up.", FinishReason: llm.FinishStop}, nil
 	}}
 	got := reply(t, newChat(t, Options{LLM: model, Tools: r}), "iphone price?")
-	if want := "It starts at *₹82,900* [1], and is made up.\n\n[1] https://news.example/b"; got.Text != want || !got.Remember {
+	if want := "It starts at *₹82,900*, and is made up.\n\nhttps://news.example/b"; got.Text != want || !got.Remember {
 		t.Fatalf("got %q", got.Text)
 	}
 }

@@ -322,14 +322,14 @@ func (c *Chat) Reply(ctx context.Context, q Question) (Answer, error) {
 		}
 		return withNotes(Answer{Text: "I had no answer to that. Try asking another way."}, notes), nil
 	}
-	answer, links := cite(answer, sources)
+	answer, link := cite(answer, sources)
 	cut := utf8.RuneCountInString(answer) > o.MaxReplyLength
 	answer = ClipTo(answer, o.MaxReplyLength)
 	if ranOut || cut {
 		answer += cutShort
 	}
-	if len(links) > 0 {
-		answer += "\n\n" + strings.Join(links, "\n")
+	if link != "" {
+		answer += "\n\n" + link
 	}
 	return withNotes(c.withProposal(Answer{Text: answer, Remember: true}, proposed), notes), nil
 }

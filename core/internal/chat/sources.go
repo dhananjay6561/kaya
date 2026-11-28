@@ -1,54 +1,55 @@
 package chat
 
 import (
-	"fmt"
 	"regexp"
-	"slices"
 	"strconv"
 	"strings"
 )
 
 var (
-	citation      = regexp.MustCompile(`[\[【](\d{1,3}(?:\s*,\s*\d{1,3})*)(?:†[^\]】]*)?[\]】]`)
+	citation      = regexp.MustCompile(`[ \t]*[\[【](\d{1,3}(?:\s*,\s*\d{1,3})*)(?:†[^\]】]*)?[\]】]`)
 	spaceBeforeIt = regexp.MustCompile(`[ \t]+([.,;:!?)])`)
-	doubleSpace   = regexp.MustCompile(`[ \t]{2,}`)
+	// roundCitation is a number list in round brackets at the end of a sentence or line, which the
+	// model sometimes writes instead of square ones; mid-sentence, "(2)" is left alone.
+	roundCitation = regexp.MustCompile(`[ \t\x{202f}]*\((\d{1,3}(?:[\s\x{202f}]*,[\s\x{202f}]*\d{1,3})*)\)([.!?]?)(\s*(?:\n|$))`)
 )
 
-// cite turns an answer's [n] citations (or gpt-oss's own 【n】 and 【n†source】) into links under it: the sources it cites are numbered
-// again in the order they first appear, numbers that name no source are dropped, and the links
-// are returned as "[n] link" lines. An answer that cites none gets the first source as
-// "Source: link", since a tool found it for this answer. With no sources the answer is left as
-// it is.
-func cite(text string, sources []string) (string, []string) {
+// cite takes the model's citations ([n], or gpt-oss's own 【n】 and 【n†source】) out of an
+// answer, since a friend does not write them, and returns the one link to put under it: the
+// first source cited, or the first source when none is. With no sources the answer is left as
+// it is and there is no link.
+func cite(text string, sources []string) (string, string) {
 	if len(sources) == 0 {
-		return text, nil
+		return text, ""
 	}
-	renumbered := map[int]int{}
-	var lines []string
+	link := ""
 	out := citation.ReplaceAllStringFunc(text, func(m string) string {
-		var kept []string
 		for _, part := range strings.Split(citation.FindStringSubmatch(m)[1], ",") {
 			n, err := strconv.Atoi(strings.TrimSpace(part))
-			if err != nil || n < 1 || n > len(sources) {
-				continue
-			}
-			k, ok := renumbered[n]
-			if !ok {
-				lines = append(lines, fmt.Sprintf("[%d] %s", len(lines)+1, sources[n-1]))
-				k = len(lines)
-				renumbered[n] = k
-			}
-			if label := "[" + strconv.Itoa(k) + "]"; !slices.Contains(kept, label) {
-				kept = append(kept, label)
+			if link == "" && err == nil && n >= 1 && n <= len(sources) {
+				link = sources[n-1]
 			}
 		}
-		return strings.Join(kept, "")
+		return ""
+	})
+	out = roundCitation.ReplaceAllStringFunc(out, func(m string) string {
+		g := roundCitation.FindStringSubmatch(m)
+		for _, part := range strings.Split(g[1], ",") {
+			n, err := strconv.Atoi(strings.Trim(part, " \t\n\u202f"))
+			if err != nil || n < 1 || n > len(sources) {
+				return m
+			}
+			if link == "" {
+				link = sources[n-1]
+			}
+		}
+		return g[2] + g[3]
 	})
 	if out != text {
-		out = doubleSpace.ReplaceAllString(spaceBeforeIt.ReplaceAllString(out, "$1"), " ")
+		out = spaceBeforeIt.ReplaceAllString(out, "$1")
 	}
-	if len(lines) == 0 {
-		lines = []string{"Source: " + sources[0]}
+	if link == "" {
+		link = sources[0]
 	}
-	return out, lines
+	return out, link
 }
