@@ -3,6 +3,8 @@ package chat
 import (
 	"slices"
 	"testing"
+
+	"github.com/dhananjay6561/kaya/core/internal/agent"
 )
 
 var evidence = []string{
@@ -41,5 +43,25 @@ func TestLinesWithMadeUpClaimsAreDropped(t *testing.T) {
 	got := dropClaims(answer, []string{"Shree Krishna Dhaba", "₹120"})
 	if want := "Kuch options:\n\n- *Truth Bowl* – ₹99\n\nCheckout pe fee dekh lena."; got != want {
 		t.Fatalf("got %q", got)
+	}
+}
+
+func TestPlainCapitalisedNamesAreChecked(t *testing.T) {
+	answer := "Wahan Biryani House, Shree Krishna ya Truth Bowl jaise spots aate hain. Delivery fee dekh lena."
+	if got := ungrounded(answer, evidence); !slices.Equal(got, []string{"Biryani House", "Shree Krishna"}) {
+		t.Fatalf("got %q", got)
+	}
+}
+
+func TestAnUncitedAnswerGetsTheBestMatchingLink(t *testing.T) {
+	shown := []agent.Shown{
+		{Link: "https://courier.example/", Text: "DHL courier service in HSR Layout"},
+		{Link: "https://zomato.example/", Text: "Dal Makhani in Sector 6 - Zomato\nView all restaurants serving Dal Makhani"},
+	}
+	if _, link := cite("Zomato pe Sector 6 ke dal makhani restaurants ki list hai.", []string{"https://courier.example/", "https://zomato.example/"}, shown); link != "https://zomato.example/" {
+		t.Fatalf("link %q", link)
+	}
+	if _, link := cite("Main theek hoon.", []string{"https://courier.example/"}, shown); link != "" {
+		t.Fatalf("an unrelated answer got %q", link)
 	}
 }

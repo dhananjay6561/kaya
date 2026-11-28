@@ -16,12 +16,12 @@ func TestCitationsAreHiddenAndOneLinkGoesUnderTheAnswer(t *testing.T) {
 		{"nothing cited gets no link", "RCB jeeti.", "RCB jeeti.", ""},
 	}
 	for _, c := range cases {
-		got, link := cite(c.text, sources)
+		got, link := cite(c.text, sources, nil)
 		if got != c.want || link != c.link {
 			t.Errorf("%s: got %q %q, want %q %q", c.name, got, link, c.want, c.link)
 		}
 	}
-	if got, link := cite("Step [1] then [2].", nil); got != "Step [1] then [2]." || link != "" {
+	if got, link := cite("Step [1] then [2].", nil, nil); got != "Step [1] then [2]." || link != "" {
 		t.Errorf("without sources: %q %q", got, link)
 	}
 }

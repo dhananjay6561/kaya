@@ -287,7 +287,7 @@ func groundedSearch(t *testing.T) *agent.Registry {
 	r, err := agent.NewRegistry(agent.Tool{
 		Name: "search", Description: "Searches.", Parameters: json.RawMessage(`{"type":"object"}`),
 		Run: func(ctx context.Context, _ json.RawMessage) (string, error) {
-			agent.Witness(ctx, "Truth Bowl HSR\nDal Makhani Bowl ₹99\nmagicpin.in")
+			agent.Witness(ctx, "https://magicpin.in/truth-bowl", "Truth Bowl HSR\nDal Makhani Bowl ₹99\nmagicpin.in")
 			agent.Cite(ctx, "https://magicpin.in/truth-bowl")
 			return "[1] Truth Bowl HSR (magicpin.in)\nDal Makhani Bowl ₹99", nil
 		},
