@@ -37,7 +37,7 @@ when a task needs one.
 ## Overview
 
 Kaya is a personal WhatsApp assistant for one person: you. You message it the way you message a
-contact, and it works with everything your WhatsApp account can see.
+contact, and it works with everything your WhatsApp account can see, plus the web.
 
 - **Self-hosted.** It runs on your own computer with Docker Compose. Today that is a Mac; the plan is
   a dedicated Linux laptop at home, reachable only over Tailscale.
@@ -179,12 +179,14 @@ contact, and it works with everything your WhatsApp account can see.
   notes from before this was switched on are left alone.
 - **Web search.** Ask about anything recent or changing, "iphone 17 ka price kya hai abhi?" or
   "who won the IPL final?", and Kaya searches the web, answers from what it found, and ends with
-  the links it relied on. Search runs through [SearXNG](https://github.com/searxng/searxng), a
-  self-hosted search engine that asks Google, Bing, DuckDuckGo and others, so there is no search
-  account or API key and no single company sees all your queries. Results are public text, so
-  prices and numbers reach the model as they are; they are still marked as data, never
-  instructions. A query that would carry a private detail (a phone number, email, address or code)
-  is refused before it leaves your machine. Small talk never triggers a search.
+  the one or two links it relied on, taken only from the results. Small talk and things it already
+  knows never trigger a search. Search runs through [SearXNG](https://github.com/searxng/searxng),
+  a search engine you host yourself that asks Google, Bing, DuckDuckGo, Startpage and Wikipedia at
+  once, so there is no search account or API key, and no single company gets all your queries.
+  Kaya can limit a search to the last day, week, month or year when freshness matters. If no engine
+  answers, Kaya says web search is not working right now instead of guessing. A query that would
+  carry a private detail (a phone number, email, address or code) is refused before it leaves your
+  machine.
 - **Least-privilege database logins.** The gateway and core each have their own Postgres role.
   Core, the part that will talk to an LLM, can read chats but cannot see the WhatsApp session, its
   encryption keys, or the keys needed to fetch media.
@@ -237,6 +239,12 @@ Most of the enforcement arrives with the agent stages. Some of it is already in 
   afresh for every request and escaped, so a planted message cannot close its block or pass for
   you or Kaya. Contact and group names
   go as they are. Only placeholders and per-kind counts ever appear in logs.
+- Web search: before a query leaves, it is checked with the same masking rules, and any query
+  holding a phone number, email, address or code is refused, so neither Kaya nor a planted message
+  can send your details to a search engine. Search results are public pages, so they reach the
+  model unmasked (prices and dates stay readable) but marked as data like excerpts, never as
+  instructions. SearXNG listens only inside the stack (or on `127.0.0.1` on a Mac), keeps no
+  account and needs no key.
 - The gateway container gets only the settings it needs and never sees API keys. WhatsApp addresses
   and raw protocol messages are masked in its logs.
 
@@ -739,6 +747,18 @@ there), so also set Docker's MTU in `/etc/docker/daemon.json` (Docker 24 or newe
 
 Then restart Docker and run `make down && make up` so the networks are made again.
 
+To see web search working, open SearXNG's own page and search there; it is the same engine Kaya
+uses. On a Mac that is http://127.0.0.1:8888 (only reachable from the Mac itself), and:
+
+```sh
+./scripts/searxng-mac.sh status              # healthy or not running
+tail -f data/searxng/searxng.log             # every search and every engine that timed out
+```
+
+On Linux SearXNG has no published port; `make ps` shows it, and `make logs` its output. In Activity
+Monitor on a Mac it shows as `granian` (the server SearXNG runs on), and in System Settings > General >
+Login Items as `bash`, since a script starts it; leave that on, or search stops after a restart.
+
 ### 4. Link WhatsApp
 
 `make pair` links Kaya to your WhatsApp as a linked device. It rebuilds the gateway image, stops the
@@ -806,6 +826,8 @@ make media id=42   # download the file of message 42 (photo, voice note, documen
 make logs          # follow logs from every service
 make ps            # show the status of every service
 make check-network # warn when packets are bigger than the internet link carries
+make searxng-mac   # on a Mac: install and run SearXNG outside Docker, as a login item
+make searxng-mac-stop  # on a Mac: stop SearXNG and remove the login item
 make down          # stop the stack (data stays in DATA_DIR)
 make migration name=add_tasks   # new empty migration in db/migrations
 make migrate       # apply pending migrations
@@ -816,7 +838,9 @@ make check         # lint, test and build everything (what CI runs)
 make help          # list every target
 ```
 
-Copy `.env.example` to `.env` and fill in the required values first.
+Copy `.env.example` to `.env` and fill in the required values first. Core run from source has web
+search only when `WEB_SEARCH_URL` points at a SearXNG, for example `http://127.0.0.1:8888` after
+`make searxng-mac`.
 
 How the code is organised, and the standards every change follows:
 [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md).
@@ -844,6 +868,17 @@ TEST_DATABASE_URL=postgres://kaya:kaya@localhost:5432/kaya make test
   Unicode character, context packages, system prompts, WhatsApp formatting, masking of a few
   thousand messages and exact Groq requests. The Go tests must still match them exactly, so the
   files are the spec; change one only together with a deliberate change of behaviour.
+- **Live tests.** A few tests ask the real Groq (and, for web search, a real SearXNG) and check
+  behaviour no fake can: tools are called when they should be, answers carry the right links and
+  times, planted messages change nothing, and no phone number reaches a search engine. They run
+  only with the `live` build tag and a key, and wait between questions to stay inside Groq's free
+  limits:
+
+  ```sh
+  cd core && GROQ_API_KEY=... go test -tags live -run TestLiveWebSearch -v ./internal/chat/
+  ```
+
+  `KAYA_SEARXNG_URL` points the web search test at a SearXNG (default `http://127.0.0.1:8888`).
 - **CI.** [GitHub Actions](.github/workflows/ci.yml) runs core and gateway jobs against a real
   Postgres with pgvector, brings up the full Compose stack and runs the schema tests, and reviews
   dependency changes on pull requests.
