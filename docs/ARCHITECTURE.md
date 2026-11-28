@@ -453,8 +453,10 @@ Folders appear when a phase needs them; empty placeholders are not committed.
   would be masked (a phone number, email, address or code), the tool refuses and tells the model
   to search without it. A search no engine answered, or SearXNG being down, is told to the model
   as "web search is not working", never as an empty result. The tool asks the model to end its
-  answer with the bare links it relied on, only links from the results. SearXNG keeps no account
-  and sends no tracking; its settings (`services/searxng/settings.yml`) list the engines.
+  answer with the bare links it relied on, only links from the results (decision 94). SearXNG needs
+  no account or key; its settings (`services/searxng/settings.yml`) list the engines (decision 95).
+  On a Mac it runs outside Docker as a login item and core reaches it through
+  `host.docker.internal` (decision 96).
 - **History sync.** Each history chunk WhatsApp announces becomes a row in `history_jobs`, stored
   in the transaction that acknowledges the announcement. A single worker downloads the chunk,
   stores it in batches of at most 200 messages (a savepoint per message, so one bad message
