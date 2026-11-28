@@ -26,7 +26,9 @@ func WebSearch(s WebSearcher, private func(string) bool, zone *time.Location) ag
 	return agent.Tool{
 		Name: "web_search",
 		Description: "Search the web for anything recent or that changes (news, prices, scores, releases, schedules) " +
-			"or facts you are unsure of, instead of answering from memory. Write the query like a person types into a " +
+			"or facts you are unsure of, instead of answering from memory, and always before naming a specific shop, " +
+			"restaurant, product, price or place to buy, order or go to: never name those from memory, since yours may " +
+			"be wrong or closed. Write the query like a person types into a " +
 			"search engine. Never put the owner's private details in it: phone numbers, addresses, emails, codes, or what " +
 			"their chats say.",
 		Guide: "How to answer: like a friend who just looked it up, casual and short, naming where you saw it when that " +
