@@ -457,9 +457,11 @@ func ownerWords(q Question, history []memory.Exchange, now time.Time) string {
 
 const groundPrompt = "You fix one WhatsApp reply before it is sent. It was written from web search results, and " +
 	"the items listed after it are not in those results, so they may be made up. Remove every statement that " +
-	"mentions any of them. Where that leaves a gap, say briefly that the search did not show those details, in the " +
-	"reply's own language and tone. Keep every other word and its formatting exactly as it is, and never add a " +
-	"name, place, price, number, date or link. Reply with the fixed reply only."
+	"mentions any of them, then smooth the words around the gap so the reply still reads naturally. Do not add a " +
+	"sentence about the removal unless nothing useful is left; then add one short line saying the search did not " +
+	"show those details. Write in the reply's own language and tone, and Hindi or Hinglish always in Latin letters, " +
+	"never Devanagari. Keep every other word and its formatting as it is, and never add a name, place, price, " +
+	"number, date or link. Reply with the fixed reply only."
 
 // ground takes out of a reply the claims no tool result supports: the model rewrites it once,
 // and whatever it still leaves, or everything when it cannot answer, goes line by line.
