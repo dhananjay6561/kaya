@@ -229,7 +229,7 @@ func TestGroqGivesUpAfterTheRetriesAndSaysWhyWithoutThePromptOrGroqsMessage(t *t
 }
 
 func TestGroqDoesNotWaitOutALongRateLimit(t *testing.T) {
-	for _, after := range []string{"60", "11", " 10.5 "} {
+	for _, after := range []string{"60", "31", " 30.5 "} {
 		f := newFake(t, failure(429, "rate_limit_exceeded", "Retry-After", after))
 		_, err := f.llm(GroqOptions{}).Complete(bg, ask)
 		e := llmError(t, err)
@@ -270,11 +270,11 @@ func TestGroqNamesATooLongMessageAndAnUnknownModelWhateverTheStatus(t *testing.T
 }
 
 func TestGroqReadsARetryAfterDate(t *testing.T) {
-	at := time.Now().Add(30 * time.Second).UTC().Format(http.TimeFormat)
+	at := time.Now().Add(50 * time.Second).UTC().Format(http.TimeFormat)
 	f := newFake(t, failure(429, "", "Retry-After", at))
 	_, err := f.llm(GroqOptions{}).Complete(bg, ask)
 	e := llmError(t, err)
-	if e.RetryAfter == nil || *e.RetryAfter <= 20*time.Second || *e.RetryAfter > 30*time.Second {
+	if e.RetryAfter == nil || *e.RetryAfter <= 40*time.Second || *e.RetryAfter > 50*time.Second {
 		t.Fatalf("retry after = %v", e.RetryAfter)
 	}
 	if f.count() != 1 {
