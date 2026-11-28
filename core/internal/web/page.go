@@ -25,6 +25,8 @@ type Page struct {
 	URL   string
 	Title string
 	Text  string
+	// Published is when the page says it was published; zero when it does not say.
+	Published time.Time
 }
 
 var (
@@ -148,7 +150,7 @@ func (f *Fetcher) Fetch(ctx context.Context, raw string) (Page, error) {
 	if kind == "text/plain" {
 		page.Text = tidyText(string(content))
 	} else {
-		page.Title, page.Text = readable(content, resp.Request.URL)
+		page.Title, page.Text, page.Published = readable(content, resp.Request.URL)
 	}
 	if len([]rune(page.Text)) < minPageText {
 		return Page{}, ErrNoText
@@ -159,25 +161,28 @@ func (f *Fetcher) Fetch(ctx context.Context, raw string) (Page, error) {
 	return page, nil
 }
 
-func readable(raw []byte, u *url.URL) (string, string) {
+func readable(raw []byte, u *url.URL) (string, string, time.Time) {
 	doc, err := html.Parse(bytes.NewReader(raw))
 	if err != nil {
-		return "", ""
+		return "", "", time.Time{}
 	}
 	title := tidy(textOf(find(doc, "title")))
 	parser := readability.NewParser()
-	if article, err := parser.ParseDocument(doc, u); err == nil {
-		var b strings.Builder
-		if article.RenderText(&b) == nil {
-			if text := tidyText(b.String()); len([]rune(text)) >= articleFloor {
-				if t := tidy(article.Title()); t != "" {
-					title = t
-				}
-				return title, text
+	article, err := parser.ParseDocument(doc, u)
+	if err != nil {
+		return title, tidyText(visibleText(doc)), time.Time{}
+	}
+	published, _ := article.PublishedTime()
+	var b strings.Builder
+	if article.RenderText(&b) == nil {
+		if text := tidyText(b.String()); len([]rune(text)) >= articleFloor {
+			if t := tidy(article.Title()); t != "" {
+				title = t
 			}
+			return title, text, published
 		}
 	}
-	return title, tidyText(visibleText(doc))
+	return title, tidyText(visibleText(doc)), published
 }
 
 var skipped = map[string]bool{

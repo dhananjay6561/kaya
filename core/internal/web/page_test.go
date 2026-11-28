@@ -127,3 +127,17 @@ func TestOnlyPublicAddressesArePublic(t *testing.T) {
 		}
 	}
 }
+
+func TestAPagesPublishDateIsKept(t *testing.T) {
+	para := strings.Repeat("Nothing Phone 4a review: the battery lasts two days and the camera is good in daylight. ", 12)
+	u := site(t, page("text/html", `<html><head><title>Nothing Phone 4a review</title>
+		<meta property="article:published_time" content="2026-03-14T09:30:00Z"></head>
+		<body><article><p>`+para+`</p></article></body></html>`))
+	got, err := local.Fetch(context.Background(), u)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got.Published.Format("2006-01-02") != "2026-03-14" {
+		t.Fatalf("published %v", got.Published)
+	}
+}
