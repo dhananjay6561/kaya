@@ -767,3 +767,30 @@ func TestAToolsGuideComesWithItsResultOutsideTheDataTags(t *testing.T) {
 		t.Fatal("the guide went into the description")
 	}
 }
+
+func TestOldConversationGivesWayToToolResults(t *testing.T) {
+	page := strings.Repeat("Dal Makhani Bowl ₹99. ", 40)
+	read := Tool{
+		Name: "read", Description: "Reads.", Parameters: json.RawMessage(`{"type":"object"}`),
+		Run: func(context.Context, json.RawMessage) (string, error) { return page, nil },
+	}
+	old := strings.Repeat("purani baat ", 60)
+	req := llm.Request{Messages: []llm.Message{
+		{Role: llm.System, Content: "system"},
+		{Role: llm.User, Content: old}, {Role: llm.Assistant, Content: old},
+		{Role: llm.User, Content: old}, {Role: llm.Assistant, Content: "newest answer"},
+		{Role: llm.User, Content: "dal makhani kitne ki hai?"},
+	}}
+	m := &model{locality: llm.Local, steps: []step{calls(call("a", "read", `{}`)), answer("₹99")}}
+	budget := m.CountTokens(old)*3 + 200
+	if _, err := Run(bg, Options{LLM: m, Tools: registry(t, read), Logger: quiet, Budget: budget, ResultTokens: 300}, req); err != nil {
+		t.Fatal(err)
+	}
+	sent := m.requests[1].Messages
+	if sent[0].Content != "system" || sent[1].Content != old || sent[2].Content != "newest answer" || sent[3].Content != "dal makhani kitne ki hai?" {
+		t.Fatalf("kept %d messages: %+v", len(sent), sent[:4])
+	}
+	if got := toolMessages(m.requests[1])[0].Content; strings.Contains(got, "Not run") {
+		t.Fatalf("the result had no room: %q", got)
+	}
+}
