@@ -192,7 +192,6 @@ contact, and it works with everything your WhatsApp account can see.
 
 In build order. Status for each stage is in the [roadmap](#project-status-and-roadmap).
 
-- Confirm-before-act for anything that acts for you, a prompt-injection guard and usage tracking
 - Web search with SearXNG, reading pages, and research answers with links
 - Gmail, Google Calendar and Google Drive
 - PPT and PDF decks made from a topic or a chat, uploaded to Drive, with the link sent back
@@ -256,13 +255,13 @@ flowchart LR
     phone["Your phone<br/>WhatsApp"]
     llm["LLM provider<br/>Groq"]
     embed["Embeddings<br/>Voyage"]
+    stt["Transcription<br/>Groq Whisper"]
 
     subgraph host["Your machine, Docker Compose"]
         gateway["gateway<br/>Go, whatsmeow"]
         core["core<br/>Go agent"]
         db[("db<br/>Postgres 18, pgvector")]
         migrate["migrate<br/>dbmate, one-shot"]
-        whisper["whisper<br/>voice notes"]
         searxng["searxng<br/>web search"]
         docs["docs<br/>PPT and PDF"]
         browser["browser<br/>Playwright, noVNC"]
@@ -278,20 +277,20 @@ flowchart LR
     core -->|"send requests via Postgres outbox"| gateway
     core -->|"masked context"| llm
     core -->|"masked chunks"| embed
-    core -.-> whisper
+    core -->|"voice notes"| stt
     core -.-> searxng
     core -.-> docs
     core -.-> browser
     core -.-> voice
 
     classDef planned stroke-dasharray: 5 5
-    class whisper,searxng,docs,browser,voice planned
+    class searxng,docs,browser,voice planned
 ```
 
 *Figure 1. System architecture. Solid boxes and lines are built today: the gateway, core, Postgres,
 the migration step, events from the gateway to core, send requests from core to the gateway, and
-core asking Groq with masked context and Voyage for vectors of masked chunks. Dashed boxes and lines are planned: the whisper, search, docs,
-browser and voice services.*
+core asking Groq with masked context, Groq Whisper for voice note transcripts and Voyage for vectors of masked chunks. Dashed boxes and
+lines are planned: the search, docs, browser and voice services.*
 
 ### How the gateway and core talk
 
@@ -835,8 +834,8 @@ Status key: ✅ done · 🟨 in progress · ⬜ not started
 | 0. Foundation | Monorepo, config, Compose stack, migrations, logging, health, provider interfaces | ✅ |
 | 1. WhatsApp gateway | Contracts, pairing, live ingest, history sync, media, connection health, delivery to core and sending. Checked end to end against a real WhatsApp account. | ✅ |
 | 2. Talking to Kaya | Self-chat command channel and built-in commands `/help`, `/status`, `/pause`, `/resume`. Checked on a real account. | ✅ |
-| 3. Brain | Groq replies, lasting conversation memory, masking for cloud models, embeddings, search, answers from your chats, facts about you, tags and tasks, summaries (built) | 🟨 |
-| 4. Agent loop and safety | Tool calling, confirm-before-act and alerts (built), prompt-injection guard, usage tracking | 🟨 |
+| 3. Brain | Groq replies, lasting conversation memory, masking for cloud models, embeddings, search, answers from your chats, facts about you, tags and tasks, summaries. Checked on a real account. | ✅ |
+| 4. Agent loop and safety | Tool calling, confirm-before-act, prompt-injection guard and alerts (built); alerts wait for their first real heads-up | 🟨 |
 | 5. Voice notes | Transcription, spoken commands (built) | 🟨 |
 | 6. Sending as you | Messages to contacts and groups after confirmation, with rate limits (built); auto-reply in chosen chats | 🟨 |
 | 7. Web | Search, page reading, research answers with sources | ⬜ |
