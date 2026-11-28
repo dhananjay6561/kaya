@@ -747,3 +747,23 @@ func TestAToolCanHaveItsOwnTimeout(t *testing.T) {
 		t.Fatalf("calls %+v, %v", res.Calls, err)
 	}
 }
+
+func TestAToolsGuideComesWithItsResultOutsideTheDataTags(t *testing.T) {
+	search := Tool{
+		Name: "search", Description: "Searches.", Untrusted: true, Guide: "Answer like a friend; cite [n].",
+		Parameters: json.RawMessage(`{"type":"object"}`),
+		Run:        func(context.Context, json.RawMessage) (string, error) { return "[1] Truth Bowl ₹99", nil },
+	}
+	m := &model{locality: llm.Local, steps: []step{calls(call("a", "search", `{}`)), answer("ok")}}
+	if _, err := Run(bg, Options{LLM: m, Tools: registry(t, search), Logger: quiet}, question); err != nil {
+		t.Fatal(err)
+	}
+	told := toolMessages(m.requests[1])[0].Content
+	closing := strings.LastIndex(told, "</data-")
+	if closing < 0 || !strings.HasSuffix(told, "\n\nAnswer like a friend; cite [n].") || strings.Index(told, "Answer like") < closing {
+		t.Fatalf("told %q", told)
+	}
+	if strings.Contains(m.requests[0].Tools[0].Description, "friend") {
+		t.Fatal("the guide went into the description")
+	}
+}
