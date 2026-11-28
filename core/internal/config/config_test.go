@@ -67,6 +67,7 @@ func TestDefaults(t *testing.T) {
 		SendsPerHour:        20,
 		TranscribeModel:     "whisper-large-v3-turbo",
 		MediaDir:            "/base/data/media",
+		Transcribe:          Transcribe{BaseURL: "https://api.groq.com/openai/v1", APIKey: "test-key-not-real"},
 	}
 	if cfg != want {
 		t.Fatalf("got %+v, want %+v", cfg, want)
@@ -233,5 +234,60 @@ func TestAlertsCanBeTurnedOff(t *testing.T) {
 func TestTaggingCanBeTurnedOff(t *testing.T) {
 	if cfg := load(t, env(valid, "TAGGING_TOKENS_PER_DAY", "0")); cfg.TaggingTokensPerDay != 0 {
 		t.Fatalf("got %d", cfg.TaggingTokensPerDay)
+	}
+}
+
+func TestReadsAnyOpenAICompatibleProvider(t *testing.T) {
+	cfg := load(t, env(valid,
+		"LLM_PROVIDER", "compatible", "LLM_BASE_URL", "https://generativelanguage.example/v1beta/openai", "LLM_API_KEY", "key-not-real",
+		"LLM_MODEL_HEAVY", "gemini-heavy", "LLM_CONTEXT_TOKENS", "6000", "LLM_REASONING_EFFORT", "true", "LLM_TOKEN_FACTOR", "1.4",
+	))
+	want := Compatible{
+		Kind: "compatible", BaseURL: "https://generativelanguage.example/v1beta/openai", APIKey: "key-not-real",
+		HeavyModel: "gemini-heavy", RoutineModel: "gemini-heavy", ContextTokens: 6000, Effort: true, TokenFactor: 1.4,
+	}
+	if cfg.LLM.Compatible != want || cfg.LLM.Routine != nil {
+		t.Fatalf("got %+v", cfg.LLM)
+	}
+	local := load(t, env(valid, "LLM_PROVIDER", "compatible", "LLM_BASE_URL", "http://ollama:11434/v1", "LLM_MODEL_HEAVY", "qwen3:4b",
+		"LLM_MODEL_ROUTINE", "qwen3:1.7b", "LLM_LOCALITY", "local"))
+	if c := local.LLM.Compatible; !c.Local || c.APIKey != "" || c.RoutineModel != "qwen3:1.7b" || c.TokenFactor != 1.25 || c.ContextTokens != 4000 {
+		t.Fatalf("local: %+v", c)
+	}
+}
+
+func TestTheRoutineTierCanUseItsOwnProvider(t *testing.T) {
+	cfg := load(t, env(valid, "ROUTINE_LLM_PROVIDER", "groq", "ROUTINE_LLM_API_KEY", "other-key-not-real"))
+	want := Compatible{
+		Kind: "groq", BaseURL: "https://api.groq.com/openai/v1", APIKey: "other-key-not-real",
+		HeavyModel: "openai/gpt-oss-20b", RoutineModel: "openai/gpt-oss-20b", ContextTokens: 4000, Effort: true, TokenFactor: 1,
+	}
+	if cfg.LLM.Routine == nil || *cfg.LLM.Routine != want || cfg.LLM.Provider != "groq" {
+		t.Fatalf("got %+v", cfg.LLM.Routine)
+	}
+}
+
+func TestAnyProviderIsRefusedWithAReason(t *testing.T) {
+	got := problems(t, env(valid,
+		"LLM_PROVIDER", "compatible", "LLM_BASE_URL", "https://api.example.com/v1", "LLM_LOCALITY", "local",
+		"LLM_TOKEN_FACTOR", "9", "LLM_REASONING_EFFORT", "maybe",
+		"ROUTINE_LLM_PROVIDER", "compatible", "ROUTINE_LLM_BASE_URL", "ftp://x", "TRANSCRIBE_BASE_URL", "groq",
+	))
+	for _, want := range []string{
+		"LLM_MODEL_HEAVY: required",
+		"LLM_LOCALITY: local is only for a model on this machine or network (localhost, host.docker.internal, a Compose service or a private address); this one would get chats unmasked",
+		"LLM_TOKEN_FACTOR: must be a number from 1 to 3",
+		"LLM_REASONING_EFFORT: must be true or false",
+		"ROUTINE_LLM_BASE_URL: must be an http:// or https:// URL",
+		"ROUTINE_LLM_MODEL: required",
+		"ROUTINE_LLM_API_KEY: required for a cloud provider",
+		"TRANSCRIBE_BASE_URL: must be an http:// or https:// URL",
+	} {
+		if !slices.Contains(got, want) {
+			t.Errorf("%q missing from %v", want, got)
+		}
+	}
+	if got := problems(t, env(valid, "ROUTINE_LLM_PROVIDER", "openai")); !slices.Contains(got, "ROUTINE_LLM_PROVIDER: must be groq or compatible, or empty to use LLM_PROVIDER for everything") {
+		t.Errorf("got %v", got)
 	}
 }
