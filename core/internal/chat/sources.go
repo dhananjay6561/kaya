@@ -16,7 +16,9 @@ var (
 
 // cite turns an answer's [n] citations into links under it: the sources it cites are numbered
 // again in the order they first appear, numbers that name no source are dropped, and the links
-// are returned as "[n] link" lines. With no sources the answer is left as it is.
+// are returned as "[n] link" lines. An answer that cites none gets the first source as
+// "Source: link", since a tool found it for this answer. With no sources the answer is left as
+// it is.
 func cite(text string, sources []string) (string, []string) {
 	if len(sources) == 0 {
 		return text, nil
@@ -44,6 +46,9 @@ func cite(text string, sources []string) (string, []string) {
 	})
 	if out != text {
 		out = doubleSpace.ReplaceAllString(spaceBeforeIt.ReplaceAllString(out, "$1"), " ")
+	}
+	if len(lines) == 0 {
+		lines = []string{"Source: " + sources[0]}
 	}
 	return out, lines
 }

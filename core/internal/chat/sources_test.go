@@ -29,7 +29,8 @@ func TestCitationsBecomeLinksUnderTheAnswer(t *testing.T) {
 			"Made up. Real [1].",
 			[]string{"[1] https://a.example/"},
 		},
-		{"nothing cited", "RCB won.", "RCB won.", nil},
+		{"nothing cited gets the first source", "RCB won.", "RCB won.", []string{"Source: https://a.example/"}},
+		{"only made-up numbers", "RCB won [8].", "RCB won.", []string{"Source: https://a.example/"}},
 	}
 	for _, c := range cases {
 		got, links := cite(c.text, sources)
