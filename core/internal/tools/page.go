@@ -76,7 +76,11 @@ func ReadPage(f PageFetcher, model llm.Provider, private func(string) bool) agen
 			}
 			agent.Witness(ctx, args.URL, title+"\n"+page.Text)
 			n := agent.Cite(ctx, args.URL)
-			head := fmt.Sprintf("[%d] %s (%s)\n", max(n, 1), title, site(page.URL))
+			where := site(page.URL)
+			if !page.Published.IsZero() {
+				where += ", published " + page.Published.UTC().Format("2 Jan 2006")
+			}
+			head := fmt.Sprintf("[%d] %s (%s)\n", max(n, 1), title, where)
 			if parts, err := shrink(ctx, model, args.LookingFor, title, page.Text); err == nil {
 				return head + parts, nil
 			}
