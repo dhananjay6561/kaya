@@ -165,7 +165,7 @@ func (c *Chat) Reply(ctx context.Context, q Question) (Answer, error) {
 	}
 	var proposed *actions.Action
 	var notes []string
-	var sources []string
+	var sources, evidence []string
 	var owner string
 	ask := func(history, recalled []memory.Exchange, effort llm.Effort) (llm.Completion, error) {
 		built := memory.Build(input(history, recalled))
@@ -182,7 +182,7 @@ func (c *Chat) Reply(ctx context.Context, q Question) (Answer, error) {
 				notes = append(notes, n)
 			}
 		}
-		sources = res.Sources
+		sources, evidence = res.Sources, res.Evidence
 		if err != nil {
 			return completion, err
 		}
@@ -301,6 +301,13 @@ func (c *Chat) Reply(ctx context.Context, q Question) (Answer, error) {
 		}
 		reply = privacy.Restore(reply)
 	}
+	reply, link := cite(reply, sources)
+	if len(evidence) > 0 {
+		shown := append(slices.Clone(evidence), owner)
+		if claims := ungrounded(reply, shown); len(claims) > 0 {
+			reply = c.ground(ctx, reply, claims, shown, privacy)
+		}
+	}
 	answer := strings.Map(func(r rune) rune {
 		if unicode.Is(unicode.Cf, r) && r != 0x200c && r != 0x200d && (r < 0xe0020 || r > 0xe007f) {
 			return -1
@@ -322,7 +329,6 @@ func (c *Chat) Reply(ctx context.Context, q Question) (Answer, error) {
 		}
 		return withNotes(Answer{Text: "I had no answer to that. Try asking another way."}, notes), nil
 	}
-	answer, link := cite(answer, sources)
 	cut := utf8.RuneCountInString(answer) > o.MaxReplyLength
 	answer = ClipTo(answer, o.MaxReplyLength)
 	if ranOut || cut {
@@ -446,6 +452,43 @@ func ownerWords(q Question, history []memory.Exchange, now time.Time) string {
 		}
 	}
 	return strings.Join(words, "\n")
+}
+
+const groundPrompt = "You fix one WhatsApp reply before it is sent. It was written from web search results, and " +
+	"the items listed after it are not in those results, so they may be made up. Remove every statement that " +
+	"mentions any of them. Where that leaves a gap, say briefly that the search did not show those details, in the " +
+	"reply's own language and tone. Keep every other word and its formatting exactly as it is, and never add a " +
+	"name, place, price, number, date or link. Reply with the fixed reply only."
+
+// ground takes out of a reply the claims no tool result supports: the model rewrites it once,
+// and whatever it still leaves, or everything when it cannot answer, goes line by line.
+func (c *Chat) ground(ctx context.Context, reply string, claims, shown []string, privacy MaskSession) string {
+	c.o.Logger.Warn("the answer named things the search did not show; taking them out", "claims", len(claims))
+	text, list := reply, strings.Join(claims, "; ")
+	if privacy != nil {
+		text, list = privacy.Mask(text, text), privacy.Mask(list, text)
+	}
+	completion, err := c.o.LLM.Complete(ctx, llm.Request{
+		Tier: llm.Heavy, Effort: llm.Low, MaxTokens: 1024,
+		Messages: []llm.Message{
+			{Role: llm.System, Content: groundPrompt},
+			{Role: llm.User, Content: "Reply:\n" + text + "\n\nNot in the search results: " + list},
+		},
+	})
+	fixed := strings.TrimSpace(completion.Text)
+	if err != nil || fixed == "" {
+		if err != nil {
+			c.o.Logger.Warn("could not have the answer fixed; dropping the lines instead", logging.Err(err))
+		}
+		return dropClaims(reply, claims)
+	}
+	if privacy != nil {
+		fixed = privacy.Restore(fixed)
+	}
+	if left := ungrounded(fixed, shown); len(left) > 0 {
+		return dropClaims(fixed, left)
+	}
+	return fixed
 }
 
 // withNotes puts the lines tools wrote for DJ under an answer, as they are, such as the exact time
