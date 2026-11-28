@@ -673,3 +673,21 @@ func TestWhatToolsShowedIsKeptAsEvidence(t *testing.T) {
 		t.Fatalf("evidence %q, %v", res.Evidence, err)
 	}
 }
+
+func TestAToolRunsNoMoreThanItsMaxCallsForOneMessage(t *testing.T) {
+	runs := 0
+	tool := Tool{
+		Name: "search", Description: "Searches.", Parameters: json.RawMessage(`{"type":"object"}`), MaxCalls: 2,
+		Run: func(context.Context, json.RawMessage) (string, error) { runs++; return "found", nil },
+	}
+	m := &model{locality: llm.Local, steps: []step{
+		calls(call("a", "search", `{}`)), calls(call("b", "search", `{}`)), calls(call("c", "search", `{}`)), answer("ok"),
+	}}
+	res, err := Run(bg, Options{LLM: m, Tools: registry(t, tool), Logger: quiet}, question)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if runs != 2 || res.Calls[2].Outcome != NotRun || !strings.Contains(toolMessages(m.requests[3])[2].Content, "at most 2 times") {
+		t.Fatalf("ran %d times, calls %+v", runs, res.Calls)
+	}
+}

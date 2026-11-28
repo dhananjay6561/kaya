@@ -44,6 +44,9 @@ type Tool struct {
 	// cloud model unmasked, so prices, years and numbers stay readable. Only an Untrusted tool can
 	// be Public.
 	Public bool
+	// MaxCalls is the most times the tool runs while answering one message; 0 means no limit
+	// beyond the loop's own.
+	MaxCalls int
 }
 
 // Problem is a failure the model is told about in the tool's own words, so it can try another way.
