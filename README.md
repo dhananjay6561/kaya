@@ -191,6 +191,11 @@ contact, and it works with everything your WhatsApp account can see, plus the we
   answers, Kaya says web search is not working right now instead of guessing. A query that would
   carry a private detail (a phone number, email, address or code) is refused before it leaves your
   machine.
+- **Reads links.** Paste a link and ask about it ("is link pe sabse sasta kya hai?", "isko summarise
+  kar"), or ask something only a page can answer ("truth bowl hsr ka menu dekh ke bata 150 ke andar
+  kya milega") and Kaya opens the page, reads its menu, prices or facts, and answers from them with
+  the link. Pages built by scripts (Zomato, Swiggy, many shops) need a real browser, which comes in a
+  later stage; Kaya says so instead of guessing.
 - **Least-privilege database logins.** The gateway and core each have their own Postgres role.
   Core, the part that will talk to an LLM, can read chats but cannot see the WhatsApp session, its
   encryption keys, or the keys needed to fetch media.
@@ -212,7 +217,7 @@ contact, and it works with everything your WhatsApp account can see, plus the we
 
 In build order. Status for each stage is in the [roadmap](#project-status-and-roadmap).
 
-- Reading a page from a link, and research answers that read a few pages and cite them
+- Research answers that read a few pages and cite them
 - Gmail, Google Calendar and Google Drive
 - PPT and PDF decks made from a topic or a chat, uploaded to Drive, with the link sent back
 - Acting on websites you are logged into, and ordering with spending caps
@@ -249,6 +254,10 @@ Most of the enforcement arrives with the agent stages. Some of it is already in 
   afresh for every request and escaped, so a planted message cannot close its block or pass for
   you or Kaya. Contact and group names
   go as they are. Only placeholders and per-kind counts ever appear in logs.
+- Pages: Kaya opens only links you sent or that its own search returned, never a link a page or
+  someone else's message made up, and only public addresses, checked on every connection, so
+  nothing can point it at your router, your home network or Kaya's own services. A page is text to
+  read, never instructions.
 - Web search: before a query leaves, it is checked with the same masking rules, and any query
   holding a phone number, email, address or code is refused, so neither Kaya nor a planted message
   can send your details to a search engine. Search results are public pages, so they reach the
@@ -914,7 +923,7 @@ Status key: ✅ done · 🟨 in progress · ⬜ not started
 | 4. Agent loop and safety | Tool calling, confirm-before-act, prompt-injection guard, alerts, any model by settings (built); alerts wait for their first real heads-up | 🟨 |
 | 5. Voice notes | Transcription, spoken commands (built) | 🟨 |
 | 6. Sending as you | Messages to contacts and groups after confirmation, with rate limits (built); auto-reply in chosen chats | 🟨 |
-| 7. Web | Web search through SearXNG with links (built); page reading, research answers with sources | 🟨 |
+| 7. Web | Web search through SearXNG, reading pages from links or results (built); research answers with sources | 🟨 |
 | 8. Google | OAuth, Drive, Gmail, Calendar | ⬜ |
 | 9. Documents | PPT and PDF from a topic or chat, uploaded to Drive | ⬜ |
 | 10. Scheduler | Persistent jobs, plain-language schedules, reminders (built); morning brief | 🟨 |
