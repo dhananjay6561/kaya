@@ -1,0 +1,37 @@
+use_default_settings:
+  engines:
+    keep_only:
+      - google
+      - bing
+      - brave
+      - duckduckgo
+      - qwant
+      - wikipedia
+
+general:
+  instance_name: kaya
+
+server:
+  limiter: false
+  public_instance: false
+  image_proxy: false
+
+search:
+  safe_search: 0
+  formats:
+    - html
+    - json
+
+engines:
+  - name: google
+    disabled: false
+  - name: bing
+    disabled: false
+  - name: brave
+    disabled: false
+  - name: duckduckgo
+    disabled: false
+  - name: qwant
+    disabled: false
+  - name: wikipedia
+    disabled: false

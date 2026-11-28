@@ -104,6 +104,30 @@ services:
       retries: 3
       start_period: 10s
 
+  searxng:
+    image: searxng/searxng:2026.11.26-b5605b8f2@sha256:462d8dbeadd7c7c304be08d47084f5caba70f47a9145a01fd25990a7944e61b7
+    restart: unless-stopped
+    stop_grace_period: 15s
+    user: "977:977"
+    read_only: true
+    security_opt:
+      - no-new-privileges:true
+    cap_drop:
+      - ALL
+    environment:
+      SEARXNG_SECRET: ${SEARXNG_SECRET:?set SEARXNG_SECRET in .env}
+    volumes:
+      - ./services/searxng/settings.yml:/etc/searxng/settings.yml:ro
+    tmpfs:
+      - /var/cache/searxng:uid=977,gid=977
+      - /tmp
+    healthcheck:
+      test: ["CMD", "/usr/local/searxng/.venv/bin/python", "-c", "import urllib.request; urllib.request.urlopen('http://127.0.0.1:8080/healthz', timeout=4)"]
+      interval: 10s
+      timeout: 5s
+      retries: 3
+      start_period: 30s
+
   core:
     <<: *service
     build:
@@ -130,6 +154,7 @@ services:
       DATA_DIR: /data
       MEDIA_DIR: /media
       GROQ_MODEL_TRANSCRIBE: ${GROQ_MODEL_TRANSCRIBE:-whisper-large-v3-turbo}
+      WEB_SEARCH_URL: ${WEB_SEARCH_URL-http://searxng:8080}
       LISTEN_HOST: 0.0.0.0
     volumes:
       - ${DATA_DIR:-./data}/core:/data
