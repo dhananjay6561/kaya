@@ -3,6 +3,7 @@ package agent
 import (
 	"context"
 	"slices"
+	"strings"
 	"sync"
 )
 
@@ -70,4 +71,35 @@ func (s *sources) witnessed() []Shown {
 func CollectSources(ctx context.Context) (context.Context, func() []string) {
 	ctx, s := withSources(ctx)
 	return ctx, s.all
+}
+
+// unknownLink is the first Links argument that is neither a link DJ wrote nor one a tool
+// returned in this run; "" when every one is known.
+func unknownLink(ctx context.Context, tool Tool, args any, owner string) string {
+	fields, _ := args.(map[string]any)
+	var known []string
+	if s, ok := ctx.Value(sourcesKey{}).(*sources); ok {
+		known = s.all()
+	}
+	said := sameLink(owner)
+	for _, name := range tool.Links {
+		value, _ := fields[name].(string)
+		link := sameLink(value)
+		if link == "" || (!strings.Contains(said, link) && !slices.ContainsFunc(known, func(k string) bool { return sameLink(k) == link })) {
+			return value
+		}
+	}
+	return ""
+}
+
+// sameLink is a link written the way two copies of it compare: lower case, with no scheme, no
+// "www.", no fragment and no trailing slash. Applied to a whole message, it lets a link the
+// model wrote be found in what DJ typed, with or without https://.
+func sameLink(s string) string {
+	s = strings.ToLower(strings.TrimSpace(s))
+	if i := strings.Index(s, "#"); i >= 0 && !strings.Contains(s, " ") {
+		s = s[:i]
+	}
+	s = strings.NewReplacer("https://", "", "http://", "", "www.", "").Replace(s)
+	return strings.TrimRight(s, "/")
 }
