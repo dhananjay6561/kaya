@@ -191,6 +191,9 @@ contact, and it works with everything your WhatsApp account can see, plus the we
   answers, Kaya says web search is not working right now instead of guessing. A query that would
   carry a private detail (a phone number, email, address or code) is refused before it leaves your
   machine.
+- **Research answers.** For "3000 ke andar best earbuds kaunse hain" or "Nothing 4a vs Pixel 9a",
+  Kaya reads two pages from different sites, says where they agree or disagree and how old they
+  are, and ends with its own pick and a link from each site.
 - **Reads links.** Paste a link and ask about it ("is link pe sabse sasta kya hai?", "isko summarise
   kar"), or ask something only a page can answer ("truth bowl hsr ka menu dekh ke bata 150 ke andar
   kya milega") and Kaya opens the page, reads its menu, prices or facts, and answers from them with
@@ -217,8 +220,10 @@ contact, and it works with everything your WhatsApp account can see, plus the we
 
 In build order. Status for each stage is in the [roadmap](#project-status-and-roadmap).
 
-- Research answers that read a few pages and cite them
-- Gmail, Google Calendar and Google Drive
+- Maps and directions: distance, travel time, a maps link and a rough cab fare
+- Gmail, Google Calendar and Google Drive, and reading the PDFs and photos you receive (admit
+  cards, tickets, bills)
+- Long answers sent as a few short messages, the way a person texts
 - PPT and PDF decks made from a topic or a chat, uploaded to Drive, with the link sent back
 - Acting on websites you are logged into, and ordering with spending caps
 - Phone calls from Kaya's own number, with a transcript and summary sent to you
@@ -923,7 +928,7 @@ Status key: ✅ done · 🟨 in progress · ⬜ not started
 | 4. Agent loop and safety | Tool calling, confirm-before-act, prompt-injection guard, alerts, any model by settings (built); alerts wait for their first real heads-up | 🟨 |
 | 5. Voice notes | Transcription, spoken commands (built) | 🟨 |
 | 6. Sending as you | Messages to contacts and groups after confirmation, with rate limits (built); auto-reply in chosen chats | 🟨 |
-| 7. Web | Web search through SearXNG, reading pages from links or results (built); research answers with sources | 🟨 |
+| 7. Web | Web search through SearXNG, reading pages from links or results, research answers comparing two sites (built); maps and directions | 🟨 |
 | 8. Google | OAuth, Drive, Gmail, Calendar | ⬜ |
 | 9. Documents | PPT and PDF from a topic or chat, uploaded to Drive | ⬜ |
 | 10. Scheduler | Persistent jobs, plain-language schedules, reminders (built); morning brief | 🟨 |
