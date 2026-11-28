@@ -29,6 +29,12 @@ func TestCitationsBecomeLinksUnderTheAnswer(t *testing.T) {
 			"Made up. Real [1].",
 			[]string{"[1] https://a.example/"},
 		},
+		{
+			"gpt-oss's own brackets",
+			"Base ₹82,900【3】, Air ₹94,990【1†source】.",
+			"Base ₹82,900[1], Air ₹94,990[2].",
+			[]string{"[1] https://c.example/", "[2] https://a.example/"},
+		},
 		{"nothing cited gets the first source", "RCB won.", "RCB won.", []string{"Source: https://a.example/"}},
 		{"only made-up numbers", "RCB won [8].", "RCB won.", []string{"Source: https://a.example/"}},
 	}
