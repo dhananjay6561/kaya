@@ -88,7 +88,7 @@ type Result struct {
 	// Sources are the links tools numbered with Cite; source n is Sources[n-1].
 	Sources []string
 	// Evidence is the public text tools showed the model, kept with Witness.
-	Evidence []string
+	Evidence []Shown
 }
 
 // ErrTooManyRounds is a model that kept calling tools after it was told to answer.
