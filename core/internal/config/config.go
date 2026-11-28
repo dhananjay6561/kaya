@@ -62,6 +62,8 @@ type Config struct {
 	TranscribeModel string
 	// MediaDir is where the gateway keeps downloaded files, which core reads (read-only).
 	MediaDir string
+	// WebSearchURL is the SearXNG core searches the web through; "" turns web search off.
+	WebSearchURL string
 }
 
 // Error lists every problem found in the config. It never includes the values themselves.
@@ -188,6 +190,14 @@ func Load(getenv func(string) string, baseDir string) (Config, error) {
 			fail("SENDS_PER_HOUR", "must be 0 (off) or a positive whole number")
 		default:
 			cfg.SendsPerHour = n
+		}
+	}
+	if raw := strings.TrimSpace(getenv("WEB_SEARCH_URL")); raw != "" {
+		u, err := url.Parse(raw)
+		if err != nil || (u.Scheme != "http" && u.Scheme != "https") || u.Host == "" || u.User != nil {
+			fail("WEB_SEARCH_URL", "must be an http:// or https:// URL, or empty to turn web search off")
+		} else {
+			cfg.WebSearchURL = raw
 		}
 	}
 	if cfg.LLM.Provider == "groq" && cfg.LLM.Groq.APIKey == "" {

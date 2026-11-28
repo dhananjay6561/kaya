@@ -78,10 +78,12 @@ func TestReadsEveryValue(t *testing.T) {
 		"LOG_LEVEL", "debug", "CORE_PORT", "8080", "LISTEN_HOST", "0.0.0.0", "DATA_DIR", "/srv/kaya",
 		"TIMEZONE", "Asia/Kolkata", "GROQ_MODEL_HEAVY", "heavy", "GROQ_MODEL_ROUTINE", "routine",
 		"GROQ_CONTEXT_TOKENS", "12000", "TAGGING_TOKENS_PER_DAY", "50000", "ALERTS_PER_HOUR", "4", "SENDS_PER_HOUR", "3", "MEDIA_DIR", "/media",
+		"WEB_SEARCH_URL", "http://searxng:8080",
 	))
 	if cfg.LogLevel != "debug" || cfg.Port != 8080 || cfg.ListenHost != "0.0.0.0" || cfg.DataDir != "/srv/kaya" ||
 		cfg.TimeZone != "Asia/Kolkata" || cfg.LLM.Groq.HeavyModel != "heavy" ||
-		cfg.LLM.Groq.RoutineModel != "routine" || cfg.LLM.Groq.ContextTokens != 12000 || cfg.TaggingTokensPerDay != 50000 || cfg.AlertsPerHour != 4 || cfg.SendsPerHour != 3 || cfg.MediaDir != "/media" {
+		cfg.LLM.Groq.RoutineModel != "routine" || cfg.LLM.Groq.ContextTokens != 12000 || cfg.TaggingTokensPerDay != 50000 || cfg.AlertsPerHour != 4 || cfg.SendsPerHour != 3 || cfg.MediaDir != "/media" ||
+		cfg.WebSearchURL != "http://searxng:8080" {
 		t.Fatalf("not every value was read: %+v", cfg)
 	}
 }
@@ -138,6 +140,7 @@ func TestRejectsInvalidValuesWithAReason(t *testing.T) {
 	got := problems(t, env(valid,
 		"CORE_PORT", "70000", "DATABASE_URL", "http://localhost/kaya", "LOG_LEVEL", "loud",
 		"TIMEZONE", "India/Delhi", "GROQ_CONTEXT_TOKENS", "100", "TAGGING_TOKENS_PER_DAY", "100", "ALERTS_PER_HOUR", "-1",
+		"WEB_SEARCH_URL", "searxng:8080",
 	))
 	for _, want := range []string{
 		"CORE_PORT: must be between 1 and 65535",
@@ -146,6 +149,7 @@ func TestRejectsInvalidValuesWithAReason(t *testing.T) {
 		"GROQ_CONTEXT_TOKENS: must be at least 500",
 		"TAGGING_TOKENS_PER_DAY: must be 0 (off) or at least 5000",
 		"ALERTS_PER_HOUR: must be 0 (off) or a positive whole number",
+		"WEB_SEARCH_URL: must be an http:// or https:// URL, or empty to turn web search off",
 	} {
 		if !slices.Contains(got, want) {
 			t.Fatalf("%q missing from %v", want, got)
