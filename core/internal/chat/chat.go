@@ -309,6 +309,9 @@ func (c *Chat) Reply(ctx context.Context, q Question) (Answer, error) {
 			reply = c.ground(ctx, reply, claims, shown, privacy)
 		}
 	}
+	if devanagari(reply) && !devanagari(owner) {
+		reply = c.latin(ctx, reply, privacy)
+	}
 	answer := strings.Map(func(r rune) rune {
 		if unicode.Is(unicode.Cf, r) && r != 0x200c && r != 0x200d && (r < 0xe0020 || r > 0xe007f) {
 			return -1
@@ -492,6 +495,39 @@ func (c *Chat) ground(ctx context.Context, reply string, claims, shown []string,
 		return dropClaims(fixed, left)
 	}
 	return fixed
+}
+
+const latinPrompt = "Rewrite this WhatsApp reply so every Hindi word is in Latin letters, the way Indians text " +
+	"in Hinglish (\"kal subah 7 baje\", never Devanagari). Change nothing else: the same words, meaning, order, " +
+	"formatting, emoji, numbers and links. Reply with the rewritten reply only."
+
+// latin rewrites a reply that slipped into Devanagari when DJ writes in Latin letters, on the
+// routine model; if that fails the reply goes as it is.
+func (c *Chat) latin(ctx context.Context, reply string, privacy MaskSession) string {
+	c.o.Logger.Warn("the answer used Devanagari; rewriting it in Latin letters")
+	text := reply
+	if privacy != nil {
+		text = privacy.Mask(text, text)
+	}
+	completion, err := c.o.LLM.Complete(ctx, llm.Request{
+		Tier: llm.Routine, Effort: llm.Low, MaxTokens: 1024,
+		Messages: []llm.Message{{Role: llm.System, Content: latinPrompt}, {Role: llm.User, Content: text}},
+	})
+	fixed := strings.TrimSpace(completion.Text)
+	if err != nil || fixed == "" || devanagari(fixed) {
+		if err != nil {
+			c.o.Logger.Warn("could not rewrite the answer in Latin letters", logging.Err(err))
+		}
+		return reply
+	}
+	if privacy != nil {
+		fixed = privacy.Restore(fixed)
+	}
+	return fixed
+}
+
+func devanagari(s string) bool {
+	return strings.IndexFunc(s, func(r rune) bool { return unicode.In(r, unicode.Devanagari) }) >= 0
 }
 
 // withNotes puts the lines tools wrote for DJ under an answer, as they are, such as the exact time
