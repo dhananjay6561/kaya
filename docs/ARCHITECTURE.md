@@ -488,6 +488,12 @@ Folders appear when a phase needs them; empty placeholders are not committed.
   is witnessed as evidence and the link cited. `Tool.Links` makes `url` a link DJ wrote or a tool
   returned this message; `Tool.Timeout` gives it 60 seconds; `Tool.Guide` carries how to answer
   from results, given after the data tags only when the tool ran (decision 104).
+- **Research.** For a comparison or a pick, the guides ask for two pages from different sites, where
+  they disagree, how old they are (a page's stated publish date is shown with its site), and a pick.
+  Chat puts up to two cited links under an answer, each from a different site. When a tool result
+  has less than `ResultTokens` of room, the agent leaves out the oldest conversation pairs of that
+  question's later requests, never the system prompt, the message before the question or the
+  question (decision 105).
 - **Rate limits.** Groq's `Retry-After` is waited out whenever the call still fits its 45-second
   deadline; a longer one fails at once with the "limit" notice, and the error says how long Groq
   asked to wait (decisions 99, 102).
