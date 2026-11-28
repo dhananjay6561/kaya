@@ -302,7 +302,7 @@ func (c *Chat) Reply(ctx context.Context, q Question) (Answer, error) {
 		}
 		reply = privacy.Restore(reply)
 	}
-	reply, link := cite(reply, sources, evidence)
+	reply, links := cite(reply, sources, evidence)
 	if len(evidence) > 0 {
 		shown := append(texts(evidence), owner)
 		if claims := ungrounded(reply, shown); len(claims) > 0 {
@@ -335,8 +335,8 @@ func (c *Chat) Reply(ctx context.Context, q Question) (Answer, error) {
 	if ranOut || cut {
 		answer += cutShort
 	}
-	if link != "" {
-		answer += "\n\n" + link
+	if len(links) > 0 {
+		answer += "\n\n" + strings.Join(links, "\n")
 	}
 	return withNotes(c.withProposal(Answer{Text: answer, Remember: true}, proposed), notes), nil
 }
