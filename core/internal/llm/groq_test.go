@@ -78,7 +78,7 @@ var testGroq = config.Groq{
 	ContextTokens: 4000,
 }
 
-func (f *fakeGroq) llm(o GroqOptions) *Groq {
+func (f *fakeGroq) llm(o ClientOptions) *Client {
 	f.t.Helper()
 	if o.BaseURL == "" {
 		o.BaseURL = f.server.URL + "/openai/v1"
@@ -139,7 +139,7 @@ func llmError(t *testing.T, err error) *Error {
 
 func TestGroqAsksTheTierAndReturnsTextModelReasonAndUsage(t *testing.T) {
 	f := newFake(t, ok("Hello there!"))
-	got, err := f.llm(GroqOptions{BaseURL: f.server.URL + "/openai/v1/"}).Complete(bg, ask)
+	got, err := f.llm(ClientOptions{BaseURL: f.server.URL + "/openai/v1/"}).Complete(bg, ask)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -165,7 +165,7 @@ func TestGroqAsksTheTierAndReturnsTextModelReasonAndUsage(t *testing.T) {
 
 func TestGroqUsesTheHeavyModelWithMoreRoomAndEffortAndTheCallersLimits(t *testing.T) {
 	f := newFake(t, ok("x"), ok("y"))
-	g := f.llm(GroqOptions{})
+	g := f.llm(ClientOptions{})
 	temp := 0.2
 	if _, err := g.Complete(bg, Request{Tier: Heavy, Messages: ask.Messages, MaxTokens: 50, Temperature: &temp}); err != nil {
 		t.Fatal(err)
@@ -188,7 +188,7 @@ func TestGroqUsesTheHeavyModelWithMoreRoomAndEffortAndTheCallersLimits(t *testin
 
 func TestGroqReportsACutOffAnswerAndAnEmptyOneAsTheyAre(t *testing.T) {
 	f := newFake(t, ok("partial", `"length"`), ok(nil), ok("x", `"weird"`), ok("x", "null"))
-	g := f.llm(GroqOptions{})
+	g := f.llm(ClientOptions{})
 	for _, want := range []Completion{
 		{Text: "partial", FinishReason: FinishLength},
 		{Text: "", FinishReason: FinishStop},
@@ -207,7 +207,7 @@ func TestGroqReportsACutOffAnswerAndAnEmptyOneAsTheyAre(t *testing.T) {
 
 func TestGroqRetriesWhenBusyOrDownThenSucceeds(t *testing.T) {
 	f := newFake(t, failure(429, "rate_limit_exceeded", "Retry-After", "0"), failure(503, ""), ok("finally"))
-	got, err := f.llm(GroqOptions{}).Complete(bg, ask)
+	got, err := f.llm(ClientOptions{}).Complete(bg, ask)
 	if err != nil || got.Text != "finally" || f.count() != 3 {
 		t.Fatalf("got %q, %v after %d calls", got.Text, err, f.count())
 	}
@@ -215,7 +215,7 @@ func TestGroqRetriesWhenBusyOrDownThenSucceeds(t *testing.T) {
 
 func TestGroqGivesUpAfterTheRetriesAndSaysWhyWithoutThePromptOrGroqsMessage(t *testing.T) {
 	f := newFake(t, failure(500, ""), failure(502, ""), failure(503, ""))
-	_, err := f.llm(GroqOptions{}).Complete(bg, ask)
+	_, err := f.llm(ClientOptions{}).Complete(bg, ask)
 	e := llmError(t, err)
 	if e.Code != Unavailable || e.Status != 503 || f.count() != 3 {
 		t.Fatalf("err = %+v after %d calls", e, f.count())
@@ -231,14 +231,14 @@ func TestGroqGivesUpAfterTheRetriesAndSaysWhyWithoutThePromptOrGroqsMessage(t *t
 func TestGroqDoesNotWaitOutALongRateLimit(t *testing.T) {
 	for _, after := range []string{"60", "46", " 45.5 "} {
 		f := newFake(t, failure(429, "rate_limit_exceeded", "Retry-After", after))
-		_, err := f.llm(GroqOptions{}).Complete(bg, ask)
+		_, err := f.llm(ClientOptions{}).Complete(bg, ask)
 		e := llmError(t, err)
 		if e.Code != RateLimited || e.Detail != "rate_limit_exceeded" || e.RetryAfter == nil || f.count() != 1 {
 			t.Fatalf("%q: err = %+v after %d calls", after, e, f.count())
 		}
 	}
 	f := newFake(t, failure(429, "", "Retry-After", "60"))
-	_, err := f.llm(GroqOptions{}).Complete(bg, ask)
+	_, err := f.llm(ClientOptions{}).Complete(bg, ask)
 	if e := llmError(t, err); *e.RetryAfter != time.Minute {
 		t.Fatalf("retry after = %v", *e.RetryAfter)
 	}
@@ -247,7 +247,7 @@ func TestGroqDoesNotWaitOutALongRateLimit(t *testing.T) {
 func TestGroqDoesNotRetryARefusedKeyOrARefusedRequest(t *testing.T) {
 	for status, code := range map[int]string{401: Auth, 403: Auth, 400: Rejected, 413: TooLong, 404: Misconfigured, 422: Rejected} {
 		f := newFake(t, failure(status, "invalid_api_key"))
-		_, err := f.llm(GroqOptions{}).Complete(bg, ask)
+		_, err := f.llm(ClientOptions{}).Complete(bg, ask)
 		if e := llmError(t, err); e.Code != code || e.Status != status || f.count() != 1 {
 			t.Fatalf("%d: err = %+v after %d calls", status, e, f.count())
 		}
@@ -262,7 +262,7 @@ func TestGroqNamesATooLongMessageAndAnUnknownModelWhateverTheStatus(t *testing.T
 		"model_not_found":         Misconfigured,
 	} {
 		f := newFake(t, failure(400, detail))
-		_, err := f.llm(GroqOptions{}).Complete(bg, ask)
+		_, err := f.llm(ClientOptions{}).Complete(bg, ask)
 		if e := llmError(t, err); e.Code != code {
 			t.Fatalf("%s: code = %s", detail, e.Code)
 		}
@@ -272,7 +272,7 @@ func TestGroqNamesATooLongMessageAndAnUnknownModelWhateverTheStatus(t *testing.T
 func TestGroqReadsARetryAfterDate(t *testing.T) {
 	at := time.Now().Add(55 * time.Second).UTC().Format(http.TimeFormat)
 	f := newFake(t, failure(429, "", "Retry-After", at))
-	_, err := f.llm(GroqOptions{}).Complete(bg, ask)
+	_, err := f.llm(ClientOptions{}).Complete(bg, ask)
 	e := llmError(t, err)
 	if e.RetryAfter == nil || *e.RetryAfter <= 45*time.Second || *e.RetryAfter > 55*time.Second {
 		t.Fatalf("retry after = %v", e.RetryAfter)
@@ -282,18 +282,18 @@ func TestGroqReadsARetryAfterDate(t *testing.T) {
 	}
 	past := time.Now().Add(-time.Hour).UTC().Format(http.TimeFormat)
 	f = newFake(t, failure(429, "", "Retry-After", past), ok("soon"))
-	if got, err := f.llm(GroqOptions{}).Complete(bg, ask); err != nil || got.Text != "soon" {
+	if got, err := f.llm(ClientOptions{}).Complete(bg, ask); err != nil || got.Text != "soon" {
 		t.Fatalf("a date in the past: %q, %v", got.Text, err)
 	}
 	f = newFake(t, failure(429, "", "Retry-After", "soon-ish"), failure(429, ""))
-	_, err = f.llm(GroqOptions{MaxRetries: -1}).Complete(bg, ask)
+	_, err = f.llm(ClientOptions{MaxRetries: -1}).Complete(bg, ask)
 	if e := llmError(t, err); e.RetryAfter != nil {
 		t.Fatalf("an unreadable header gave %v", *e.RetryAfter)
 	}
 }
 
 func TestGroqReadsRetryAfterAsJavaScriptsNumberDid(t *testing.T) {
-	g := newFake(t).llm(GroqOptions{Now: func() time.Time { return time.Date(2026, 11, 25, 9, 0, 0, 0, time.UTC) }})
+	g := newFake(t).llm(ClientOptions{Now: func() time.Time { return time.Date(2026, 11, 25, 9, 0, 0, 0, time.UTC) }})
 	for header, want := range map[string]time.Duration{
 		"5":                             5 * time.Second,
 		" 2.5 ":                         2500 * time.Millisecond,
@@ -319,7 +319,7 @@ func TestGroqReadsRetryAfterAsJavaScriptsNumberDid(t *testing.T) {
 
 func TestGroqGivesUpAtOnceOnAnEnormousRetryAfter(t *testing.T) {
 	f := newFake(t, failure(429, "", "Retry-After", "1e300"), ok("never"))
-	_, err := f.llm(GroqOptions{}).Complete(bg, ask)
+	_, err := f.llm(ClientOptions{}).Complete(bg, ask)
 	if e := llmError(t, err); e.Code != RateLimited || f.count() != 1 {
 		t.Fatalf("err = %+v after %d calls", e, f.count())
 	}
@@ -327,7 +327,7 @@ func TestGroqGivesUpAtOnceOnAnEnormousRetryAfter(t *testing.T) {
 
 func TestGroqCallsAnAttemptWithNoTimeLeftATimeout(t *testing.T) {
 	f := newFake(t, ok("never"))
-	_, err := f.llm(GroqOptions{Deadline: -5 * time.Millisecond}).Complete(bg, ask)
+	_, err := f.llm(ClientOptions{Deadline: -5 * time.Millisecond}).Complete(bg, ask)
 	if e := llmError(t, err); e.Code != Timeout {
 		t.Fatalf("err = %+v", e)
 	}
@@ -335,7 +335,7 @@ func TestGroqCallsAnAttemptWithNoTimeLeftATimeout(t *testing.T) {
 
 func TestGroqDoublesItsWaitAndGivesUpRatherThanWaitTooLong(t *testing.T) {
 	f := newFake(t, failure(503, ""), failure(503, ""), ok("x"))
-	_, err := f.llm(GroqOptions{RetryBase: 6 * time.Millisecond, MaxRetryWait: 10 * time.Millisecond}).Complete(bg, ask)
+	_, err := f.llm(ClientOptions{RetryBase: 6 * time.Millisecond, MaxRetryWait: 10 * time.Millisecond}).Complete(bg, ask)
 	if e := llmError(t, err); e.Code != Unavailable || f.count() != 2 {
 		t.Fatalf("err = %+v after %d calls; the second wait (12 ms) is over the 10 ms limit", e, f.count())
 	}
@@ -344,7 +344,7 @@ func TestGroqDoublesItsWaitAndGivesUpRatherThanWaitTooLong(t *testing.T) {
 func TestGroqStopsRetryingAtTheOverallDeadline(t *testing.T) {
 	f := newFake(t, hang, hang, hang, hang, hang, hang)
 	started := time.Now()
-	_, err := f.llm(GroqOptions{Timeout: time.Second, Deadline: 30 * time.Millisecond, MaxRetries: 5}).Complete(bg, ask)
+	_, err := f.llm(ClientOptions{Timeout: time.Second, Deadline: 30 * time.Millisecond, MaxRetries: 5}).Complete(bg, ask)
 	if e := llmError(t, err); e.Code != Timeout {
 		t.Fatalf("code = %s", e.Code)
 	}
@@ -358,7 +358,7 @@ func TestGroqStopsWaitingBetweenTriesWhenTheCallerGivesUp(t *testing.T) {
 	stopping := errors.New("core is stopping")
 	ctx, cancel := context.WithCancelCause(bg)
 	time.AfterFunc(20*time.Millisecond, func() { cancel(stopping) })
-	_, err := f.llm(GroqOptions{RetryBase: 5 * time.Second}).Complete(ctx, ask)
+	_, err := f.llm(ClientOptions{RetryBase: 5 * time.Second}).Complete(ctx, ask)
 	if !errors.Is(err, stopping) || f.count() != 1 {
 		t.Fatalf("err = %v after %d calls", err, f.count())
 	}
@@ -370,7 +370,7 @@ func TestGroqCallsATimeoutWhileReadingTheAnswerATimeout(t *testing.T) {
 		w.(http.Flusher).Flush()
 		<-r.Context().Done()
 	})
-	_, err := f.llm(GroqOptions{Timeout: 50 * time.Millisecond, MaxRetries: -1}).Complete(bg, ask)
+	_, err := f.llm(ClientOptions{Timeout: 50 * time.Millisecond, MaxRetries: -1}).Complete(bg, ask)
 	if e := llmError(t, err); e.Code != Timeout {
 		t.Fatalf("code = %s", e.Code)
 	}
@@ -383,7 +383,7 @@ func TestGroqKeepsANetworkFailuresCode(t *testing.T) {
 	}
 	addr := ln.Addr().String()
 	_ = ln.Close()
-	g, err := NewGroq(testGroq, GroqOptions{BaseURL: "http://" + addr, MaxRetries: -1})
+	g, err := NewGroq(testGroq, ClientOptions{BaseURL: "http://" + addr, MaxRetries: -1})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -397,7 +397,7 @@ func TestGroqKeepsANetworkFailuresCode(t *testing.T) {
 		_ = conn.(*net.TCPConn).SetLinger(0)
 		_ = conn.Close()
 	})
-	_, err = reset.llm(GroqOptions{MaxRetries: -1}).Complete(bg, ask)
+	_, err = reset.llm(ClientOptions{MaxRetries: -1}).Complete(bg, ask)
 	if e := llmError(t, err); e.Code != Unavailable {
 		t.Fatalf("err = %+v", e)
 	}
@@ -412,7 +412,7 @@ func TestGroqKeepsOnlySafeErrorCodes(t *testing.T) {
 		`{"error":{"code":"` + strings.Repeat("a", 62) + `"}}`,
 	} {
 		f := newFake(t, raw(400, body))
-		_, err := f.llm(GroqOptions{}).Complete(bg, ask)
+		_, err := f.llm(ClientOptions{}).Complete(bg, ask)
 		if e := llmError(t, err); e.Detail != "" || e.Code != Rejected {
 			t.Fatalf("%s: err = %+v", body, e)
 		}
@@ -439,7 +439,7 @@ func TestGroqCallsAMalformedAnswerWhatItIs(t *testing.T) {
 		`{"model":"m","choices":[{"message":{"content":"x"}}],"usage":{"prompt_tokens":"1","completion_tokens":1}}`,
 	} {
 		f := newFake(t, raw(200, body))
-		_, err := f.llm(GroqOptions{}).Complete(bg, ask)
+		_, err := f.llm(ClientOptions{}).Complete(bg, ask)
 		if e := llmError(t, err); e.Code != BadResponse || e.Status != 200 {
 			t.Fatalf("%s: err = %+v", body, e)
 		}
@@ -453,7 +453,7 @@ func TestGroqAcceptsWhatTheTypeScriptSchemaAccepted(t *testing.T) {
 		`{"model":"m","choices":[{"message":{"content":null},"finish_reason":null}],"usage":{"prompt_tokens":1,"completion_tokens":1},"x":1}`,
 	} {
 		f := newFake(t, raw(200, body))
-		got, err := f.llm(GroqOptions{}).Complete(bg, ask)
+		got, err := f.llm(ClientOptions{}).Complete(bg, ask)
 		if err != nil || got.Text != "" || got.FinishReason != FinishStop {
 			t.Fatalf("%s: %+v, %v", body, got, err)
 		}
@@ -462,7 +462,7 @@ func TestGroqAcceptsWhatTheTypeScriptSchemaAccepted(t *testing.T) {
 
 func TestGroqTimesOutACallThatHangsAndRetriesIt(t *testing.T) {
 	f := newFake(t, hang, hang)
-	_, err := f.llm(GroqOptions{Timeout: 20 * time.Millisecond, MaxRetries: 1}).Complete(bg, ask)
+	_, err := f.llm(ClientOptions{Timeout: 20 * time.Millisecond, MaxRetries: 1}).Complete(bg, ask)
 	if e := llmError(t, err); e.Code != Timeout || f.count() != 2 {
 		t.Fatalf("err = %+v after %d calls", e, f.count())
 	}
@@ -473,16 +473,16 @@ func TestGroqStopsAtOnceWhenTheCallerGivesUpWithTheCallersReason(t *testing.T) {
 	stopping := errors.New("core is stopping")
 	ctx, cancel := context.WithCancelCause(bg)
 	time.AfterFunc(10*time.Millisecond, func() { cancel(stopping) })
-	if _, err := f.llm(GroqOptions{}).Complete(ctx, ask); !errors.Is(err, stopping) {
+	if _, err := f.llm(ClientOptions{}).Complete(ctx, ask); !errors.Is(err, stopping) {
 		t.Fatalf("err = %v", err)
 	}
-	if _, err := f.llm(GroqOptions{}).Complete(ctx, ask); !errors.Is(err, stopping) {
+	if _, err := f.llm(ClientOptions{}).Complete(ctx, ask); !errors.Is(err, stopping) {
 		t.Fatalf("an already stopped call: err = %v", err)
 	}
 }
 
 func TestGroqCountsTokensTheWayGptOssDoesWithTheChatFraming(t *testing.T) {
-	g := newFake(t).llm(GroqOptions{})
+	g := newFake(t).llm(ClientOptions{})
 	if n := g.CountTokens("hello how are you"); n != 4+4 {
 		t.Fatalf("count = %d", n)
 	}
@@ -498,7 +498,7 @@ func TestGroqCountsTokensTheWayGptOssDoesWithTheChatFraming(t *testing.T) {
 
 func TestGroqDoesNotCallOutForAnEmptyConversation(t *testing.T) {
 	f := newFake(t)
-	if _, err := f.llm(GroqOptions{}).Complete(bg, Request{Tier: Routine}); err == nil || f.count() != 0 {
+	if _, err := f.llm(ClientOptions{}).Complete(bg, Request{Tier: Routine}); err == nil || f.count() != 0 {
 		t.Fatalf("err = %v after %d calls", err, f.count())
 	}
 }
@@ -507,7 +507,7 @@ func TestGroqRefusesModelsItCannotCountFor(t *testing.T) {
 	for _, models := range [][2]string{{"llama-3.3-70b-versatile", "openai/gpt-oss-20b"}, {"openai/gpt-oss-120b", "qwen/qwen3-32b"}} {
 		cfg := testGroq
 		cfg.HeavyModel, cfg.RoutineModel = models[0], models[1]
-		if _, err := NewGroq(cfg, GroqOptions{}); err == nil || !strings.Contains(err.Error(), "gpt-oss") {
+		if _, err := NewGroq(cfg, ClientOptions{}); err == nil || !strings.Contains(err.Error(), "gpt-oss") {
 			t.Fatalf("%v: err = %v", models, err)
 		}
 	}
@@ -536,7 +536,7 @@ func TestGroqBuildsTheSameRequestAsTheTypeScriptCore(t *testing.T) {
 	if len(golden.Provider) == 0 {
 		t.Fatal("no cases")
 	}
-	g := newFake(t).llm(GroqOptions{})
+	g := newFake(t).llm(ClientOptions{})
 	for _, c := range golden.Provider {
 		r := c.Request
 		body, err := g.body(Request{Tier: r.Tier, Effort: r.Effort, MaxTokens: r.MaxTokens, Temperature: r.Temperature, Messages: r.Messages})
@@ -562,7 +562,7 @@ func sameJSON(t *testing.T, a, b []byte) bool {
 }
 
 func TestGroqAsksForJSONThatFollowsTheSchema(t *testing.T) {
-	g := newFake(t).llm(GroqOptions{})
+	g := newFake(t).llm(ClientOptions{})
 	body, err := g.body(Request{
 		Tier: Routine, Messages: []Message{{Role: User, Content: "x"}},
 		Schema: &Schema{Name: "plan", Schema: json.RawMessage(`{"type":"object"}`)},
@@ -580,7 +580,7 @@ func TestGroqAsksForJSONThatFollowsTheSchema(t *testing.T) {
 var clockTool = ToolSpec{Name: "clock", Description: "The time.", Parameters: json.RawMessage(`{"type":"object","properties":{}}`)}
 
 func TestGroqOffersToolsAndSendsBackCallsAndResults(t *testing.T) {
-	g := newFake(t).llm(GroqOptions{})
+	g := newFake(t).llm(ClientOptions{})
 	body, err := g.body(Request{
 		Tier: Heavy, Tools: []ToolSpec{clockTool},
 		Messages: []Message{
@@ -610,7 +610,7 @@ func toolAnswer(calls, finish string) http.HandlerFunc {
 
 func TestGroqReadsTheToolsTheModelCalls(t *testing.T) {
 	f := newFake(t, toolAnswer(`[{"id":"fc_a","type":"function","function":{"name":"clock","arguments":"{\"zone\":\"Asia/Tokyo\"}"}}]`, `"tool_calls"`))
-	got, err := f.llm(GroqOptions{}).Complete(bg, Request{Tier: Heavy, Tools: []ToolSpec{clockTool}, Messages: ask.Messages})
+	got, err := f.llm(ClientOptions{}).Complete(bg, Request{Tier: Heavy, Tools: []ToolSpec{clockTool}, Messages: ask.Messages})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -628,7 +628,7 @@ func TestGroqCallsAToolCallItCannotReadABadResponse(t *testing.T) {
 		"tool_calls but no call": toolAnswer(`[]`, `"tool_calls"`),
 	} {
 		f := newFake(t, reply)
-		_, err := f.llm(GroqOptions{}).Complete(bg, ask)
+		_, err := f.llm(ClientOptions{}).Complete(bg, ask)
 		if e := llmError(t, err); e.Code != BadResponse {
 			t.Fatalf("%s: code = %s", name, e.Code)
 		}
@@ -638,7 +638,7 @@ func TestGroqCallsAToolCallItCannotReadABadResponse(t *testing.T) {
 func TestGroqTakesToolCallsWhateverTheFinishReasonSays(t *testing.T) {
 	for _, finish := range []string{`"stop"`, `"length"`, `"something_new"`, `null`} {
 		f := newFake(t, toolAnswer(`[{"id":"fc_a","type":"function","function":{"name":"clock","arguments":"{}"}}]`, finish))
-		got, err := f.llm(GroqOptions{}).Complete(bg, ask)
+		got, err := f.llm(ClientOptions{}).Complete(bg, ask)
 		if err != nil || got.FinishReason != FinishToolCalls || len(got.ToolCalls) != 1 {
 			t.Fatalf("%s: got %+v, %v", finish, got, err)
 		}
@@ -647,7 +647,7 @@ func TestGroqTakesToolCallsWhateverTheFinishReasonSays(t *testing.T) {
 
 func TestGroqNamesAToolCallTheModelGotWrongAndDoesNotRetryIt(t *testing.T) {
 	f := newFake(t, failure(400, "tool_use_failed"), ok("unused"))
-	_, err := f.llm(GroqOptions{}).Complete(bg, ask)
+	_, err := f.llm(ClientOptions{}).Complete(bg, ask)
 	if e := llmError(t, err); e.Code != BadToolCall || f.count() != 1 {
 		t.Fatalf("code = %s after %d calls", e.Code, f.count())
 	}
@@ -656,7 +656,7 @@ func TestGroqNamesAToolCallTheModelGotWrongAndDoesNotRetryIt(t *testing.T) {
 func TestARequestCannotFollowASchemaAndOfferTools(t *testing.T) {
 	r := Request{Tier: Routine, Messages: ask.Messages, Tools: []ToolSpec{clockTool}, Schema: &Schema{Name: "x", Schema: json.RawMessage(`{}`)}}
 	f := newFake(t)
-	if _, err := f.llm(GroqOptions{}).Complete(bg, r); !errors.Is(err, errSchemaWithTools) || f.count() != 0 {
+	if _, err := f.llm(ClientOptions{}).Complete(bg, r); !errors.Is(err, errSchemaWithTools) || f.count() != 0 {
 		t.Fatalf("groq: %v after %d calls", err, f.count())
 	}
 	if _, err := NewStub(StubOptions{}).Complete(bg, r); !errors.Is(err, errSchemaWithTools) {

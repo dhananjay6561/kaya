@@ -216,7 +216,7 @@ func readGolden(t *testing.T) golden {
 // gptOss is the Groq provider's counter, which the golden file was written with.
 func gptOss(t *testing.T) func(string) int {
 	t.Helper()
-	g, err := llm.NewGroq(config.Groq{HeavyModel: "openai/gpt-oss-120b", RoutineModel: "openai/gpt-oss-20b"}, llm.GroqOptions{})
+	g, err := llm.NewGroq(config.Groq{HeavyModel: "openai/gpt-oss-120b", RoutineModel: "openai/gpt-oss-20b"}, llm.ClientOptions{})
 	if err != nil {
 		t.Fatal(err)
 	}
