@@ -19,7 +19,7 @@ func TestLiveLearning(t *testing.T) {
 	if key == "" {
 		t.Skip("GROQ_API_KEY not set")
 	}
-	groq, err := llm.NewGroq(config.Groq{APIKey: key, HeavyModel: "openai/gpt-oss-120b", RoutineModel: "openai/gpt-oss-20b", ContextTokens: 2000}, llm.GroqOptions{})
+	groq, err := llm.NewGroq(config.Groq{APIKey: key, HeavyModel: "openai/gpt-oss-120b", RoutineModel: "openai/gpt-oss-20b", ContextTokens: 2000}, llm.ClientOptions{})
 	if err != nil {
 		t.Fatal(err)
 	}
