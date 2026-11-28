@@ -257,9 +257,10 @@ func TestReadsAnyOpenAICompatibleProvider(t *testing.T) {
 }
 
 func TestTheRoutineTierCanUseItsOwnProvider(t *testing.T) {
-	cfg := load(t, env(valid, "ROUTINE_LLM_PROVIDER", "groq", "ROUTINE_LLM_API_KEY", "other-key-not-real"))
+	key := "other-key-not-real"
+	cfg := load(t, env(valid, "ROUTINE_LLM_PROVIDER", "groq", "ROUTINE_LLM_API_KEY", key))
 	want := Compatible{
-		Kind: "groq", BaseURL: "https://api.groq.com/openai/v1", APIKey: "other-key-not-real",
+		Kind: "groq", BaseURL: "https://api.groq.com/openai/v1", APIKey: key,
 		HeavyModel: "openai/gpt-oss-20b", RoutineModel: "openai/gpt-oss-20b", ContextTokens: 4000, Effort: true, TokenFactor: 1,
 	}
 	if cfg.LLM.Routine == nil || *cfg.LLM.Routine != want || cfg.LLM.Provider != "groq" {
