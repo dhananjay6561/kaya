@@ -494,6 +494,8 @@ Folders appear when a phase needs them; empty placeholders are not committed.
   has less than `ResultTokens` of room, the agent leaves out the oldest conversation pairs of that
   question's later requests, never the system prompt, the message before the question or the
   question (decision 105).
+- **Latin letters.** When DJ's recent words have no Devanagari and an answer does, the routine
+  model rewrites it in Latin letters, changing nothing else (decision 106).
 - **Rate limits.** Groq's `Retry-After` is waited out whenever the call still fits its 45-second
   deadline; a longer one fails at once with the "limit" notice, and the error says how long Groq
   asked to wait (decisions 99, 102).
