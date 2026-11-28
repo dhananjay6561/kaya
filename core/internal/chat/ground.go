@@ -2,12 +2,12 @@ package chat
 
 import (
 	"regexp"
-
-	"github.com/dhananjay6561/kaya/core/internal/agent"
 	"slices"
 	"strings"
 	"unicode"
 	"unicode/utf8"
+
+	"github.com/dhananjay6561/kaya/core/internal/agent"
 )
 
 var (
