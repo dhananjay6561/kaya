@@ -142,6 +142,7 @@ func Run(ctx context.Context, o Options, r llm.Request) (res Result, err error) 
 	tag := "data-" + strings.ToLower(rand.Text()[:10])
 	specs := o.Tools.Tokens(o.LLM.CountTokens)
 	retried := false
+	used := map[string]int{}
 	for round := 0; ; round++ {
 		c, err := o.LLM.Complete(ctx, r)
 		var failed *llm.Error
@@ -177,6 +178,10 @@ func Run(ctx context.Context, o Options, r llm.Request) (res Result, err error) 
 				done = Call{Tool: call.Name, Outcome: NotRun}
 			case limit < minResult:
 				content, done = noRoom, Call{Tool: call.Name, Outcome: NotRun}
+			case o.Tools.tools[call.Name].MaxCalls > 0 && used[call.Name] >= o.Tools.tools[call.Name].MaxCalls:
+				content = fmt.Sprintf("Not run: %s can be used at most %d times for one message. Answer with what you have.",
+					call.Name, o.Tools.tools[call.Name].MaxCalls)
+				done = Call{Tool: call.Name, Outcome: NotRun}
 			case o.Tools.tools[call.Name].Outward:
 				if content, done, err = o.propose(ctx, call, limit, &res); err != nil {
 					return res, err
@@ -192,6 +197,9 @@ func Run(ctx context.Context, o Options, r llm.Request) (res Result, err error) 
 				if content, done, err = o.run(ctx, call, limit); err != nil {
 					return res, err
 				}
+			}
+			if done.Outcome == Ran || done.Outcome == Failed {
+				used[call.Name]++
 			}
 			o.Logger.Info("the model called a tool", "tool", done.Tool, "outcome", done.Outcome, "ms", done.Elapsed.Milliseconds())
 			res.Calls = append(res.Calls, done)
