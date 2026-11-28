@@ -2,10 +2,8 @@ use_default_settings:
   engines:
     keep_only:
       - google
-      - bing
       - duckduckgo
-      - startpage
-      - wikipedia
+      - yahoo
 
 general:
   instance_name: kaya
@@ -27,11 +25,7 @@ search:
 engines:
   - name: google
     disabled: false
-  - name: bing
-    disabled: false
   - name: duckduckgo
     disabled: false
-  - name: startpage
-    disabled: false
-  - name: wikipedia
+  - name: yahoo
     disabled: false
