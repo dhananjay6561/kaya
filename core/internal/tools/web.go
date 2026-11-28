@@ -33,6 +33,8 @@ func WebSearch(s WebSearcher, private func(string) bool, zone *time.Location) ag
 			"that is not written in a snippet, even if it sounds likely. When the results are only listing pages (\"Dal " +
 			"Makhani in Sector 6 - Zomato\") and the snippets name no places or prices, say that plainly, tell them what " +
 			"the page has (\"Zomato pe Sector 6 ke dal makhani places ki list hai\"), and cite it so they get the link. " +
+			"When read_page is offered and the snippets lack the specifics they want (names, prices, a menu, specs), open " +
+			"the most promising result with it before answering. " +
 			"Answer like a friend who just looked it up for them, not like a report: casual and short, naming where you " +
 			"saw it in the sentence when that helps (\"Magicpin pe Truth Bowl ka dal makhani ₹99 dikh raha hai\"), with " +
 			"your own pick if they want one, and a practical tip when it matters (\"checkout pe delivery fee dekh lena\"). " +

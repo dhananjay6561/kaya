@@ -187,10 +187,11 @@ func run(cfg config.Config, logger *slog.Logger) error {
 		Store: actionStore, Logger: logger, Executors: map[string]actions.Executor{}, MessageID: ownMessageID(db),
 		Judge: actions.NewJudge(model, func() actions.Masker { return masking.NewSession() }, logger),
 	}
+	private := func(s string) bool { return masking.NewSession().Mask(s, "") != s }
 	if cfg.WebSearchURL != "" {
-		private := func(s string) bool { return masking.NewSession().Mask(s, "") != s }
 		toolset = append(toolset, tools.WebSearch(web.NewSearcher(web.SearchOptions{BaseURL: cfg.WebSearchURL}), private, zone))
 	}
+	toolset = append(toolset, tools.ReadPage(web.NewFetcher(web.FetchOptions{}), model, private))
 	if cfg.SendsPerHour > 0 {
 		toolset = append(toolset, tools.SendMessage(searcher, db))
 		runner.Executors[tools.SendKind] = tools.SendExecutor(ch, actionStore, cfg.SendsPerHour, time.Now)
