@@ -85,7 +85,7 @@ func (s *Searcher) Search(ctx context.Context, query, within string, limit int) 
 	req.Header.Set("Accept", "application/json")
 	resp, err := s.o.Client.Do(req)
 	if err != nil {
-		if ctx.Err() != nil && context.Cause(ctx) != context.DeadlineExceeded {
+		if ctx.Err() != nil && !errors.Is(context.Cause(ctx), context.DeadlineExceeded) {
 			return nil, context.Cause(ctx)
 		}
 		return nil, fmt.Errorf("%w: %w", ErrUnavailable, err)

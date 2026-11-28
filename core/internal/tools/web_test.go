@@ -28,8 +28,10 @@ func private(s string) bool { return masking.NewSession().Mask(s, "") != s }
 
 func TestWebSearchListsResultsWithTheirLinks(t *testing.T) {
 	s := &searcher{results: []web.Result{
-		{Title: "iPhone 17 price in India", URL: "https://shop.example/iphone-17", Snippet: "Starts at Rs 82,900.",
-			Published: time.Date(2026, 11, 26, 20, 0, 0, 0, time.UTC)},
+		{
+			Title: "iPhone 17 price in India", URL: "https://shop.example/iphone-17", Snippet: "Starts at Rs 82,900.",
+			Published: time.Date(2026, 11, 26, 20, 0, 0, 0, time.UTC),
+		},
 		{Title: "Untitled", URL: "https://news.example/a"},
 	}}
 	got, err := run(t, WebSearch(s, private, kolkata(t)), `{"query":"  iphone 17 price india ","recent":"week"}`)

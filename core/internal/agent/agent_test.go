@@ -597,8 +597,10 @@ func TestOnlyAnUntrustedToolThatDoesNotActCanBePublic(t *testing.T) {
 	run := func(context.Context, json.RawMessage) (string, error) { return "", nil }
 	for _, tool := range []Tool{
 		{Name: "a", Description: "d", Parameters: params, Public: true, Run: run},
-		{Name: "b", Description: "d", Parameters: params, Public: true, Untrusted: true, Outward: true,
-			Propose: func(context.Context, json.RawMessage) (actions.Proposal, error) { return actions.Proposal{}, nil }},
+		{
+			Name: "b", Description: "d", Parameters: params, Public: true, Untrusted: true, Outward: true,
+			Propose: func(context.Context, json.RawMessage) (actions.Proposal, error) { return actions.Proposal{}, nil },
+		},
 	} {
 		if _, err := NewRegistry(tool); err == nil {
 			t.Errorf("tool %s was accepted", tool.Name)
