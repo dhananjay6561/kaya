@@ -58,10 +58,10 @@ func TestAnUncitedAnswerGetsTheBestMatchingLink(t *testing.T) {
 		{Link: "https://courier.example/", Text: "DHL courier service in HSR Layout"},
 		{Link: "https://zomato.example/", Text: "Dal Makhani in Sector 6 - Zomato\nView all restaurants serving Dal Makhani"},
 	}
-	if _, link := cite("Zomato pe Sector 6 ke dal makhani restaurants ki list hai.", []string{"https://courier.example/", "https://zomato.example/"}, shown); link != "https://zomato.example/" {
+	if _, link := cite("Zomato pe Sector 6 ke dal makhani restaurants ki list hai.", []string{"https://courier.example/", "https://zomato.example/"}, shown); len(link) != 1 || link[0] != "https://zomato.example/" {
 		t.Fatalf("link %q", link)
 	}
-	if _, link := cite("Main theek hoon.", []string{"https://courier.example/"}, shown); link != "" {
+	if _, link := cite("Main theek hoon.", []string{"https://courier.example/"}, shown); link != nil {
 		t.Fatalf("an unrelated answer got %q", link)
 	}
 }

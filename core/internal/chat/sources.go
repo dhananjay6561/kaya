@@ -1,7 +1,9 @@
 package chat
 
 import (
+	"net/url"
 	"regexp"
+	"slices"
 	"strconv"
 	"strings"
 
@@ -17,42 +19,68 @@ var (
 )
 
 // cite takes the model's citations ([n], or gpt-oss's own 【n】 and 【n†source】) out of an
-// answer, since a friend does not write them, and returns the one link to put under it: the
-// first source cited. An answer that cites none gets the result that best matches its words,
-// or no link when none does, since the top result may be unrelated. With no sources the answer is
-// left as it is.
-func cite(text string, sources []string, shown []agent.Shown) (string, string) {
+// answer, since a friend does not write them, and returns the links to put under it: the sources
+// it cites, in the order cited, at most two and each from a different site, so a comparison can
+// show both. An answer that cites none gets the result that best matches its words, or no link
+// when none does, since the top result may be unrelated. With no sources the answer is left as
+// it is.
+func cite(text string, sources []string, shown []agent.Shown) (string, []string) {
 	if len(sources) == 0 {
-		return text, ""
+		return text, nil
 	}
-	link := ""
+	var cited []int
+	note := func(n int) {
+		if n >= 1 && n <= len(sources) && !slices.Contains(cited, n) {
+			cited = append(cited, n)
+		}
+	}
 	out := citation.ReplaceAllStringFunc(text, func(m string) string {
 		for _, part := range strings.Split(citation.FindStringSubmatch(m)[1], ",") {
-			n, err := strconv.Atoi(strings.TrimSpace(part))
-			if link == "" && err == nil && n >= 1 && n <= len(sources) {
-				link = sources[n-1]
+			if n, err := strconv.Atoi(strings.TrimSpace(part)); err == nil {
+				note(n)
 			}
 		}
 		return ""
 	})
 	out = roundCitation.ReplaceAllStringFunc(out, func(m string) string {
 		g := roundCitation.FindStringSubmatch(m)
+		var ns []int
 		for _, part := range strings.Split(g[1], ",") {
 			n, err := strconv.Atoi(strings.Trim(part, " \t\n\u202f"))
 			if err != nil || n < 1 || n > len(sources) {
 				return m
 			}
-			if link == "" {
-				link = sources[n-1]
-			}
+			ns = append(ns, n)
+		}
+		for _, n := range ns {
+			note(n)
 		}
 		return g[2] + g[3]
 	})
 	if out != text {
 		out = spaceBeforeIt.ReplaceAllString(out, "$1")
 	}
-	if link == "" {
-		link = bestMatch(out, shown)
+	var links, sites []string
+	for _, n := range cited {
+		if s := siteOf(sources[n-1]); !slices.Contains(sites, s) && len(links) < maxLinks {
+			links, sites = append(links, sources[n-1]), append(sites, s)
+		}
 	}
-	return out, link
+	if len(links) == 0 {
+		if best := bestMatch(out, shown); best != "" {
+			links = []string{best}
+		}
+	}
+	return out, links
+}
+
+const maxLinks = 2
+
+// siteOf is a link's host without "www.".
+func siteOf(link string) string {
+	u, err := url.Parse(link)
+	if err != nil {
+		return link
+	}
+	return strings.TrimPrefix(strings.ToLower(u.Hostname()), "www.")
 }
