@@ -178,11 +178,13 @@ contact, and it works with everything your WhatsApp account can see, plus the we
   masked; the text it gives back is masked like any message before a model sees it. Older voice
   notes from before this was switched on are left alone.
 - **Web search.** Ask about anything recent or changing, "iphone 17 ka price kya hai abhi?" or
-  "who won the IPL final?", and Kaya searches the web, answers from what it found, and ends with
-  the one or two links it relied on, taken only from the results. Small talk and things it already
-  knows never trigger a search. Search runs through [SearXNG](https://github.com/searxng/searxng),
-  a search engine you host yourself that asks Google, Bing, DuckDuckGo, Startpage and Wikipedia at
-  once, so there is no search account or API key, and no single company gets all your queries.
+  "who won the IPL final?", and Kaya searches the web and answers from what it found, marking each
+  fact with a number like [1]. The links come under the answer, put there by Kaya's code from the
+  search results, so they are never made up; an answer that cites nothing still gets the top
+  result. Small talk and things it already knows never trigger a search. Search runs through
+  [SearXNG](https://github.com/searxng/searxng), a search engine you host yourself that asks
+  Google, DuckDuckGo and Yahoo at once, so there is no search account or API key, and no single
+  company gets all your queries.
   Kaya can limit a search to the last day, week, month or year when freshness matters. If no engine
   answers, Kaya says web search is not working right now instead of guessing. A query that would
   carry a private detail (a phone number, email, address or code) is refused before it leaves your
@@ -274,7 +276,7 @@ flowchart LR
     embed["Embeddings<br/>Voyage"]
     stt["Transcription<br/>Groq Whisper"]
     searxng["searxng<br/>web search"]
-    engines["Search engines<br/>Google, Bing, DuckDuckGo"]
+    engines["Search engines<br/>Google, DuckDuckGo, Yahoo"]
 
     subgraph host["Your machine, Docker Compose"]
         gateway["gateway<br/>Go, whatsmeow"]
@@ -634,7 +636,7 @@ target instead of adding rows.
 | Contracts | JSON Schema 2020-12, validated with santhosh-tekuri/jsonschema in a shared Go module |
 | LLM | Groq behind a provider interface (`openai/gpt-oss-120b` and `openai/gpt-oss-20b`) |
 | Embeddings | Voyage `voyage-4` behind a provider interface, 1024 dimensions, stored as `halfvec` with an HNSW index |
-| Web search | Self-hosted SearXNG (Google, Bing, DuckDuckGo, Startpage, Wikipedia), pinned by digest |
+| Web search | Self-hosted SearXNG (Google, DuckDuckGo, Yahoo), pinned by digest |
 | Runtime | Docker Compose, distroless images, non-root, read-only root filesystem |
 | Quality | golangci-lint, `go test -race`, golden files from the TypeScript core, SQL schema tests, GitHub Actions |
 
@@ -709,7 +711,8 @@ waits until all of them are healthy. Data stays in `DATA_DIR` (`./data` by defau
 On Linux it starts SearXNG too.
 
 On a Mac, SearXNG runs outside Docker, because from inside a Docker Desktop container most search
-engines time out ([curl_cffi#915](https://github.com/lexiforest/curl_cffi/issues/915)). Once, before
+engines time out ([curl_cffi#915](https://github.com/lexiforest/curl_cffi/issues/915)). Successful
+searches are not logged; when Kaya answers with links, search is working. Once, before
 or after `make up`:
 
 ```sh
@@ -752,7 +755,7 @@ uses. On a Mac that is http://127.0.0.1:8888 (only reachable from the Mac itself
 
 ```sh
 ./scripts/searxng-mac.sh status              # healthy or not running
-tail -f data/searxng/searxng.log             # every search and every engine that timed out
+tail -f data/searxng/searxng.log             # engines that failed, timed out or were blocked
 ```
 
 On Linux SearXNG has no published port; `make ps` shows it, and `make logs` its output. In Activity
